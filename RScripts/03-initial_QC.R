@@ -168,6 +168,7 @@ seurat_list <-
 seurat_list[[1]]@meta.data %>%
   head()
 
+# combine the list of Seurat objects
 merged <- seurat_list %>%
   purrr::reduce(merge) # I have assumed Nick meant purrr here but I could be wrong...
 
@@ -217,7 +218,7 @@ gc()
 write_rds(joined,
           file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.rds"))
 
-reload <- FALSE
+reload <- TRUE
 # Can be useful to close everything down at this point and reload the data below
 # Otherwise memory consumption is too high running classifySex()
 
@@ -233,7 +234,9 @@ if(reload) {
 classify_sex_tbl <- function(seurat_object, genome){
   # classifySex
   sex <- 
-    cellXY::classifySex(x = seurat_object@assays$RNA$counts, genome = genome, qc = TRUE) %>%
+    cellXY::classifySex(x = seurat_object@assays$RNA$counts,
+                        genome = genome,
+                        qc = TRUE) %>%
     as_tibble(rownames = "barcode") %>%
     dplyr::rename(predicted_sex = prediction) %>%
     dplyr::mutate(predicted_sex = ifelse(predicted_sex == "NA", yes = "undetermined", no = predicted_sex))
@@ -253,6 +256,9 @@ VlnPlot(object = joined,
         group.by = "predicted_sex",
         split.by = "orig.ident")
 
+# quick table of predicted sex totals per sample
+addmargins(with(joined@meta.data, table(orig.ident, predicted_sex)), margin = 2)
+
 # TODO: Make an XY scatter plot using a chrY score
 
 # I found a gene list so will use that in a moment
@@ -265,25 +271,58 @@ VlnPlot(object = joined,
 #             y = "Raw counts")) %>%
 #   patchwork::wrap_plots()
 
+# Split by original identity
+sample_list <- SplitObject(joined, split.by = "orig.ident")
+
+# plot Xist -> should be higher in female cells
+imap(sample_list,
+     ~ VlnPlot(object = .x, 
+               features = "Xist", 
+               group.by = "predicted_sex") +
+       labs(title = .y,  # Will be the sample name
+            subtitle = "Xist",
+            y = "Raw counts")) %>%
+  patchwork::wrap_plots()
+
+# plot Kdm5d -> on the y-Chr so only expressed on male cells
+imap(sample_list,
+     ~ VlnPlot(object = .x, 
+               features = "Kdm5d", 
+               group.by = "predicted_sex") +
+       labs(title = .y,  # Will be the sample name
+            subtitle = "Kdm5d",
+            y = "Raw counts")) %>%
+  patchwork::wrap_plots()
+
+
 
 # Now to to classify male/female doublets
 # - Firstly, making it classify all cells
-sex_db_tbl <- cellXY::findMfDoublet(x = joined@assays$RNA$counts, genome = "Mm", qc = FALSE) %>%
+sex_db_tbl <- cellXY::findMfDoublet(x = joined@assays$RNA$counts,
+                                    genome = "Mm",
+                                    qc = FALSE) %>%
   as_tibble(rownames = "barcode") %>% 
   dplyr::rename(mf_dbl_prediction.no_qc = prediction)
 
-joined <- add_metadata(object = joined, metadata = sex_db_tbl)
+# add to the metadata
+joined <- add_metadata(object = joined,
+                       metadata = sex_db_tbl)
+# clean up
 rm(sex_db_tbl)
 gc()
 
 # - Second time, allowing it not to classify low quality cells
 sex_db_tbl <- 
-  cellXY::findMfDoublet(x = joined@assays$RNA$counts, genome = "Mm", qc = TRUE) %>%
+  cellXY::findMfDoublet(x = joined@assays$RNA$counts,
+                        genome = "Mm",
+                        qc = TRUE) %>%
   as_tibble(rownames = "barcode") %>% 
   dplyr::rename(mf_dbl_prediction.qc = prediction)
 
-joined <- add_metadata(object = joined, metadata = sex_db_tbl)
-
+# add to the metadata
+joined <- add_metadata(object = joined,
+                       metadata = sex_db_tbl)
+# clean up
 rm(sex_db_tbl, sex_tbl)
 
 gc()
@@ -316,6 +355,7 @@ DimPlot(joined,
 DimPlot(joined,
         group.by = "mf_dbl_prediction.no_qc",
         split.by = "orig.ident")
+
 DimPlot(joined,
         group.by = "mf_dbl_prediction.no_qc",
         split.by = "scDblFinder.class")
@@ -334,11 +374,19 @@ DimPlot(joined,
 joined@meta.data %>%
   group_by(mf_dbl_prediction.no_qc) %>%
   summarise(n = n())
+# A tibble: 2 × 2
+# mf_dbl_prediction.no_qc     n
+# <chr>                   <int>
+#   1 Doublet                2018
+# 2 Singlet                 39352
 
 joined@meta.data %>%
   group_by(mf_dbl_prediction.qc) %>%
-  summarise(n = n())
-
+  summari# A tibble: 2 × 2
+# mf_dbl_prediction.qc     n
+# <chr>                <int>
+#   1 Doublet             2018
+# 2 Singlet              39352
 
 joined@meta.data %>%
   group_by(scDblFinder.class, mf_dbl_prediction.no_qc, seurat_clusters) %>%
@@ -347,10 +395,22 @@ joined@meta.data %>%
   mutate(proportion = n / sum(n)) %>%
   ungroup() %>%
   mutate(scDblFinder.mf_dbl_pred = paste(scDblFinder.class, mf_dbl_prediction.no_qc, sep = ".")) %>%
+  # set the order of the colours in the barplot
+  mutate(scDblFinder.mf_dbl_pred = factor(scDblFinder.mf_dbl_pred,
+                                          levels = c("singlet.Singlet",
+                                                     "doublet.Doublet",
+                                                     "singlet.Doublet",
+                                                     "doublet.Singlet"))) %>%
   # filter(seurat_clusters == 10) %>%
-  ggplot(aes(x = seurat_clusters, y = proportion, fill = scDblFinder.mf_dbl_pred)) +
+  ggplot(aes(x = seurat_clusters,
+             y = proportion,
+             fill = scDblFinder.mf_dbl_pred)) +
   geom_col() +
-  see::scale_fill_okabeito(palette = "black_first", reverse = TRUE) +
+  scale_fill_manual(values = c("singlet.Singlet" = "#009900",
+                               "doublet.Doublet" = "#00FF00",
+                               "singlet.Doublet" = "#FFCC99",
+                               "doublet.Singlet" = "#FF6633")) +
+  # see::scale_fill_okabeito(palette = "black_first", reverse = TRUE) +
   theme_bw()
 
 joined@meta.data %>%
@@ -361,7 +421,9 @@ joined@meta.data %>%
   group_by(seurat_clusters, doublet_algorithm, cell_type) %>%
   summarise(n = n()) %>%
   mutate(proportion = n / sum(n)) %>%
-  ggplot(aes(x = seurat_clusters, y = proportion, fill = cell_type)) +
+  ggplot(aes(x = seurat_clusters,
+             y = proportion,
+             fill = cell_type)) +
   geom_col() +
   facet_wrap(~doublet_algorithm, ncol = 1) +
   see::scale_fill_okabeito()
@@ -381,12 +443,12 @@ joined@meta.data %>%
   group_by(orig.ident, predicted_sex) %>%
   summarise(n = n()) %>%
   mutate(proportion = n / sum(n)) %>% 
-  ggplot(aes(x = orig.ident, y = proportion, fill = predicted_sex)) +
+  ggplot(aes(x = orig.ident,
+             y = proportion,
+             fill = predicted_sex)) +
   geom_col() +
   see::scale_fill_okabeito() +
   theme_bw()
-
-
 
 # Addressing Kat's comments as at 14/05/2025 ------------------------------
 
@@ -399,22 +461,30 @@ DimPlot(joined,
 
 joined@meta.data %>%
   as_tibble(rownames = "barcode") %>%
-  left_join(y = joined@reductions$umap@cell.embeddings %>% as_tibble(rownames = "barcode")) %>%
+  left_join(y = joined@reductions$umap@cell.embeddings %>%
+              as_tibble(rownames = "barcode")) %>%
   filter(umap_1 > 4.8 & umap_1 < 8 & umap_2 > -7 & umap_2 < -3) %>%
-  ggplot(aes(x = umap_1, y = umap_2)) +
+  ggplot(aes(x = umap_1,
+             y = umap_2)) +
   geom_point(aes(colour = seurat_clusters)) +
   see::scale_colour_okabeito() +
-  ggrepel::geom_label_repel(data = . %>% group_by(seurat_clusters) %>% slice_head(n = 1) %>% ungroup(),
-                            aes(label = seurat_clusters, fill = seurat_clusters),
+  ggrepel::geom_label_repel(data = . %>%
+                              group_by(seurat_clusters) %>%
+                              slice_head(n = 1) %>%
+                              ungroup(),
+                            aes(label = seurat_clusters,
+                                fill = seurat_clusters),
                             box.padding = 1) +
   see::scale_fill_okabeito() +
   theme_bw()
 
 joined@meta.data %>%
   as_tibble(rownames = "barcode") %>%
-  left_join(y = joined@reductions$umap@cell.embeddings %>% as_tibble(rownames = "barcode")) %>%
+  left_join(y = joined@reductions$umap@cell.embeddings %>%
+              as_tibble(rownames = "barcode")) %>%
   filter(umap_1 > 4.8 & umap_1 < 8 & umap_2 > -7 & umap_2 < -3) %>%
-  ggplot(aes(x = umap_1, y = umap_2)) +
+  ggplot(aes(x = umap_1,
+             y = umap_2)) +
   geom_point(aes(colour = predicted_sex)) +
   see::scale_colour_okabeito(
     # reverse = TRUE,
@@ -428,9 +498,11 @@ joined@meta.data %>%
 # Doublets
 joined@meta.data %>%
   as_tibble(rownames = "barcode") %>%
-  left_join(y = joined@reductions$umap@cell.embeddings %>% as_tibble(rownames = "barcode")) %>%
+  left_join(y = joined@reductions$umap@cell.embeddings %>%
+              as_tibble(rownames = "barcode")) %>%
   filter(umap_1 > 4.8 & umap_1 < 8 & umap_2 > -7 & umap_2 < -3) %>%
-  ggplot(aes(x = umap_1, y = umap_2)) +
+  ggplot(aes(x = umap_1,
+             y = umap_2)) +
   geom_point(aes(colour = scDblFinder.class)) +
   see::scale_colour_okabeito(
     # reverse = TRUE,
@@ -444,9 +516,11 @@ joined@meta.data %>%
 
 joined@meta.data %>%
   as_tibble(rownames = "barcode") %>%
-  left_join(y = joined@reductions$umap@cell.embeddings %>% as_tibble(rownames = "barcode")) %>%
+  left_join(y = joined@reductions$umap@cell.embeddings %>%
+              as_tibble(rownames = "barcode")) %>%
   filter(umap_1 > 4.8 & umap_1 < 8 & umap_2 > -7 & umap_2 < -3) %>%
-  ggplot(aes(x = umap_1, y = umap_2)) +
+  ggplot(aes(x = umap_1,
+             y = umap_2)) +
   geom_point(aes(colour = mf_dbl_prediction.no_qc)) +
   see::scale_colour_okabeito(
     # reverse = TRUE,
@@ -462,9 +536,11 @@ joined@meta.data %>%
 # Can we redo this plot with 3 sections? Singlet, doublet, undetermined_sex?
 joined@meta.data %>%
   as_tibble(rownames = "barcode") %>%
-  left_join(y = joined@reductions$umap@cell.embeddings %>% as_tibble(rownames = "barcode")) %>%
+  left_join(y = joined@reductions$umap@cell.embeddings %>%
+              as_tibble(rownames = "barcode")) %>%
   mutate(new_category = ifelse(predicted_sex == "undetermined", "undetermined", mf_dbl_prediction.no_qc)) %>%
-  ggplot(aes(x = umap_1, y = umap_2)) +
+  ggplot(aes(x = umap_1,
+             y = umap_2)) +
   geom_point(aes(colour = scDblFinder.class),
              size = 0.5) +
   facet_wrap(~ new_category) +
@@ -478,14 +554,16 @@ joined@meta.data %>%
 # Quick look at quality filtering these cells using filters we were previously happy with:
 joined@meta.data %>%
   as_tibble(rownames = "barcode") %>%
-  left_join(y = joined@reductions$umap@cell.embeddings %>% as_tibble(rownames = "barcode")) %>%
-  filter(umap_1 > 4.8 & umap_1 < 8 & umap_2 > -7 & umap_2 < -3) %>%
+  left_join(y = joined@reductions$umap@cell.embeddings %>%
+              as_tibble(rownames = "barcode")) %>%
+  # filter(umap_1 > 4.8 & umap_1 < 8 & umap_2 > -7 & umap_2 < -3) %>%
   filter(nCount_RNA > 3500 & nFeature_RNA > 2000) %>%
   filter(percent.mt < 10) %>%
   filter(scDblFinder.class != "doublet") %>%
   filter(mf_dbl_prediction.no_qc != "Doublet") %>%
   # nrow()
-  ggplot(aes(x = umap_1, y = umap_2)) +
+  ggplot(aes(x = umap_1,
+             y = umap_2)) +
   geom_point(aes(colour = percent.hb)) +
   theme_bw() +
   labs(subtitle = "scDblFinder class")
@@ -532,7 +610,7 @@ joined@meta.data %>%
 write_rds(x = joined,
           file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.sex_doublets.rds"))
 
-reload <- FALSE
+reload <- TRUE
 if(reload) {
   joined <- read_rds(file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.sex_doublets.rds"))  
 }
@@ -543,7 +621,8 @@ if(reload) {
 
 # Do the scores for the different gene sets correlate?
 joined@meta.data %>%
-  ggplot(aes(x = mm_x_set1, y = hs_x_set1)) +
+  ggplot(aes(x = mm_x_set1,
+             y = hs_x_set1)) +
   geom_point() +
   # Dotted x=y line
   geom_abline(
@@ -575,7 +654,9 @@ joined@meta.data %>%
 # Just vastly different scores, and I have no real way to know which is better
 
 joined@meta.data %>%
-  ggplot(aes(x = mm_y_set1, y = hs_y_set1, colour = predicted_sex)) +
+  ggplot(aes(x = mm_y_set1,
+             y = hs_y_set1,
+             colour = predicted_sex)) +
   geom_point() +
   facet_wrap(~mf_dbl_prediction.no_qc)
 
