@@ -218,7 +218,7 @@ gc()
 write_rds(joined,
           file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.rds"))
 
-reload <- TRUE
+reload <- FALSE
 # Can be useful to close everything down at this point and reload the data below
 # Otherwise memory consumption is too high running classifySex()
 
@@ -382,7 +382,8 @@ joined@meta.data %>%
 
 joined@meta.data %>%
   group_by(mf_dbl_prediction.qc) %>%
-  summari# A tibble: 2 × 2
+  summarise(n = n())
+# A tibble: 2 × 2
 # mf_dbl_prediction.qc     n
 # <chr>                <int>
 #   1 Doublet             2018
@@ -592,25 +593,28 @@ joined <- AddModuleScore(joined,
                          search = TRUE)
 # Not found: Hsfy2
 
-joined <- AddModuleScore(joined,
-                         features = list(Xgenes),
-                         name = "hs_x_set", search = TRUE)
+# joined <- AddModuleScore(joined,
+#                          features = list(Xgenes),
+#                          name = "hs_x_set",
+#                          search = TRUE)
 # Not found: lots
 
-joined <- AddModuleScore(joined,
-                         features = list(Ygenes),
-                         name = "hs_y_set",
-                         search = TRUE)
+# joined <- AddModuleScore(joined,
+#                          features = list(Ygenes),
+#                          name = "hs_y_set",
+#                          search = TRUE)
 # Not found: lots
 
 joined@meta.data %>%
   head()
+# memory cleanup
+gc()
 
 # I'll output this to save re-processing
 write_rds(x = joined,
           file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.sex_doublets.rds"))
 
-reload <- TRUE
+reload <- FALSE
 if(reload) {
   joined <- read_rds(file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.sex_doublets.rds"))  
 }
@@ -672,7 +676,7 @@ violin_points(object = joined,
 
 # How well does the hs x signature match just to Xist? I would hope they're somewhat similar
 joined %>%
-  FeatureScatter(feature1 = "hs_x_set1", feature2 = "Xist", group.by = "predicted_sex")
+  FeatureScatter(feature1 = "mm_x_set1", feature2 = "Xist", group.by = "predicted_sex")
 # They're not very similar
 # I guess there are lots of cells that lack Xist, but no cells lacking an hs_x_set1 score?
 # And I suppose this is why multiple genes are used
@@ -680,7 +684,7 @@ joined %>%
 
 # Start exploring the predictions against the gene set scores
 joined@meta.data %>%
-  ggplot(aes(x = hs_x_set1, y = hs_y_set1, colour = predicted_sex)) +
+  ggplot(aes(x = mm_x_set1, y = mm_y_set1, colour = predicted_sex)) +
   geom_point() +
   facet_wrap(~mf_dbl_prediction.no_qc)
 
@@ -757,10 +761,16 @@ FeatureScatter(joined,
 # Look at cluster 10 (mostly doublets) in PCA
 # - do cells hang out with other clusters?
 
-DimPlot(joined, group.by = "seurat_clusters", reduction = "pca", label = TRUE, label.box = TRUE)
-DimPlot(joined, group.by = "scDblFinder.class", reduction = "pca", label = TRUE, label.box = TRUE)
+DimPlot(joined,
+        group.by = "seurat_clusters",
+        reduction = "pca",
+        label = TRUE,
+        label.box = FALSE)
+DimPlot(joined, group.by = "scDblFinder.class",
+        reduction = "pca",
+        label = TRUE,
+        label.box = FALSE)
 
-DimPlot(joined, group.by = "seurat_clusters", reduction = "pca", label = TRUE, label.box = TRUE)
 
 # PCA by user-specified group
 joined@reductions$pca@cell.embeddings %>%
@@ -793,16 +803,27 @@ doublets <-
 # Quick run through the basic workflow again
 doublets <-
   doublets %>%
-  NormalizeData(normalization.method = "LogNormalize", scale.factor = 10000, verbose = FALSE) %>%
-  FindVariableFeatures(selection.method = "vst", nfeatures = 3000, verbose = FALSE) %>%
-  ScaleData(features = rownames(doublets), verbose = FALSE) %>%
+  NormalizeData(normalization.method = "LogNormalize",
+                scale.factor = 10000,
+                verbose = FALSE) %>%
+  FindVariableFeatures(selection.method = "vst",
+                       nfeatures = 3000,
+                       verbose = FALSE) %>%
+  ScaleData(features = rownames(doublets),
+            verbose = FALSE) %>%
   RunPCA(verbose = FALSE) %>% # Defaults to features = VariableFeatures(object)), but better not to specify as these are not yet stored in that object
-  FindNeighbors(dims = 1:30, verbose = FALSE) %>%
-  FindClusters(resolution = 0.8, verbose = FALSE) %>%
-  RunUMAP(dims = 1:30, verbose = FALSE)
+  FindNeighbors(dims = 1:30,
+                verbose = FALSE) %>%
+  FindClusters(resolution = 0.8,
+               verbose = FALSE) %>%
+  RunUMAP(dims = 1:30,
+          verbose = FALSE)
 
 # PCA plot
-DimPlot(doublets, reduction = "pca", group.by = "qc_clustering") + labs(subtitle = "Doublets only")
+DimPlot(doublets,
+        reduction = "pca",
+        group.by = "qc_clustering") +
+  labs(subtitle = "Doublets only")
 
 doublets@reductions$pca@cell.embeddings %>%
   as_tibble(rownames = "barcode") %>%
@@ -832,7 +853,7 @@ gc()
 # x cluster 10 - CHANGED MIND - keep these and track them; do they stay together or not?
 # - High Hb cells (setting threshold suitable to remove erythrocyte doublets as well)
 
-filtered_dir <- file.path(project_scratch, "04-filtering")
+filtered_dir <- file.path(out_dir, "04-filtering")
 dir.create(filtered_dir, showWarnings = FALSE)
 
 joined
@@ -930,15 +951,22 @@ filtered <-
   joined %>%
   subset(subset = any_doublet == FALSE) %>%
   subset(percent.mt < mt_threshold)
-rm(joined)
-gc()
 
+# combined before and after filter plots
 (DimPlot(joined, label = TRUE, label.box = TRUE) + labs(subtitle = "All cells")) + 
   (DimPlot(filtered, label = TRUE, label.box = TRUE) + labs(subtitle = "Removed all doublets and cluster 10"))
 
+rm(joined)
+gc()
 
 filtered
-# 33286 cells
+# 33286 cells <- this was written by Nick
+# An object of class Seurat 
+# 24767 features across 33325 samples within 1 assay 
+# Active assay: RNA (24767 features, 3000 variable features)
+# 3 layers present: counts, data, scale.data
+# 2 dimensional reductions calculated: pca, umap
+
 
 DimPlot(filtered)  
 
@@ -962,7 +990,7 @@ violin_points(filtered,
   geom_hline(yintercept = 1, linetype = 2,
              # alpha = 0.3,
              colour = "darkorange2") +
-  scale_y_log10() +
+  # scale_y_log10() +
   labs(subtitle = "Percent haemoglobin genes; proposed filter at 1% (orange line)")
 ggsave(filename = file.path(filtered_dir, "05-violin-hb.png"),
        # width = 10, height = 5.5
@@ -993,6 +1021,11 @@ ggsave(filename = file.path(filtered_dir, "05-violin_plots-qc_metrics.png"),
   theme_bw() +
   facet_wrap(~ percent.hb > 1)
 
+
+# let's save here and reload in a new markdown document
+
+write_rds(x = filtered,
+          file = file.path(out_dir, "04-filtering", "filtered.perform_qc.sex_doublets.rds"))
 
 
 # Assessing Quality -------------------------------------------------------
