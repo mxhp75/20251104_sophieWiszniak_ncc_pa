@@ -20,7 +20,7 @@ set.seed(42) # set seed for reprodcibility
 # Load Libraries
 
 ```{r}
-# Core tidycerse
+# Core tidyverse
 library(tidyverse)
 library(tibble)
 library(dplyr)
@@ -50,7 +50,7 @@ data_base_dir <- file.path(project_repo_dir, "rawData")
 out_dir <- file.path(project_repo_dir, "outDir")
 downloads <- file.path(project_repo_dir, "downloads")
 
-# Files for import
+# Files for reading in
 sophieAnnotation_file <- file.path(project_repo_dir, "cleanData/seurat_clusters.csv")
 
 ```
@@ -64,6 +64,10 @@ joined <- read_rds(file = file.path(out_dir, "04-filtering", "filtered.perform_q
 
 # Sophie's annotation file
 sophieAnnotation <- read_csv(sophieAnnotation_file)
+
+# one to one mapping of original, merged and Joe barcodes
+joined_metadata_with_barcodes <- read_csv("outDir/03-merged_initial_QC/joined_metadata_with_barcodes.csv")
+
 ```
 
 ## Get normalised counts
@@ -82,56 +86,6 @@ norm_counts[c('Vim', 'Bcl2', 'Trp53', 'Cd4'),1:5]
 ## Add Sophie's cell annotation map to the seurat object
 
 ```{r}
-# let's take a look and check that the barcodes between the objects match
-setdiff(sophieAnnotation$Barcode, joined@meta.data$original_barcode)  %>% head() # in sophie but not joined
-# [1] "AAACCCACACCGTGAC-1" "AAACGAAAGCTATCCA-1"
-# [3] "AAACGAAGTCAAGTTC-1" "AAAGGGCAGGGTATAT-1"
-# [5] "AAAGGGCAGGTGCAGT-1" "AAAGGGCCAGTGAGCA-1"
-setdiff(joined@meta.data$original_barcode, sophieAnnotation$Barcode)  %>% head() # in joined but not sophie
-# [1] "AAACCCACACAAGTTC-1" "AAACCCACAGACTCTA-1"
-# [3] "AAACCCAGTCAGGTAG-1" "AAACCCAGTCTAATCG-1"
-# [5] "AAACCCAGTGAGTTTC-1" "AAACGAAAGATGTTCC-1"
-# nope - but why?
-
-# let's take a look and match the rownames of the seurat object with the original_barcode column
-# This is just to make sure that nothing funky happened to the original barcodes in the rownames when we updated the rownames
-  # create a test object
-barcode_temp1 <- data.frame(row_name = rownames(joined@meta.data), original = joined@meta.data$original_barcode) %>%
-  # split the rownames to recreate the original barcode
-  separate(row_name,
-           into = c("barcode", "col2", "col3"),
-           sep = "_",
-           fill = "right",
-           remove = FALSE) %>%
-  # add a Boolean test for a match
-  mutate(match = barcode == original)
-# test for the number of matches
-table(barcode_temp1$match)
-
-# let me test of one of Sophie's barcodes is found anywhere in the joined object original_barcodes
-sum(grepl("^AATGAAGTCCACAGGC", barcode_temp1$original)) # 0 nope
-
-# lets find out how many barcodes from joined match with Sophie's list
-length(intersect(joined@meta.data$original_barcode, sophieAnnotation$Barcode)) # 7230
-
-# barcodes that are in Sophie's list but not in joined
-setdiff(sophie$Barcode, joined$barcode)
-
-# barcodes that are in joined but in Sophie's list
-setdiff(sophie$Barcode, joined$barcode)
-
-# check to see if the ~7K cells that do align have something in common
-barcode_temp2 <- data.frame(joined@meta.data) %>%
-  tibble::rownames_to_column("rowname") %>%
-  dplyr::select(., rowname, original_barcode, orig.ident, stage, genotype) %>%
-  dplyr::left_join(., sophieAnnotation,
-                   by = c("original_barcode" = "Barcode"))
-
-barcode_temp3 <- data.frame(joined@meta.data) %>%
-  tibble::rownames_to_column("rowname") %>%
-  dplyr::select(., rowname, original_barcode, orig.ident, stage, genotype) %>%
-  dplyr::full_join(., sophieAnnotation,
-                   by = c("original_barcode" = "Barcode"))
 
 # Add to seurat object
 rownames(ct_ann_main)[1:5] # make sure you have cell IDs
@@ -316,7 +270,17 @@ assayNames(ref_tabula_muris_senis)
 ct_ann_tabula_muris_senis <- SingleR(
   test = raw_counts,                  # your raw count matrix from Seurat
   ref = ref_tabula_muris_senis,
-  labels = ref_tabula_muris_senis$cell_type,   # or whichever column you prefer
+  labels = ref_tabula_muris_senis$cell_type,
+  assay.type.test = "counts",         # raw counts in test
+  assay.type.ref = "logcounts",
+  de.method = "classic"
+)
+gc()
+
+ct_ann_tabula_muris_senis_free <- SingleR(
+  test = raw_counts,                  # your raw count matrix from Seurat
+  ref = ref_tabula_muris_senis,
+  labels = ref_tabula_muris_senis$free,   # or whichever column you prefer
   assay.type.test = "counts",         # raw counts in test
   assay.type.ref = "logcounts",
   de.method = "classic"
