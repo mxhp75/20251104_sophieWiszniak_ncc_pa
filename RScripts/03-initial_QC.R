@@ -1027,24 +1027,27 @@ ggsave(filename = file.path(filtered_dir, "05-violin_plots-qc_metrics.png"),
 write_rds(x = filtered,
           file = file.path(out_dir, "04-filtering", "filtered.perform_qc.sex_doublets.rds"))
 
+# re-embed post filtering
+# set the dimensions and cluster resolution -> matches Nick's function
+n_dims = 30
+clustering_resolution = 0.8
+# Re-computation of graph-based clustering and UMAP on the cleaned dataset
+joined_re_embed <- joined %>%
+  FindVariableFeatures(selection.method = "vst", 
+                       nfeatures = 3000,
+                       verbose = FALSE) %>%
+  ScaleData(features = rownames(joined),
+            verbose = FALSE) %>%
+  RunPCA(verbose = FALSE) %>% # Defaults to features = VariableFeatures(joined)), but better not to specify as these are not yet stored in that object
+  FindNeighbors(dims = 1:n_dims,
+                verbose = FALSE) %>%
+  FindClusters(resolution = clustering_resolution,
+               verbose = FALSE) %>%
+  RunUMAP(dims = 1:n_dims,
+          verbose = FALSE)
 
-# Assessing Quality -------------------------------------------------------
-
-# #TODO: Add some notes here matching conclusions from Google doc
-
-
-
-
-
-
-
-
-
-# Annotate cell types -----------------------------------------------------
-
-# Can I annotate using this data: https://doi.org/10.1038/s41586-024-07069-w
-# It includes cardiomyocytes, among other cell types
-
-# Come back to this, as Sophie seems happy with the manual annotations she's done
+# let's save here and reload in a new session
+write_rds(x = joined_re_embed,
+          file = file.path(out_dir, "04-filtering", "re_embed_filtered.perform_qc.sex_doublets.rds"))
 
 
