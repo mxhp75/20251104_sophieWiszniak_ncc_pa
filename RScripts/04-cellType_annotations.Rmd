@@ -60,8 +60,8 @@ sophieAnnotation_file <- file.path(project_repo_dir, "cleanData/seurat_clusters.
 
 ```{r}
 # seurat object
-joined <- read_rds(file = file.path(out_dir, "04-filtering", "filtered.perform_qc.sex_doublets.rds"))
-
+# joined <- read_rds(file = file.path(out_dir, "04-filtering", "filtered.perform_qc.sex_doublets.rds"))
+re_embed_filtered <- readRDS(file = file.path(out_dir, "04-filtering", "re_embed_filtered.perform_qc.sex_doublets.rds"))
 # Sophie's annotation file
 sophieAnnotation <- read_csv(sophieAnnotation_file)
 
@@ -74,9 +74,9 @@ joined_metadata_with_barcodes <- read_csv("outDir/03-merged_initial_QC/joined_me
 - note that SingleR will accept raw or normalised counts
 
 ```{r}
-raw_counts <- LayerData(joined, assay = "RNA", layer = 'counts') #
+raw_counts <- LayerData(re_embed_filtered, assay = "RNA", layer = 'counts') #
 raw_counts[c('Vim', 'Bcl2', 'Trp53', 'Cd4'),1:5]
-norm_counts <- LayerData(joined, assay = "RNA", layer = 'data') #
+norm_counts <- LayerData(re_embed_filtered, assay = "RNA", layer = 'data') #
 norm_counts[c('Vim', 'Bcl2', 'Trp53', 'Cd4'),1:5]
 ```
 
@@ -100,39 +100,60 @@ manual_annotation <- dplyr::left_join(
   tibble::column_to_rownames("merged_barcodes")
 
 # add the manually curated labels to the seurat object
-joined <- AddMetaData(
-  object = joined,
+re_embed_filtered <- AddMetaData(
+  object = re_embed_filtered,
   metadata = manual_annotation,
   col.name = "sophie_annotation"
 )
 
 # set the active identity
-joined <- SetIdent(joined,
+re_embed_filtered <- SetIdent(re_embed_filtered,
                    value = "sophie_annotation")
 # Visualise them on the UMAP
-DimPlot(joined,
+DimPlot(re_embed_filtered,
         group.by = "sophie_annotation",
         label = TRUE,
         repel = TRUE,
         label.size = 3)
 
 # Nicer colors + filtered in gray
-n_clusters <- length(unique(joined$sophie_annotation))
-cluster_colors <- c(
+n_clusters <- length(unique(re_embed_filtered$sophie_annotation))
+cluster_colours <- c(
   scales::hue_pal()(n_clusters - 1),   # bright colors for real clusters
   "gray70"                             # filtered = muted gray
 )
-names(cluster_colors) <- levels(joined$sophie_annotation)
+names(cluster_colours) <- levels(re_embed_filtered$sophie_annotation)
 
-DimPlot(joined,
+DimPlot(re_embed_filtered,
         group.by = "sophie_annotation",
         label = TRUE,
         repel = TRUE,
-        cols = cluster_colors,
+        cols = cluster_colours,
         pt.size = 0.4) +
-  NoLegend() +   # remove legend if too many clusters
+  # NoLegend() +   # remove legend if too many clusters
   ggtitle("Sophie's manual cell type annotation transferred via joe_barcode")
 ```
+
+## Remove the prefix from Sophie's cell types and replot
+
+```{r}
+re_embed_filtered$sophie_celltype_clean <- sub("^[0-9]+_", "", re_embed_filtered$sophie_annotation)
+
+# Generate colors for all real cell types
+real_types <- setdiff(unique(re_embed_filtered$sophie_celltype_clean), "filtered")
+palette <- scales::hue_pal()(length(real_types))
+names(palette) <- real_types
+
+# Add gray for filtered
+cluster_colours_clean <- c(palette, filtered = "gray70")
+
+DimPlot(re_embed_filtered,
+        group.by = "sophie_celltype_clean",
+        cols = cluster_colours_clean,
+        label = TRUE, repel = TRUE) +
+  ggtitle("Sophie's manual annotation (clean cell types)")
+```
+
 
 # 2. Cell annotation with celldex
 - This chunk uses the celldex mouse RNAseq dataset
@@ -206,30 +227,30 @@ plotDeltaDistribution(ct_ann_fine,
 # Add to seurat object
 rownames(ct_ann_main)[1:5] # make sure you have cell IDs
 # add the "main" labels to the seurat object
-joined <- AddMetaData(joined,
+re_embed_filtered <- AddMetaData(re_embed_filtered,
                       ct_ann_main$labels,
                       col.name = 'SingleR_HCA_main')
 
 # set the active identity
-joined <- SetIdent(joined,
+re_embed_filtered <- SetIdent(re_embed_filtered,
                    value = "SingleR_HCA_main")
 # Visualise them on the UMAP
-DimPlot(joined,
+DimPlot(re_embed_filtered,
         group.by = "SingleR_HCA_main",
         label = TRUE,
         repel = TRUE,
         label.size = 3)
 
 # add the "fine" labels to the seurat object
-joined <- AddMetaData(joined,
+re_embed_filtered <- AddMetaData(re_embed_filtered,
                       ct_ann_fine$labels,
                       col.name = 'SingleR_HCA_fine')
 
 # set the active identity
-joined <- SetIdent(joined,
+re_embed_filtered <- SetIdent(re_embed_filtered,
                    value = "SingleR_HCA_fine")
 # Visualise them on the UMAP
-DimPlot(joined,
+DimPlot(re_embed_filtered,
         group.by = "SingleR_HCA_fine",
         label = TRUE,
         repel = TRUE,
@@ -335,15 +356,15 @@ plotDeltaDistribution(ct_ann_tabula_muris_senis,
 # Add to seurat object
 rownames(ct_ann_tabula_muris_senis)[1:5] # make sure you have cell IDs
 # add the "main" labels to the seurat object
-joined <- AddMetaData(joined,
+re_embed_filtered <- AddMetaData(re_embed_filtered,
                       ct_ann_tabula_muris_senis$labels,
                       col.name = 'SingleR_tms')
 
 # set the active identity
-joined <- SetIdent(joined,
+re_embed_filtered <- SetIdent(re_embed_filtered,
                    value = "SingleR_tms")
 # Visualise them on the UMAP
-DimPlot(joined,
+DimPlot(re_embed_filtered,
         group.by = "SingleR_tms",
         label = TRUE,
         repel = TRUE,
