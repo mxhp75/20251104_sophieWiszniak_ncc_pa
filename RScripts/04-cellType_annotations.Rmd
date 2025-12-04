@@ -330,7 +330,7 @@ gc()
 ct_ann_tabula_muris_senis_free <- SingleR(
   test = raw_counts,                  # your raw count matrix from Seurat
   ref = ref_tabula_muris_senis,
-  labels = ref_tabula_muris_senis$free,   # or whichever column you prefer
+  labels = ref_tabula_muris_senis$free_annotation,   # or whichever column you prefer
   assay.type.test = "counts",         # raw counts in test
   assay.type.ref = "logcounts",
   de.method = "classic"
@@ -372,149 +372,14 @@ DimPlot(re_embed_filtered,
 
 ```
 
-
+# Save the Seurat object for later
 
 ```{r}
-# Annotate cell types: Tabula Muris Senis ---------------------------------
-
-# I previously used a reference with comprehensive cell typing
-# But it took 75 minutes to run
-# I'll work with a less comprehensive reference for now, and perhaps go more fine-grained at the stromal level
-# The time taken seems to scale with the number of cell types more than the number of cells in the reference
-
-# Annotate with lower resolution:
-# Using this reference: https://cellxgene.cziscience.com/collections/0b9d8a04-bb9d-44da-aa27-705bb65b54eb
-# https://datasets.cellxgene.cziscience.com/c49b6300-3bda-4658-a0dc-be075537cb88.h5ad
-
-reference_tbs_sce <- zellkonverter::readH5AD(file = file.path(downloads, "tabula_muris_sensis-mammary_gland_reference.h5ad"))
-class(reference_tbs_sce) # sce
-
-# Check memory usage
-format(object.size(reference_tbs_sce), units = "GB") # Only 300 Mb
-
-# Check the structure
-dim(reference_tbs_sce)
-# [1] 17943 12295
-
-SingleCellExperiment::colData(reference_tbs_sce) %>% colnames()
-
-SingleCellExperiment::colData(reference_tbs_sce) %>%
-  as_tibble() %>%
-  group_by(cell_type) %>%
-  count() %>%
-  arrange(desc(n))
-# cell_type                                    n
-# <fct>                                    <int>
-# 1 T cell                                    3220
-# 2 stromal cell                              2783
-# 3 luminal epithelial cell of mammary gland  1903
-# 4 B cell                                    1632
-# 5 basal cell                                1587
-# 6 endothelial cell                           651
-# 7 macrophage                                 519
-# Broader classes will be useful
-
-
-# Extract reference data for SingleR
-ref_matrix_tbs <- SummarizedExperiment::assay(reference_tbs_sce, "X")
-class(ref_matrix_tbs)
-dim(ref_matrix_tbs) # [1] 17943 12295
-
-# Check gene name format
-ref_matrix_tbs %>% rownames() %>% head()
-# Ensembl
-
-library(biomaRt)
-
-# Convert to gene symbols
-gene_mapping <- getBM(
-  attributes = c("ensembl_gene_id", "mgi_symbol"),
-  filters = "ensembl_gene_id",
-  values = ref_matrix_tbs %>% rownames(),
-  mart = useMart("ensembl", dataset = "mmusculus_gene_ensembl")
-)
-
-gene_mapping %>% head()
-
-# Any NA?
-is.na(gene_mapping$mgi_symbol) %>% summary() # No
-is.na(gene_mapping$ensembl_gene_id) %>% summary() # No
-
-# Any empty?
-summary(gene_mapping$mgi_symbol == "") # 3
-
-# Any duplicates?
-duplicated(gene_mapping$ensembl_gene_id) %>% summary()
-# Mode   FALSE 
-# logical   17943
-
-# Check that genes are in the same order in reference data and biomart output:
-table(rownames(ref_matrix_tbs) == gene_mapping$ensembl_gene_id)
-# FALSE  TRUE 
-# 17935     8  
-
-# Get them in the same order
-gene_mapping_ordered <- gene_mapping[match(rownames(ref_matrix_tbs), gene_mapping$ensembl_gene_id), ]
-
-# Check
-table(rownames(ref_matrix_tbs) == gene_mapping_ordered$ensembl_gene_id)
-# TRUE 
-# 17943 
-
-# Remove empty gene symbols
-gene_mapping_ordered <- gene_mapping_ordered[gene_mapping_ordered$mgi_symbol != "", ]
-nrow(gene_mapping_ordered) # 17940 - correct
-
-gene_mapping_ordered %>% head() # I just check one manually, and ENSMUSG00000020590 is indeed Snx13
-
-# Subset reference matrix to genes with valid symbols
-ref_matrix_tbs_subset <- ref_matrix_tbs[gene_mapping_ordered$ensembl_gene_id, ]
-
-# Now rename genes
-rownames(ref_matrix_tbs_subset) <- gene_mapping_ordered$mgi_symbol
-
-# Verify
-head(rownames(ref_matrix_tbs_subset))
-
-rm(gene_mapping, ref_matrix_tbs)
-gc()
-
-query_matrix <- Seurat::GetAssayData(filtered, slot = "data") %>% as.matrix()
-class(query_matrix)
-
-# Predict cell types
-system.time(
-  pred_tbs <- SingleR::SingleR(
-    test = query_matrix,
-    ref = ref_matrix_tbs_subset,
-    labels = reference_tbs_sce$cell_type,
-    de.method = "wilcox"
-  )
-)
-# This took around two minutes
-
-pred_tbs
-
-# Add to Seurat metadata; I'll include scores as well for now, and append the reference name
-filtered <-
-  add_metadata(object = filtered,
-               metadata = pred_tbs %>%
-                 as_tibble(rownames = "barcode") %>%
-                 rename_with(~ ifelse(. == "barcode", ., paste(., "tbs", sep = ".")))
-  )
-
-
-# Convert NA labels to some other value, as NAs mess with plot colour assignments
-filtered@meta.data <-
-  filtered@meta.data %>%
-  mutate(pruned.labels.tbs = case_when(is.na(pruned.labels.tbs) ~ "pruned - NA",
-                                       .default = pruned.labels.tbs))
-
-
-# Clean up
-rm(gene_mapping_ordered, pred_tbs, query_matrix, ref_matrix_tbs_subset, reference_tbs_sce)
-gc()
+# let's save here and reload in a new session
+write_rds(x = re_embed_filtered,
+          file = file.path(out_dir, "04-filtering", "re_embed_filtered.perform_qc.sex_doublets_annotations.rds"))
 ```
+
 
 
 
