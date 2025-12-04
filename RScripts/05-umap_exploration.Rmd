@@ -1,0 +1,64 @@
+---
+title: "umap_exploration"
+author: "Melanie Smith"
+date: "2025-12-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max, scipen = 999, stringsAsFactors = FALSE, dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reprodcibility
+```
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+
+library(SingleCellExperiment)
+library(biomaRt)
+library(scuttle)
+```
+
+# Set project directories and file paths
+
+```{r}
+project_name <- "20251104_sophieWiszniak_ncc_pa"
+
+base_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak"
+project_repo_dir <- file.path(base_repo_dir, project_name)
+data_base_dir <- file.path(project_repo_dir, "rawData")
+out_dir <- file.path(project_repo_dir, "outDir")
+downloads <- file.path(project_repo_dir, "downloads")
+
+```
+
+# Load required objects
+- This object has been filtered for doublets, 
+
+```{r}
+# seurat object
+# joined <- read_rds(file = file.path(out_dir, "04-filtering", "filtered.perform_qc.sex_doublets.rds"))
+re_embed_filtered <- readRDS(file = file.path(out_dir, "04-filtering", "re_embed_filtered.perform_qc.sex_doublets_annotation.rds"))
+# Sophie's annotation file
+sophieAnnotation <- read_csv(sophieAnnotation_file)
+
+# one to one mapping of original, merged and Joe barcodes
+joined_metadata_with_barcodes <- read_csv("outDir/03-merged_initial_QC/joined_metadata_with_barcodes.csv")
+
+```
