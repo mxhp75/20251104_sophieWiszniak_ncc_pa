@@ -562,9 +562,10 @@ re_embed_no_rbc <- subset(re_embed_filtered,
                           invert = TRUE)
 
 cat("Cells after RBC removal:", ncol(re_embed_no_rbc), "\n\n")
+
 ```
 
-# Re-embed: Normalize, find variable features, scale, PCA, UMAP, cluster
+# Re-embed: Normalise, find variable features, scale, PCA, UMAP, cluster
 
 ```{r}
 n_dims = 30
@@ -627,11 +628,103 @@ p3 <- FeaturePlot(re_embed_no_rbc,
                   features = c("nCount_RNA", "nFeature_RNA", 
                                "percent.mt", "percent.hb",
                                "featcount_dist", "pct_counts_in_top_20_features"),
-                  ncol = 2)
+                  ncol = 3)
 print(p3)
 ggsave(p3, 
        filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_QCmetrics_no_RBC.png"),
+       width = 12,
+       height = 8)
+
+```
+
+# Remove suspected RBC cells (fail percent.hb) and re-embed
+
+```{r}
+
+# Subset to remove cells that fail pass_percent_hb
+re_embed_no_rbc_no_hb <- subset(re_embed_no_rbc, 
+                                subset = pass_percent_hb == TRUE)
+cat("Cells before Hb filtering:", ncol(re_embed_no_rbc), "\n")
+cat("Cells that failed Hb filter:", sum(!re_embed_no_rbc$pass_percent_hb), "\n")
+cat("Cells after Hb filtering:", ncol(re_embed_no_rbc_no_hb), "\n")
+```
+
+# Re-embed: Normalise, find variable features, scale, PCA, UMAP, cluster
+
+```{r}
+n_dims = 30
+clustering_resolution = 0.8
+# Re-computation of graph-based clustering and UMAP on the cleaned dataset
+re_embed_no_rbc_no_hb <- FindVariableFeatures(re_embed_no_rbc_no_hb,
+                                        selection.method = "vst", 
+                                        nfeatures = 3000,
+                                        verbose = FALSE) %>%
+  ScaleData(features = rownames(re_embed_no_rbc_no_hb),
+            verbose = FALSE) %>%
+  RunPCA(verbose = FALSE) %>% # Defaults to features = VariableFeatures()), but better not to specify as these are not yet stored in that object
+  FindNeighbors(dims = 1:n_dims,
+                verbose = FALSE) %>%
+  FindClusters(resolution = clustering_resolution,
+               verbose = FALSE) %>%
+  RunUMAP(dims = 1:n_dims,
+          verbose = FALSE)
+
+# let's save here and reload in a new session
+write_rds(x = re_embed_no_rbc_no_hb,
+          file = file.path(out_dir, "04-filtering", "re_embed_no_rbc_no_hb.rds"))
+
+```
+
+# Visualize the new embedding
+
+```{r}
+
+# UMAP by new clusters
+p4 <- DimPlot(re_embed_no_rbc_no_hb, 
+              reduction = "umap",
+              group.by = "seurat_clusters",
+              label = TRUE,
+              label.size = 4) +
+  ggtitle("New Clusters (after RBC and %hb removal)")
+
+# UMAP by Sophie's cell type annotations
+p5 <- DimPlot(re_embed_no_rbc_no_hb, 
+              reduction = "umap",
+              group.by = "sophie_celltype_clean",
+              label = TRUE,
+              label.size = 3,
+              repel = TRUE) +
+  ggtitle("Sophie's Cell Type Annotations (after RBC and %hb removal")
+
+DimPlot(re_embed_no_rbc_no_hb, 
+              reduction = "umap",
+              group.by = "SingleR_tms",
+              label = TRUE,
+              label.size = 3,
+              repel = TRUE) +
+  ggtitle("SingleR_tms Cell Type Annotations (after RBC and %hb removal)")
+
+# Display plots
+p4 + p5
+ggsave(p4, 
+       filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_cluster_no_RBC_no_hb.png"),
        width = 8,
+       height = 8)
+ggsave(p5, 
+       filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_celltype_no_RBC_no_hb.png"),
+       width = 8,
+       height = 8)
+
+# Check QC metrics in the new embedding
+p6 <- FeaturePlot(re_embed_no_rbc_no_hb, 
+                  features = c("nCount_RNA", "nFeature_RNA", 
+                               "percent.mt", "percent.hb",
+                               "featcount_dist", "pct_counts_in_top_20_features"),
+                  ncol = 3)
+print(p6)
+ggsave(p6, 
+       filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_QCmetrics_no_RBC_no_hb.png"),
+       width = 12,
        height = 8)
 
 ```
