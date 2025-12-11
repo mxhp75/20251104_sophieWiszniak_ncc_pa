@@ -39,6 +39,7 @@ library(scuttle)
 
 # additional plotting functions
 library(patchwork)
+library(pheatmap)
 ```
 
 # User defined functions
@@ -173,17 +174,21 @@ ggsave(filename = file.path(out_dir, "05-secondary_QC/preFilter_umap_e12.png"),
 # Automatic thresholding via MAD (median absolute deviations)
 
 ```{r}
-# enter the number of deviations required
-n_mad <- 3
+# Enter the number of deviations required
+n_mad_hb <- 5 # number of MADs for hb deviation
+n_mad <- 3    # number of MADs for nCount and nFeature deviation
 
-# upper bound for percent.hb
-percent.hb_upper <- median(re_embed_filtered@meta.data$percent.hb) + (mad(re_embed_filtered@meta.data$percent.hb) * 5)
+# Upper bound for percent.hb -> remove everything ABOVE this number
+percent.hb_upper <- median(re_embed_filtered@meta.data$percent.hb) + 
+  (mad(re_embed_filtered@meta.data$percent.hb) * n_mad_hb)
 
-# lower bound for nCounts
-nCounts_lower <- median(log10(re_embed_filtered@meta.data$nCount_RNA)) - (mad(log10(re_embed_filtered@meta.data$nCount_RNA)) * n_mad)
+# Lower bound for nCounts
+nCounts_lower <- median(log10(re_embed_filtered@meta.data$nCount_RNA)) - 
+  (mad(log10(re_embed_filtered@meta.data$nCount_RNA)) * n_mad)
 
-# lower bound for nFeataures
-nFeatures_lower <- median(log10(re_embed_filtered@meta.data$nFeature_RNA)) - (mad(log10(re_embed_filtered@meta.data$nFeature_RNA)) * n_mad)
+# Lower bound for nFeatures -> remove everything BELOW this number
+nFeatures_lower <- median(log10(re_embed_filtered@meta.data$nFeature_RNA)) - 
+  (mad(log10(re_embed_filtered@meta.data$nFeature_RNA)) * n_mad)
 
 # Calculate the percentage of counts in the top 20 features
 counts <- GetAssayData(re_embed_filtered, layer = "counts")
@@ -191,21 +196,27 @@ top20_per_cell <- apply(counts, 2, function(x) {
   if(sum(x) == 0) return(0)
   sum(sort(x, decreasing = TRUE)[1:20])
 })
-# add to the seurat object
-re_embed_filtered$pct_counts_in_top_20_features <- 100 * top20_per_cell / colSums(counts)
-# Upper bound for percentage top 20 transcripts (lenient 5 mads) (lower is naturally 0%)
-percent_top20_upper <- median(re_embed_filtered@meta.data$pct_counts_in_top_20_features) + (mad(re_embed_filtered@meta.data$pct_counts_in_top_20_features) * 5)
 
-# Calculate the feature count distance (aka how far a cell lies from he expected relationship between log10(nCounts) and log10(nFeatures))
-re_embed_filtered$featcount_dist <- {
-  m <- re_embed_filtered@meta.data
-  abs(resid(lm(log10(nFeature_RNA + 1) ~ log10(nCount_RNA + 1), data = m)))
-}
-# clean up large objects
-rm(m)
+# Add to the seurat object
+re_embed_filtered$pct_counts_in_top_20_features <- 100 * top20_per_cell / colSums(counts)
+
+# Clean up large object
+rm(counts, top20_per_cell)
 gc()
-# Upper bound for percentage top 20 transcripts (lenient 5 mads) (lower is naturally 0%)
-featCount_dist_upper <- median(re_embed_filtered@meta.data$featcount_dist) + (mad(re_embed_filtered@meta.data$featcount_dist) * 5)
+
+# Upper bound for percentage top 20 transcripts (lenient 5 mads)
+percent_top20_upper <- median(re_embed_filtered@meta.data$pct_counts_in_top_20_features) + 
+  (mad(re_embed_filtered@meta.data$pct_counts_in_top_20_features) * 5)
+
+# Calculate the feature count distance
+re_embed_filtered$featcount_dist <- {
+  abs(resid(lm(log10(nFeature_RNA + 1) ~ log10(nCount_RNA + 1), 
+               data = re_embed_filtered@meta.data)))
+}
+
+# Upper bound for feature-count distance (lenient 5 mads)
+featCount_dist_upper <- median(re_embed_filtered@meta.data$featcount_dist) + 
+  (mad(re_embed_filtered@meta.data$featcount_dist) * 5)
 
 ```
 
@@ -428,95 +439,188 @@ VlnPlot(re_embed_filtered,
   
 ```
 
-## Cells failing secondary QC
+## Define final thresholds
 
 ```{r}
-# Cells failing the percent.hb threshold
-# cells outside of clusters 17 & 25 with percent.hb > 20%
-fail_hb <- sum(re_embed_filtered$seurat_clusters != "17" & re_embed_filtered$seurat_clusters != "25" & re_embed_filtered$percent.hb > percent.hb_upper) +
-# cells in clusters 17 & 25
-sum(re_embed_filtered$seurat_clusters == "17" | re_embed_filtered$seurat_clusters == "25")
-
-
-# Define your final thresholds (replace with your actual values)
 qc_thresholds <- list(
   nCount_RNA_lower      = 10^nCounts_lower,
-  # nCount_RNA_upper      = 35000,
   nFeature_RNA_lower    = 10^nFeatures_lower,
-  # nFeature_RNA_upper    = 7000,
-  percent.hb_upper      = percent.hb_upper,           # your chosen Hb cutoff
-  pct_top20_upper       = percent_top20_upper,            # or your MAD-based value
-  featcount_dist_upper  = featCount_dist_upper           # or your MAD-based value
+  percent.hb_upper      = percent.hb_upper,
+  pct_top20_upper       = percent_top20_upper,
+  featcount_dist_upper  = featCount_dist_upper
 )
 
-# Add PASS/FAIL for every metric
+# Print thresholds for documentation
+cat("=== QC Thresholds Applied ===\n")
+cat("nCount_RNA_lower:     ", round(qc_thresholds$nCount_RNA_lower, 2), "\n")
+cat("nFeature_RNA_lower:   ", round(qc_thresholds$nFeature_RNA_lower, 2), "\n")
+cat("percent.hb_upper:     ", round(qc_thresholds$percent.hb_upper, 2), "%\n")
+cat("pct_top20_upper:      ", round(qc_thresholds$pct_top20_upper, 2), "%\n")
+cat("featcount_dist_upper: ", round(qc_thresholds$featcount_dist_upper, 4), "\n\n")
+```
+
+# Apply QC filters with rescue logic
+
+```{r}
 meta_qc <- re_embed_filtered@meta.data %>%
   mutate(
-    pass_nCount     = nCount_RNA >= qc_thresholds$nCount_RNA_lower,
-    pass_nFeature   = nFeature_RNA >= qc_thresholds$nFeature_RNA_lower,
-    pass_percent_hb = percent.hb <= qc_thresholds$percent.hb_upper,
-    pass_top20      = pct_counts_in_top_20_features <= qc_thresholds$pct_top20_upper,
-    pass_dist       = featcount_dist <= qc_thresholds$featcount_dist_upper,
-    pass_all        = pass_nCount & pass_nFeature & pass_percent_hb & pass_top20 & pass_dist,
-    pass_RBC_cluster = if_else(seurat_clusters %in% c(17, 25), 0, 1)
-    )
-
-meta_qc_17_25 <- re_embed_filtered@meta.data %>%
-  dplyr::mutate(
-    pass_nCount     = nCount_RNA >= qc_thresholds$nCount_RNA_lower,
-    pass_nFeature   = nFeature_RNA >= qc_thresholds$nFeature_RNA_lower,
-    pass_percent_hb = percent.hb <= qc_thresholds$percent.hb_upper,
-    pass_top20      = pct_counts_in_top_20_features <= qc_thresholds$pct_top20_upper,
-    pass_dist       = featcount_dist <= qc_thresholds$featcount_dist_upper,
-    pass_all        = pass_nCount & pass_nFeature & pass_percent_hb & pass_top20 & pass_dist,
+    # Standard QC metrics — TRUE = pass
+    pass_nCount      = nCount_RNA >= qc_thresholds$nCount_RNA_lower,
+    pass_nFeature    = nFeature_RNA >= qc_thresholds$nFeature_RNA_lower,
+    pass_percent_hb  = percent.hb <= qc_thresholds$percent.hb_upper,
+    pass_top20       = pct_counts_in_top_20_features <= qc_thresholds$pct_top20_upper,
+    pass_dist        = featcount_dist <= qc_thresholds$featcount_dist_upper,
     
-    # Correct way: refer to the column without the data frame name
-    pass_RBC_cluster = if_else(seurat_clusters %in% c(17, 25), 0, 1)
-    ) %>%
-  dplyr::filter(seurat_clusters %in% c(17, 25))
+    # RBC cluster rule: clusters 17 & 25 MUST fail → pass = FALSE for them
+    pass_RBC_cluster = !seurat_clusters %in% c(17, 25),
+    
+    # Overall passing cell (strict)
+    pass_all = pass_nCount & 
+      pass_nFeature & 
+      pass_percent_hb & 
+      pass_top20 & 
+      pass_dist & 
+      pass_RBC_cluster,
+    
+    # Count how many of the 5 technical metrics fail
+    n_technical_fails = (!pass_nCount) + (!pass_nFeature) + (!pass_percent_hb) + 
+      (!pass_top20) + (!pass_dist),
+    
+    # Rescue cells that fail ≤1 technical metric AND pass RBC filter
+    # Change to == 1 if you only want to rescue cells with exactly 1 failure
+    pass_rescue = n_technical_fails <= 1 & pass_RBC_cluster
+  )
 
-# 1. Build matrix + fails ≥2 column
+```
+
+# Summary statistics
+
+```{r}
+cat("=== QC Summary ===\n")
+cat("Total cells before QC:                        ", nrow(meta_qc), "\n")
+cat("Cells passing strict rules (pass_all):        ", sum(meta_qc$pass_all), "\n")
+cat("Cells with 0 technical failures:              ", sum(meta_qc$n_technical_fails == 0 & meta_qc$pass_RBC_cluster), "\n")
+cat("Cells with exactly 1 technical failure:       ", sum(meta_qc$n_technical_fails == 1 & meta_qc$pass_RBC_cluster), "\n")
+cat("Final cells kept (pass_rescue):               ", sum(meta_qc$pass_rescue), "\n")
+cat("Low-quality cells removed (≥2 fails or RBC):  ", sum(!meta_qc$pass_rescue), "\n")
+cat("  - Removed due to RBC clusters (17/25):      ", sum(meta_qc$seurat_clusters %in% c(17, 25)), "\n")
+cat("  - Removed due to ≥2 technical failures:     ", sum(meta_qc$n_technical_fails >= 2 & meta_qc$pass_RBC_cluster), "\n\n")
+
+# Breakdown by number of technical failures
+cat("=== Distribution of Technical Failures ===\n")
+print(table(n_technical_fails = meta_qc$n_technical_fails))
+cat("\n")
+
+# Add back to Seurat object
+re_embed_filtered@meta.data <- meta_qc
+```
+
+# Visualisation: QC heatamp
+
+```{r}
 qc_matrix <- meta_qc %>%
   arrange(seurat_clusters) %>%
   dplyr::select(pass_nCount, pass_nFeature, pass_percent_hb,
-         pass_top20, pass_dist, pass_RBC_cluster) %>%
+                pass_top20, pass_dist, pass_RBC_cluster) %>%
   dplyr::mutate(across(everything(), as.numeric)) %>%
-  tibble::rownames_to_column("cell_barcode") %>%
-  rowwise() %>%
-  dplyr::mutate(fails_two_or_more = sum(c_across(pass_nCount:pass_dist) == 1) >= 2) %>%
-  ungroup() %>%
-  dplyr::select(cell_barcode, pass_nCount, pass_nFeature, pass_percent_hb,
-         pass_top20, pass_dist, pass_RBC_cluster, fails_two_or_more) %>%
-  tibble::column_to_rownames("cell_barcode") %>%
   as.matrix()
 
-# 2. Row annotation
-annotation_row <- data.frame(Cluster = meta_qc$seurat_clusters[order(meta_qc$seurat_clusters)])
-rownames(annotation_row) <- rownames(qc_matrix)
-
-# 3. Colour palette — ONLY for the clusters that actually exist
-ann_colors <- list(
-  Cluster = setNames(rainbow(length(unique(meta_qc$seurat_clusters))),
-                     sort(unique(meta_qc$seurat_clusters)))
-)
-
-# 4. Plot — now runs perfectly
 pheatmap::pheatmap(qc_matrix,
-                   show_rownames = FALSE,
                    cluster_rows = FALSE,
                    cluster_cols = FALSE,
-                   annotation_row = annotation_row,
-                   annotation_colors = ann_colors,
                    color = c("red", "darkgreen"),
                    legend_breaks = 0:1,
                    legend_labels = c("FAIL", "PASS"),
-                   main = "QC status per cell (rows ordered by cluster)",
-                   fontsize = 10)
+                   show_rownames = FALSE,
+                   main = "QC Metrics per Cell (ordered by cluster)")
+```
 
+# Validation check: RBC cluster logic
 
+```{r}
+cat("=== RBC Cluster Validation ===\n")
+rbc_check <- table(
+  in_RBC_cluster = re_embed_filtered$seurat_clusters %in% c(17, 25),
+  passes_RBC_filter = meta_qc$pass_RBC_cluster
+)
+print(rbc_check)
+cat("\nNote: All cells in clusters 17/25 should show FALSE for pass_RBC_cluster\n")
+```
 
-# Put it back in the object
-re_embed_filtered@meta.data <- meta_qc
+# Remove RBC clusters (17 & 25) and re-embed
+
+```{r}
+# Check starting number of cells
+cat("Starting number of cells:", ncol(re_embed_filtered), "\n")
+cat("Cells in cluster 17:", sum(re_embed_filtered$seurat_clusters == 17), "\n")
+cat("Cells in cluster 25:", sum(re_embed_filtered$seurat_clusters == 25), "\n")
+cat("Total RBC cells to remove:", sum(re_embed_filtered$seurat_clusters %in% c(17, 25)), "\n\n")
+
+# Subset to remove RBC clusters
+re_embed_no_rbc <- subset(re_embed_filtered, 
+                          subset = seurat_clusters %in% c(17, 25), 
+                          invert = TRUE)
+
+cat("Cells after RBC removal:", ncol(re_embed_no_rbc), "\n\n")
+```
+
+# Re-embed: Normalize, find variable features, scale, PCA, UMAP, cluster
+
+```{r}
+n_dims = 30
+clustering_resolution = 0.8
+# Re-computation of graph-based clustering and UMAP on the cleaned dataset
+re_embed_no_rbc <- FindVariableFeatures(re_embed_no_rbc,
+                                        selection.method = "vst", 
+                                        nfeatures = 3000,
+                                        verbose = FALSE) %>%
+  ScaleData(features = rownames(re_embed_no_rbc),
+            verbose = FALSE) %>%
+  RunPCA(verbose = FALSE) %>% # Defaults to features = VariableFeatures()), but better not to specify as these are not yet stored in that object
+  FindNeighbors(dims = 1:n_dims,
+                verbose = FALSE) %>%
+  FindClusters(resolution = clustering_resolution,
+               verbose = FALSE) %>%
+  RunUMAP(dims = 1:n_dims,
+          verbose = FALSE)
+
+# let's save here and reload in a new session
+write_rds(x = re_embed_no_rbc,
+          file = file.path(out_dir, "04-filtering", "re_embed_no_rbc.rds"))
+
+```
+
+# Visualize the new embedding
+
+```{r}
+
+# UMAP by new clusters
+p1 <- DimPlot(re_embed_no_rbc, 
+              reduction = "umap",
+              group.by = "seurat_clusters",
+              label = TRUE,
+              label.size = 4) +
+  ggtitle("New Clusters (after RBC removal)")
+
+# UMAP by Sophie's cell type annotations
+p2 <- DimPlot(re_embed_no_rbc, 
+              reduction = "umap",
+              group.by = "sophie_celltype_clean",
+              label = TRUE,
+              label.size = 3,
+              repel = TRUE) +
+  ggtitle("Sophie's Cell Type Annotations")
+
+# Display plots
+p1 + p2
+
+# Check QC metrics in the new embedding
+p3 <- FeaturePlot(re_embed_no_rbc, 
+                  features = c("nCount_RNA", "nFeature_RNA", 
+                               "percent.mt", "percent.hb"),
+                  ncol = 2)
+print(p3)
+
 ```
 
 ## Plot GFP expression
