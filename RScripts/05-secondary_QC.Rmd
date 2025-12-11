@@ -613,13 +613,26 @@ p2 <- DimPlot(re_embed_no_rbc,
 
 # Display plots
 p1 + p2
+ggsave(p1, 
+       filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_cluster_no_RBC.png"),
+       width = 8,
+       height = 8)
+ggsave(p2, 
+       filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_celltype_no_RBC.png"),
+       width = 8,
+       height = 8)
 
 # Check QC metrics in the new embedding
 p3 <- FeaturePlot(re_embed_no_rbc, 
                   features = c("nCount_RNA", "nFeature_RNA", 
-                               "percent.mt", "percent.hb"),
+                               "percent.mt", "percent.hb",
+                               "featcount_dist", "pct_counts_in_top_20_features"),
                   ncol = 2)
 print(p3)
+ggsave(p3, 
+       filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_QCmetrics_no_RBC.png"),
+       width = 8,
+       height = 8)
 
 ```
 
