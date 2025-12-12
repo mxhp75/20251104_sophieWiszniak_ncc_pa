@@ -1,0 +1,454 @@
+---
+title: "05-secondary_QC_hb"
+author: "Melanie Smith"
+date: "2025-12-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+
+library(SingleCellExperiment)
+library(biomaRt)
+library(scuttle)
+
+# additional plotting functions
+library(patchwork)
+library(pheatmap)
+```
+
+# User defined functions
+
+```{r}
+# quick function (following from Nick's) to plot the QC metrics
+my_plot_function <- function(object, grouping_variable, variables_to_plot) {
+  
+  group_var_sym <- sym(grouping_variable)
+  
+  object[[]] %>%
+    as_tibble(rownames = "barcode") %>%
+    dplyr::select(barcode, !!group_var_sym, all_of(variables_to_plot)) %>%
+    pivot_longer(
+      cols = -c(barcode, !!group_var_sym),
+      names_to = "metric",
+      values_to = "values"
+    ) %>%
+    ggplot(aes(x = !!group_var_sym, y = values)) +
+    
+    # Right half: density + median line
+    ggdist::stat_halfeye(
+      side = "right",
+      fill = "dodgerblue",
+      alpha = 0.5,
+      .width = 0.5,           # median line
+      justification = -0.2,
+      scale = 0.9,
+      linewidth = 0.4,
+      color = "black"
+    ) +
+    
+    # Left half: dots
+    ggdist::stat_dots(
+      side = "left",
+      alpha = 0.3,
+      justification = 1.25,
+      quantiles = NULL,       # prevents binwidth error
+      dotsize = 0.7
+    ) +
+    
+    facet_wrap(~ metric, scales = "free") +
+    theme_bw() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      panel.grid.major.x = element_blank()
+    )
+}
+```
+
+# Set project directories and file paths
+
+```{r}
+project_name <- "20251104_sophieWiszniak_ncc_pa"
+
+base_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak"
+project_repo_dir <- file.path(base_repo_dir, project_name)
+data_base_dir <- file.path(project_repo_dir, "rawData")
+out_dir <- file.path(project_repo_dir, "outDir")
+downloads <- file.path(project_repo_dir, "downloads")
+
+```
+
+# Load required objects
+- This object has been filtered for doublets and >10% MT genes
+
+```{r}
+re_embed_no_rbc_no_hb <- readRDS(file = file.path(out_dir, "05-secondary_QC", "re_embed_no_rbc_no_hb.rds"))
+
+# Ensure sophie's annotation is the default identity from here
+re_embed_no_rbc_no_hb <- SetIdent(re_embed_no_rbc_no_hb,
+                            value = "sophie_celltype_clean")
+```
+
+# Automatic thresholding via MAD (median absolute deviations)
+
+```{r}
+# Enter the number of deviations required
+n_mad <- 3    # number of MADs for nCount and nFeature deviation
+
+# Lower bound for nCounts
+nCounts_lower <- median(log10(re_embed_no_rbc_no_hb@meta.data$nCount_RNA)) - 
+  (mad(log10(re_embed_no_rbc_no_hb@meta.data$nCount_RNA)) * n_mad)
+
+# Lower bound for nFeatures -> remove everything BELOW this number
+nFeatures_lower <- median(log10(re_embed_no_rbc_no_hb@meta.data$nFeature_RNA)) - 
+  (mad(log10(re_embed_no_rbc_no_hb@meta.data$nFeature_RNA)) * n_mad)
+
+# Calculate the percentage of counts in the top 20 features
+counts <- GetAssayData(re_embed_no_rbc_no_hb, layer = "counts")
+top20_per_cell <- apply(counts, 2, function(x) {
+  if(sum(x) == 0) return(0)
+  sum(sort(x, decreasing = TRUE)[1:20])
+})
+
+# Add to the seurat object
+re_embed_no_rbc_no_hb$pct_counts_in_top_20_features <- 100 * top20_per_cell / colSums(counts)
+
+# Clean up large object
+rm(counts, top20_per_cell)
+gc()
+
+# Upper bound for percentage top 20 transcripts (lenient 5 mads)
+percent_top20_upper <- median(re_embed_no_rbc_no_hb@meta.data$pct_counts_in_top_20_features) + 
+  (mad(re_embed_no_rbc_no_hb@meta.data$pct_counts_in_top_20_features) * 5)
+
+# Calculate the feature count distance (identifies cells where the "expected" relationship between nCounts and nFeatures is violated)
+re_embed_no_rbc_no_hb$featcount_dist <- {
+  abs(resid(lm(log10(nFeature_RNA + 1) ~ log10(nCount_RNA + 1), 
+               data = re_embed_no_rbc_no_hb@meta.data)))
+}
+
+# Upper bound for feature-count distance (lenient 5 mads)
+featCount_dist_upper <- median(re_embed_no_rbc_no_hb@meta.data$featcount_dist) + 
+  (mad(re_embed_no_rbc_no_hb@meta.data$featcount_dist) * 5)
+
+```
+
+# Secondary QC plots
+
+```{r}
+# Specify which metrics we want to look at
+qc_metrics <- c("nCount_RNA", "nFeature_RNA", "percent.hb", "pct_counts_in_top_20_features", "featcount_dist")
+
+# make the plots
+secondary_qc_plot <- my_plot_function(
+  object = re_embed_no_rbc_no_hb,
+  grouping_variable = "seurat_clusters",
+  variables_to_plot = qc_metrics
+)
+
+# add threshold lines to the QC plot
+hline_data_1 <- tibble(
+  metric = c("nCount_RNA", "nFeature_RNA", "pct_counts_in_top_20_features", "featcount_dist"),
+  threshold = c(10^nCounts_lower, 10^nFeatures_lower, percent_top20_upper, featCount_dist_upper)   # thresholds for each
+)
+
+# set an upper bound??
+# hline_data_2 <- tibble(
+#   metric = c("nCount_RNA", "nFeature_RNA", "percent.hb"),
+#   threshold             = c(50000, 7500, 20)   # thresholds for each
+# )
+
+# add the hlines
+secondary_qc_plot +
+  geom_hline(data = hline_data_1,
+             aes(yintercept = threshold),
+             colour = "red",
+             linewidth = 1,
+             linetype = "dashed") +
+  geom_hline(data = hline_data_2,
+             aes(yintercept = threshold),
+             colour = "red",
+             linewidth = 1,
+             linetype = "dashed")
+
+# plot the nCount x nFeature scatter coloured by %hb
+re_embed_no_rbc_no_hb@meta.data %>%
+  ggplot(aes(x = log10(nCount_RNA),
+             y = log10(nFeature_RNA),
+             colour = percent.hb)) +
+  geom_point() +
+  scale_colour_gradient(low = "lightcoral",   # light red for low %
+                        high = "darkred",     # dark red for high %
+                        na.value = "grey80") +  # gray for any missing values
+  theme_bw() +
+  labs(colour = "% Hb",                      # nicer legend label
+       x = expression(log[10]~nCount_RNA),                     # optional: clean axis labels
+       y = expression(log[10]~nFeature_RNA)) +
+  theme(legend.position = "right")           # optional: legend placement
+ggsave(filename = file.path(out_dir, "05-secondary_QC/scatter_re_embed_noRBA_noHB.png"),
+       width = 8, height = 8)
+
+
+## log10 scale the nCount and nFeatures for better visualisation
+re_embed_no_rbc_no_hb$log10_nCount_RNA <- log10(re_embed_no_rbc_no_hb$nCount_RNA + 1)
+
+my_plot_function(
+  object = re_embed_no_rbc_no_hb,
+  grouping_variable = "seurat_clusters",
+  variables_to_plot = "log10_nCount_RNA") +
+  geom_hline(yintercept = nCounts_lower,
+             colour = "red",
+             linetype = "dashed",
+             linewidth = 1.5)
+
+re_embed_no_rbc_no_hb$log10_nFeatures_RNA <- log10(re_embed_no_rbc_no_hb$nFeature_RNA + 1)
+my_plot_function(
+  object = re_embed_no_rbc_no_hb,
+  grouping_variable = "seurat_clusters",
+  variables_to_plot = "log10_nFeatures_RNA") +
+  geom_hline(yintercept = nFeatures_lower,
+             colour = "red",
+             linetype = "dashed",
+             linewidth = 1.5)
+```
+
+## Define final thresholds
+
+```{r}
+qc_thresholds <- list(
+  nCount_RNA_lower      = 10^nCounts_lower,
+  nFeature_RNA_lower    = 10^nFeatures_lower,
+  pct_top20_upper       = percent_top20_upper,
+  featcount_dist_upper  = featCount_dist_upper
+)
+
+# Print thresholds for documentation
+cat("=== QC Thresholds Applied ===\n")
+cat("nCount_RNA_lower:     ", round(qc_thresholds$nCount_RNA_lower, 2), "\n")
+cat("nFeature_RNA_lower:   ", round(qc_thresholds$nFeature_RNA_lower, 2), "\n")
+cat("pct_top20_upper:      ", round(qc_thresholds$pct_top20_upper, 2), "%\n")
+cat("featcount_dist_upper: ", round(qc_thresholds$featcount_dist_upper, 4), "\n\n")
+```
+
+# Apply QC filters with rescue logic
+
+```{r}
+meta_qc <- re_embed_no_rbc_no_hb@meta.data %>%
+  mutate(
+    # Standard QC metrics — TRUE = pass
+    pass_nCount      = nCount_RNA >= qc_thresholds$nCount_RNA_lower,
+    pass_nFeature    = nFeature_RNA >= qc_thresholds$nFeature_RNA_lower,
+    pass_top20       = pct_counts_in_top_20_features <= qc_thresholds$pct_top20_upper,
+    pass_dist        = featcount_dist <= qc_thresholds$featcount_dist_upper,
+
+    # Overall passing cell (strict)
+    pass_all = pass_nCount & 
+      pass_nFeature & 
+      pass_percent_hb & 
+      pass_top20 & 
+      pass_dist & 
+      pass_RBC_cluster,
+    
+    # Count how many of the 5 technical metrics fail
+    n_technical_fails = (!pass_nCount) + (!pass_nFeature) + 
+      (!pass_top20) + (!pass_dist),
+    
+    # Rescue cells that fail ≤1 technical metric AND pass RBC filter
+    # Change to == 1 if you only want to rescue cells with exactly 1 failure
+    pass_rescue = n_technical_fails <= 1
+    )
+
+```
+
+# Summary statistics
+
+```{r}
+cat("=== QC Summary ===\n")
+cat("Total cells before QC:                        ", nrow(meta_qc), "\n")
+cat("Cells passing strict rules (pass_all):        ", sum(meta_qc$pass_all), "\n")
+cat("Cells with 0 technical failures:              ", sum(meta_qc$n_technical_fails == 0), "\n")
+cat("Cells with exactly 1 technical failure:       ", sum(meta_qc$n_technical_fails == 1), "\n")
+cat("Final cells kept (pass_rescue):               ", sum(meta_qc$pass_rescue), "\n")
+cat("Low-quality cells removed (≥2 fails):         ", sum(!meta_qc$pass_rescue), "\n")
+cat("  - Removed due to ≥2 technical failures:     ", sum(meta_qc$n_technical_fails >= 2), "\n\n")
+
+# Breakdown by number of technical failures
+cat("=== Distribution of Technical Failures ===\n")
+print(table(n_technical_fails = meta_qc$n_technical_fails))
+cat("\n")
+
+# Add back to Seurat object
+re_embed_no_rbc_no_hb@meta.data <- meta_qc
+```
+
+# Visualisation: QC heatamp
+
+```{r}
+qc_matrix <- meta_qc %>%
+  arrange(seurat_clusters) %>%
+  dplyr::select(pass_nCount, pass_nFeature,
+                pass_top20, pass_dist, pass_rescue) %>%
+  dplyr::mutate(across(everything(), as.numeric)) %>%
+  as.matrix()
+
+# Add row annotation
+annotation_row <- data.frame(Cluster = meta_qc$seurat_clusters[order(meta_qc$seurat_clusters)])
+rownames(annotation_row) <- rownames(qc_matrix)
+# Set Colour palette — ONLY for the clusters that actually exist
+ann_colors <- list(
+  Cluster = setNames(rainbow(length(unique(meta_qc$seurat_clusters))),
+                     sort(unique(meta_qc$seurat_clusters)))
+)
+
+pheatmap::pheatmap(qc_matrix,
+                   cluster_rows = FALSE,
+                   cluster_cols = FALSE,
+                   annotation_row = annotation_row,
+                   annotation_colors = ann_colors,
+                   color = c("red", "darkgreen"),
+                   legend_breaks = 0:1,
+                   legend_labels = c("FAIL", "PASS"),
+                   show_rownames = FALSE,
+                   main = "QC Metrics per Cell (ordered by cluster)")
+```
+
+# Remove cells that fail 2 or more secondary QC metrics and re-embed
+
+```{r}
+
+# Subset to remove cells that fail pass_rescue (aka have 2 or more technical fails)
+re_embed_no_rbc_no_hb_yes_qc <- subset(re_embed_no_rbc_no_hb, 
+                                subset = pass_rescue == TRUE)
+cat("Cells before technical filtering:", ncol(re_embed_no_rbc_no_hb), "\n")
+cat("Cells that failed technical filter:", sum(!re_embed_no_rbc_no_hb$pass_percent_hb), "\n")
+cat("Cells after technical filtering:", ncol(re_embed_no_rbc_no_hb_yes_qc), "\n")
+```
+
+# Re-embed: Normalise, find variable features, scale, PCA, UMAP, cluster
+
+```{r}
+n_dims = 30
+clustering_resolution = 0.8
+# Re-computation of graph-based clustering and UMAP on the cleaned dataset
+re_embed_no_rbc_no_hb_yes_qc <- FindVariableFeatures(re_embed_no_rbc_no_hb_yes_qc,
+                                        selection.method = "vst", 
+                                        nfeatures = 3000,
+                                        verbose = FALSE) %>%
+  ScaleData(features = rownames(re_embed_no_rbc_no_hb_yes_qc),
+            verbose = FALSE) %>%
+  RunPCA(verbose = FALSE) %>% # Defaults to features = VariableFeatures()), but better not to specify as these are not yet stored in that object
+  FindNeighbors(dims = 1:n_dims,
+                verbose = FALSE) %>%
+  FindClusters(resolution = clustering_resolution,
+               verbose = FALSE) %>%
+  RunUMAP(dims = 1:n_dims,
+          verbose = FALSE)
+
+# let's save here and reload in a new session
+write_rds(x = re_embed_no_rbc_no_hb_yes_qc,
+          file = file.path(out_dir, "05-secondary_QC", "re_embed_no_rbc_no_hb_yes_qc.rds"))
+
+```
+
+# Visualize the new embedding
+
+```{r}
+
+# UMAP by new clusters
+p1 <- DimPlot(re_embed_no_rbc_no_hb_yes_qc, 
+              reduction = "umap",
+              group.by = "seurat_clusters",
+              label = TRUE,
+              label.size = 4) +
+  ggtitle("New Clusters (after secondary QC)")
+
+# UMAP by Sophie's cell type annotations
+p2 <- DimPlot(re_embed_no_rbc_no_hb_yes_qc, 
+              reduction = "umap",
+              group.by = "sophie_celltype_clean",
+              label = TRUE,
+              label.size = 3,
+              repel = TRUE) +
+  ggtitle("Sophie's Cell Type Annotations (after secondary QC)")
+
+# Display plots
+p1 + p2
+ggsave(p1, 
+       filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_cluster_no_RBC_no_hb_yes_qc.png"),
+       width = 8,
+       height = 8)
+ggsave(p2, 
+       filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_celltype_no_RBC_no_hb_yes_qc.png"),
+       width = 8,
+       height = 8)
+
+# Check QC metrics in the new embedding
+p3 <- FeaturePlot(re_embed_no_rbc_no_hb_yes_qc, 
+                  features = c("nCount_RNA", "nFeature_RNA", 
+                               "percent.mt", "percent.hb",
+                               "featcount_dist", "pct_counts_in_top_20_features"),
+                  ncol = 3)
+print(p3)
+ggsave(p3, 
+       filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_QCmetrics_no_RBC_no_hb_yes_qc.png"),
+       width = 12,
+       height = 8)
+
+DimPlot(re_embed_no_rbc_no_hb_yes_qc, 
+              reduction = "umap",
+              group.by = "SingleR_tms",
+              label = TRUE,
+              label.size = 3,
+              repel = TRUE) +
+  ggtitle("SingleR_tms Cell Type Annotations (after secondary QC)")
+
+DimPlot(re_embed_no_rbc_no_hb_yes_qc, 
+              reduction = "umap",
+              group.by = "SingleR_HCA_main",
+              label = TRUE,
+              label.size = 3,
+              repel = TRUE) +
+  ggtitle("SingleR_HCA_main Cell Type Annotations (after secondary QC)")
+
+DimPlot(re_embed_no_rbc_no_hb_yes_qc, 
+              reduction = "umap",
+              group.by = "SingleR_HCA_fine",
+              label = TRUE,
+              label.size = 3,
+              repel = TRUE) +
+  ggtitle("SingleR_HCA_fine Cell Type Annotations (after secondary QC)")
+
+DimPlot(re_embed_no_rbc_no_hb_yes_qc, 
+              reduction = "umap",
+              group.by = "sophie_annotation",
+              label = TRUE,
+              label.size = 3,
+              repel = TRUE) +
+  ggtitle("sophie_annotation Cell Type Annotations (after secondary QC)")
+
+```
