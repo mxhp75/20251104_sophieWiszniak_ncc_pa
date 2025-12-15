@@ -88,6 +88,9 @@ mm_y_genes <- human_genes_to_mouse(human_genes = Ygenes) # 9 genes
 # - 240828_A01934_0164_AHGWM2DRX5 is E11.5, with the same well setup
 # I've never liked this nomenclature; I think I'll opt for control and Mib1_KO
 
+# read10x_h5() reflects Cell Ranger's calling -> droplets not called as cells are already removed.
+# CreateSeuratObject() removes cells with fewer than 3 genes expressed but no other QC
+
 # - E12 control
 e12_control <- Read10X_h5(filename = file.path(data_base_dir, "240617_A01934_0143_AHFTLVDRX5", "SophieW-1", "1_WT", "outs", "filtered_feature_bc_matrix.h5"))
 e12_control <- CreateSeuratObject(counts = e12_control,
@@ -134,6 +137,8 @@ dim(e11_ko)
 # Doublet detection -------------------------------------------------------
 
 # Use scDblFinder: all samples were in separate wells, so fine to do this individually
+# by default, scDblFinder: estimates expected doublet rate from cell count, simulates artificial doublets and 
+# each cell is annotated as "singlet/doublet"
 seurat_list <-
   lapply(c(e11_control, e11_ko, e12_control, e12_ko), function(x) {
     # Run scDblFinder
@@ -960,7 +965,7 @@ rm(joined)
 gc()
 
 filtered
-# 33286 cells <- this was written by Nick
+##--- 33286 cells <- this was written by Nick ---##
 # An object of class Seurat 
 # 24767 features across 33325 samples within 1 assay 
 # Active assay: RNA (24767 features, 3000 variable features)
