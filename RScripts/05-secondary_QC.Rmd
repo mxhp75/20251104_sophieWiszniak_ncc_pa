@@ -671,7 +671,7 @@ re_embed_no_rbc_no_hb <- FindVariableFeatures(re_embed_no_rbc_no_hb,
 
 # let's save here and reload in a new session
 write_rds(x = re_embed_no_rbc_no_hb,
-          file = file.path(out_dir, "04-filtering", "re_embed_no_rbc_no_hb.rds"))
+          file = file.path(out_dir, "05-secondary_QC", "re_embed_no_rbc_no_hb.rds"))
 
 ```
 
