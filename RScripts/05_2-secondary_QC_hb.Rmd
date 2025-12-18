@@ -114,6 +114,122 @@ re_embed_no_rbc_no_hb <- SetIdent(re_embed_no_rbc_no_hb,
                             value = "sophie_celltype_clean")
 ```
 
+# Slight detour to take a look at the star cluster markers
+
+```{r}
+# Cells with your "poor quality" pattern
+poor_cells <- rownames(re_embed_no_rbc_no_hb@meta.data)[
+  re_embed_no_rbc_no_hb$nCount_RNA < 3500 &    # adjust to your "low" threshold
+    re_embed_no_rbc_no_hb$nFeature_RNA < 2000 &
+    re_embed_no_rbc_no_hb$percent.mt < 5 &       # "relatively low"
+    re_embed_no_rbc_no_hb$percent.hb > 0.1      # "relatively high"
+]
+
+# Quick stats
+cat("Number of 'poor quality' cells:", length(poor_cells), "\n")
+
+# Top genes in these cells (should be Hb-heavy if erythrocytes)
+top_genes <- FindMarkers(re_embed_no_rbc_no_hb, ident.1 = poor_cells, only.pos = TRUE, min.pct = 0.25)
+head(top_genes, 10)   # Expect Hba-a1, Hbb-bs, etc.
+
+# Check proliferation markers
+VlnPlot(re_embed_no_rbc_no_hb, features = c("Mki67", "Pcna", "Top2a"), group.by = "original_clusters_mt_dbl")
+# If high in your poor clusters → proliferating erythrocytes
+
+# Check in UMAP
+DimPlot(re_embed_no_rbc_no_hb,
+        cells.highlight = poor_cells,
+        cols.highlight = "red") +
+  ggtitle("Poor quality cells in UMAP")
+
+# Extract the cell barcodes that are "filtered"
+filtered_cells_sophieFiltered <- WhichCells(re_embed_no_rbc_no_hb, 
+                             expression = sophie_celltype_clean == "filtered")
+
+# Now plot — highlighted in red, everything else gray
+DimPlot(re_embed_no_rbc_no_hb,
+        cells.highlight = filtered_cells_sophieFiltered,
+        cols.highlight = "red",      # colour for filtered cells
+        cols = "gray80",             # colour for all other cells
+        pt.size = 0.8,
+        order = TRUE) +              # puts highlighted cells on top
+  ggtitle("Filtered cells highlighted on UMAP") +
+  theme(legend.position = "none")
+
+# Extract the cell barcodes that are have percent.hb >0.1%
+filtered_cells_hb <- WhichCells(re_embed_no_rbc_no_hb, 
+                             expression = percent.hb > 0.1)
+
+# Now plot — highlighted in red, everything else gray
+DimPlot(re_embed_no_rbc_no_hb,
+        cells.highlight = filtered_cells_hb,
+        cols.highlight = "red",      # colour for filtered cells
+        cols = "gray80",             # colour for all other cells
+        pt.size = 0.8,
+        order = TRUE) +              # puts highlighted cells on top
+  ggtitle(">0.1% hb cells highlighted on UMAP") +
+  theme(legend.position = "none")
+
+# Let's take a look at the genes chatGPT suggested are indicative of soup/ambient
+ambient_identity_genes <- c(
+  "Alas2", "Klf1", "Gata1", "Epor",
+  "Gypa", "Actb", "Gapdh", "Tubb5"
+  )
+erythroid_identity_genes <- c(
+  "Gata1", "Klf1", "Epor", "Gypa",
+  "Alas2", "Tal1", "Lmo2", "Nfe2"
+  )
+
+soupPlot <- FeaturePlot(
+  object = re_embed_no_rbc_no_hb,
+  features = c(
+    ambient_identity_genes
+  )
+  ) &
+  scale_colour_gradientn(
+    colours = rev(
+      RColorBrewer::brewer.pal(
+        n = 11,
+        name = "Spectral"
+      )
+    )
+  ) &
+  plot_annotation(
+    title = "Expression of genes (ambient vs erythroid) — is it soup?",
+    subtitle = "Filtered: <10% MT, singlets only, no RBC, no Hb >0.22%",
+    caption = "Mib1 KO vs control"
+  )
+ggsave(soupPlot, 
+       filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_no_RBC_no_hb_ambient_genes.png"),
+       width = 8,
+       height = 8)
+
+erythroidPlot <- FeaturePlot(
+  object = re_embed_no_rbc_no_hb,
+  features = c(
+    erythroid_identity_genes
+  )
+  ) &
+  scale_colour_gradientn(
+    colours = rev(
+      RColorBrewer::brewer.pal(
+        n = 11,
+        name = "Spectral"
+      )
+    )
+  ) &
+  plot_annotation(
+    title = "Expression of genes (ambient vs erythroid) — is it soup?",
+    subtitle = "Filtered: <10% MT, singlets only, no RBC, no Hb >0.22%",
+    caption = "Mib1 KO vs control"
+  )
+ggsave(erythroidPlot,
+       filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_no_RBC_no_hb_erythroid_genes.png"),
+       width = 8,
+       height = 8)
+```
+
+
 # Automatic thresholding via MAD (median absolute deviations)
 
 ```{r}
@@ -370,14 +486,30 @@ re_embed_no_rbc_no_hb_yes_qc <- FindVariableFeatures(re_embed_no_rbc_no_hb_yes_q
           verbose = FALSE)
 
 # let's save here and reload in a new session
-write_rds(x = re_embed_no_rbc_no_hb_yes_qc,
-          file = file.path(out_dir, "05-secondary_QC", "re_embed_no_rbc_no_hb_yes_qc.rds"))
+# write_rds(x = re_embed_no_rbc_no_hb_yes_qc,
+#           file = file.path(out_dir, "05-secondary_QC", "re_embed_no_rbc_no_hb_yes_qc.rds"))
 
 ```
 
 # Visualize the new embedding
 
 ```{r}
+
+DimPlot(re_embed_no_rbc_no_hb_yes_qc,
+        reduction = "umap",
+        group.by = "original_clusters_mt_dbl",
+        
+        label = TRUE,
+        label.size = 5
+        ) +
+  labs(
+    title = "Filtered: <10% MT, singlets only, no RBC, no hb>0.22%, QC old clusters",
+    subtitle = "E11–E12 mouse heart",
+    caption = "Mib1 KO vs control"
+  )
+ggsave(filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_no_RBC_no_hb_qc_old_clusters.png"),
+       width = 8,
+       height = 8)
 
 # UMAP by new clusters
 p1 <- DimPlot(re_embed_no_rbc_no_hb_yes_qc, 
@@ -412,7 +544,14 @@ p3 <- FeaturePlot(re_embed_no_rbc_no_hb_yes_qc,
                   features = c("nCount_RNA", "nFeature_RNA", 
                                "percent.mt", "percent.hb",
                                "featcount_dist", "pct_counts_in_top_20_features"),
-                  ncol = 3)
+                  ncol = 3)  &
+  scale_colour_gradientn(
+    colours = rev(
+      RColorBrewer::brewer.pal(
+        n = 11, 
+        name = "Spectral")
+      )
+    )
 print(p3)
 ggsave(p3, 
        filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_QCmetrics_no_RBC_no_hb_yes_qc.png"),
@@ -447,8 +586,100 @@ DimPlot(re_embed_no_rbc_no_hb_yes_qc,
               reduction = "umap",
               group.by = "sophie_annotation",
               label = TRUE,
-              label.size = 3,
+              label.size = 5,
               repel = TRUE) +
   ggtitle("sophie_annotation Cell Type Annotations (after secondary QC)")
 
 ```
+
+# is it soup?
+
+```{r}
+# Let's take a look at the genes chatGPT suggested are indicative of soup/ambient
+hb_identity_genes <- c(
+  "Hba-a1", "Hba-a2",
+  "Hbb-bs", "Hbb-bt", "Hba-x"
+)
+ambient_identity_genes <- c(
+  "Actb", "Gapdh", "Tubb5"
+  )
+erythroid_identity_genes <- c(
+  "Gata1", "Klf1", "Epor", "Gypa",
+  "Alas2", "Tal1", "Lmo2", "Nfe2",
+  "Slc4a1"
+  )
+
+
+hb_soupPlot_qc <- FeaturePlot(
+  object = re_embed_no_rbc_no_hb_yes_qc,
+  features = c(
+    hb_identity_genes
+    )
+  ) &
+  scale_colour_gradientn(
+    colours = rev(
+      RColorBrewer::brewer.pal(
+        n = 11,
+        name = "Spectral"
+      )
+    )
+  ) &
+  plot_annotation(
+    title = "Expression of genes (ambient vs erythroid) — Hb soup plot",
+    subtitle = "Filtered: <10% MT, singlets only, no RBC, no Hb >0.22%, yes QC",
+    caption = "Mib1 KO vs control"
+  )
+ggsave(hb_soupPlot_qc, 
+       filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_no_RBC_no_hb_qc_hb_genes.png"),
+       width = 8,
+       height = 8)
+
+erythroidPlot_qc <- FeaturePlot(
+  object = re_embed_no_rbc_no_hb_yes_qc,
+  features = c(
+    erythroid_identity_genes
+  )
+  ) &
+  scale_colour_gradientn(
+    colours = rev(
+      RColorBrewer::brewer.pal(
+        n = 11,
+        name = "Spectral"
+      )
+    )
+  ) &
+  plot_annotation(
+    title = "Expression of genes (ambient vs erythroid) — erythroid genes",
+    subtitle = "Filtered: <10% MT, singlets only, no RBC, no Hb >0.22%, yes QC",
+    caption = "Mib1 KO vs control"
+  )
+ggsave(erythroidPlot_qc,
+       filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_no_RBC_no_hb_qc_erythroid_genes.png"),
+       width = 8,
+       height = 8)
+
+ambientPlot_qc <- FeaturePlot(
+  object = re_embed_no_rbc_no_hb_yes_qc,
+  features = c(
+    ambient_identity_genes
+    )
+  ) &
+  scale_colour_gradientn(
+    colours = rev(
+      RColorBrewer::brewer.pal(
+        n = 11,
+        name = "Spectral"
+      )
+    )
+  ) &
+  plot_annotation(
+    title = "Expression of genes (ambient vs erythroid) — ambient genes",
+    subtitle = "Filtered: <10% MT, singlets only, no RBC, no Hb >0.22%, yes QC",
+    caption = "Mib1 KO vs control"
+  )
+ggsave(erythroidPlot_qc,
+       filename = file.path(out_dir, "05-secondary_QC", "05-umap_re_embed_no_RBC_no_hb_qc_ambient_genes.png"),
+       width = 8,
+       height = 8)
+```
+
