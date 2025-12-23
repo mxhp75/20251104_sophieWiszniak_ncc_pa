@@ -20,3 +20,6 @@ cleanData/
 downloads/
 outDir/
 rawData/
+
+# old files from Joe that I don't want to track
+joe_files/
