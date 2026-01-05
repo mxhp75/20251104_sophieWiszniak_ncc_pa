@@ -688,7 +688,6 @@ re_embed_no_rbc <- FindVariableFeatures(re_embed_no_rbc,
 DimPlot(re_embed_no_rbc,
         reduction = "umap",
         group.by = "original_clusters_mt_dbl",
-        
         label = TRUE,
         label.size = 4
         ) +

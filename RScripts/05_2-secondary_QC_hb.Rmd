@@ -104,24 +104,24 @@ downloads <- file.path(project_repo_dir, "downloads")
 ```
 
 # Load required objects
-- This object has been filtered for doublets and >10% MT genes
+- This object has been filtered for doublets, >10% MT genes and the RBC clusters have been removed
 
 ```{r}
 re_embed_no_rbc <- readRDS(file = file.path(out_dir, "04-filtering", "re_embed_no_rbc.rds"))
 ```
 
-- This object has been filtered for doublets and >10% MT genes and hb >0.22%
+- This object has been filtered for doublets and >10% MT genes, RBC clusters removed and cells with hb >0.22% removed
 
 ```{r}
 re_embed_no_rbc_no_hb <- readRDS(file = file.path(out_dir, "05-secondary_QC", "re_embed_no_rbc_no_hb.rds"))
 
-# Ensure sophie's annotation is the default identity from here
+# Ensure Sophie's annotation is the default identity
 re_embed_no_rbc_no_hb <- SetIdent(re_embed_no_rbc_no_hb,
                             value = "sophie_celltype_clean")
 ```
 
 ## Plot cell-type marker genes
-nb: The marker genes used here are from (Single-cell RNA-Seq of the developing cardiac outflow tract reveals convergent development of the vascular smooth muscle cells)[https://www.sciencedirect.com/science/article/pii/S2211124719308721?via%3Dihub#fig5]
+nb: The marker genes used here are from [Single-cell RNA-Seq of the developing cardiac outflow tract reveals convergent development of the vascular smooth muscle cells](https://www.sciencedirect.com/science/article/pii/S2211124719308721?via%3Dihub#fig5)
 
 - Macrophage
 
@@ -210,7 +210,7 @@ ggsave(mesenchymal_markers,
        height = 8)
 ```
 
-- Myochardial lineage
+- Myocardial lineage
 
 ```{r}
 myocardial_markers <- FeaturePlot(
@@ -298,10 +298,11 @@ ggsave(vsmc_markers,
 ```
 
 ## Dot plots of lineage markers
+- First "layer" of markers from the paper (ie first level of boxes)
 
 ```{r}
 # lets start with a list of broad lineage marker genes
-macrophage_genes <- c("Coro1a", "C3ar1", "Rac2", "C1qb", "Tyrpbp")
+macrophage_genes <- c("Coro1a", "C3ar1", "Rac2", "C1qb", "Tyrobp")
 
 epicardial_genes <- c("Wt1", "Upk3b", "Apela", "Upk1b", "Aldh1a2")
 ep_c10 <- c("Myl7", "Tmem255a")
@@ -340,7 +341,7 @@ dotPlot_original_clusters_macrophage <- DotPlot(re_embed_no_rbc,
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "Macrophage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, no RBC removed",
+    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
     caption = "Mib1 KO vs control"
     )
    
@@ -360,7 +361,7 @@ dotPlot_original_clusters_epicardial <- DotPlot(re_embed_no_rbc,
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "Epicardial lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, no RBC removed",
+    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
     caption = "Mib1 KO vs control"
     )
    
@@ -398,7 +399,7 @@ dotPlot_original_clusters_endocardial <- DotPlot(re_embed_no_rbc,
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "Endocardial lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, no RBC removed",
+    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
     caption = "Mib1 KO vs control"
     )
    
@@ -436,7 +437,7 @@ dotPlot_original_clusters_myocardial <- DotPlot(re_embed_no_rbc,
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "Myocardial lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, no RBC removed",
+    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
     caption = "Mib1 KO vs control"
     )
    
@@ -474,7 +475,7 @@ dotPlot_original_clusters_mesenchymal <- DotPlot(re_embed_no_rbc,
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "Mesenchymal lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, no RBC removed",
+    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
     caption = "Mib1 KO vs control"
     )
    
@@ -512,7 +513,7 @@ dotPlot_original_clusters_vsmc <- DotPlot(re_embed_no_rbc,
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "VSMC lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, no RBC removed",
+    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
     caption = "Mib1 KO vs control"
     )
    
@@ -541,6 +542,9 @@ ggsave(dotPlot_vsmc_plus,
 
 ```
 
+## All markers
+- level one boxes only
+
 ```{r}
 dotPlot_markers <- DotPlot(re_embed_no_rbc,
         features = c(mesenchymal_genes,
@@ -554,8 +558,8 @@ dotPlot_markers <- DotPlot(re_embed_no_rbc,
         cols = c("blue", "red")) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
-    title = "All lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, no RBC removed",
+    title = "Level 1 lineage Genes",
+    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
     caption = "Mib1 KO vs control"
     )
 print(dotPlot_markers)   
@@ -578,7 +582,7 @@ dotPlot_all_markers <- DotPlot(re_embed_no_rbc,
         cols = c("blue", "red")) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
-    title = "Combined cell-type marker genes",
+    title = "Combined (aka all level) cell-type marker genes",
     subtitle = "Filtered: <10% MT, singlets only, RBC removed",
     caption = "Mib1 KO vs control"
     )

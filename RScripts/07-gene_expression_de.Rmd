@@ -1,0 +1,144 @@
+---
+title: "gene_expression_de"
+author: "Melanie Smith"
+date: "2025-12-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+
+library(SingleCellExperiment)
+library(biomaRt)
+library(scuttle)
+
+# additional plotting functions
+library(patchwork)
+library(pheatmap)
+```
+
+# Set project directories and file paths
+
+```{r}
+project_name <- "20251104_sophieWiszniak_ncc_pa"
+
+base_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak"
+project_repo_dir <- file.path(base_repo_dir, project_name)
+data_base_dir <- file.path(project_repo_dir, "rawData")
+filtered_dir <- file.path(project_repo_dir, "outDir", "05-secondary_QC")
+out_dir <- file.path(project_repo_dir, "outDir", "07-gene_expression_de")
+# Create directory if it doesn't exist
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir, recursive = TRUE)
+}
+```
+
+# Load required objects
+- This object has been filtered for doublets and >10% MT genes
+
+```{r}
+re_embed_no_rbc_no_hb_yes_qc <- readRDS(file = file.path(filtered_dir, "re_embed_no_rbc_no_hb_yes_qc.rds"))
+
+```
+
+```{r}
+# First, ensure orig.ident is a factor (helps with ordering)
+re_embed_no_rbc_no_hb_yes_qc$orig.ident <- factor(
+  re_embed_no_rbc_no_hb_yes_qc$orig.ident,
+  levels = c("e11_control", "e12_control", "e11_ko", "e12_ko")
+)
+
+# Set clusters as active identities
+Idents(re_embed_no_rbc_no_hb_yes_qc) <- "seurat_clusters"
+
+# List to store results
+de_results <- list()
+
+# Define your contrasts (ident.1 = "test", ident.2 = "control")
+contrasts <- list(
+  time_e11_to_e12_control = c("e12_control", "e11_control"),   # e12 vs e11 in control
+  genotype_e11_ko_vs_control = c("e11_ko", "e11_control"),     # KO vs control at e11
+  genotype_e12_ko_vs_control = c("e12_ko", "e12_control")      # KO vs control at e12
+)
+
+
+for (clust in levels(Idents(re_embed_no_rbc_no_hb_yes_qc))) {
+  for (contrast_name in names(contrasts)) {
+
+    ident1 <- contrasts[[contrast_name]][1]
+    ident2 <- contrasts[[contrast_name]][2]
+
+    meta <- re_embed_no_rbc_no_hb_yes_qc@meta.data
+    n1 <- sum(meta$seurat_clusters == clust & meta$orig.ident == ident1)
+    n2 <- sum(meta$seurat_clusters == clust & meta$orig.ident == ident2)
+
+    if (n1 < 20 || n2 < 20) next
+
+    key <- paste0("cluster", clust, "_", contrast_name)
+
+    de_results[[key]] <- FindMarkers(
+      object = re_embed_no_rbc_no_hb_yes_qc,
+      ident.1 = ident1,
+      ident.2 = ident2,
+      group.by = "orig.ident",
+      subset.ident = clust,
+      assay = "RNA",
+      slot = "data",
+      logfc.threshold = 0.1,
+      min.pct = 0.1,
+      test.use = "wilcox",
+      verbose = FALSE
+    ) %>%
+      rownames_to_column("gene") %>%
+      mutate(
+        cluster = clust,
+        contrast = contrast_name,
+        ident1 = ident1,
+        ident2 = ident2,
+        n_ident1 = n1,
+        n_ident2 = n2
+      )
+  }
+}
+
+
+# Combine all results into one big table
+all_de <- bind_rows(de_results)
+
+# only sig de
+filter_de <- all_de %>%
+  dplyr::filter(p_val_adj < 0.05)
+
+# Save
+write.csv(all_de, file = file.path(out_dir, "differential_expression_per_cluster.csv"), row.names = FALSE)
+write.csv(filter_de, file = file.path(out_dir, "filtered_differential_expression_per_cluster.csv"), row.names = FALSE)
+
+# Example: look at top DE genes in cluster 0 for KO vs control at e11
+head(all_de %>% filter(cluster == 0, contrast == "genotype_e11_ko_vs_control") %>% arrange(p_val_adj))
+```
+

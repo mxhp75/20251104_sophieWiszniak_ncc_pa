@@ -1,0 +1,144 @@
+---
+title: "06-marker_gene_id"
+author: "Melanie Smith"
+date: "2025-12-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+
+library(SingleCellExperiment)
+library(biomaRt)
+library(scuttle)
+
+# additional plotting functions
+library(patchwork)
+library(pheatmap)
+```
+
+# Set project directories and file paths
+
+```{r}
+project_name <- "20251104_sophieWiszniak_ncc_pa"
+
+base_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak"
+project_repo_dir <- file.path(base_repo_dir, project_name)
+data_base_dir <- file.path(project_repo_dir, "rawData")
+filtered_dir <- file.path(project_repo_dir, "outDir", "05-secondary_QC")
+out_dir <- file.path(project_repo_dir, "outDir", "06-marker_gene_id")
+# Create directory if it doesn't exist
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir, recursive = TRUE)
+}
+```
+
+# Load required objects
+- This object has been filtered for doublets and >10% MT genes
+
+```{r}
+re_embed_no_rbc_no_hb_yes_qc <- readRDS(file = file.path(filtered_dir, "re_embed_no_rbc_no_hb_yes_qc.rds"))
+
+```
+
+```{r}
+# Basic violin plots for QC metrics
+VlnPlot(re_embed_no_rbc_no_hb_yes_qc, 
+        features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+        ncol = 3,
+        pt.size = 0.1)
+
+# If you want to see these split by cluster
+VlnPlot(re_embed_no_rbc_no_hb_yes_qc, 
+        features = c("nFeature_RNA", "nCount_RNA"),
+        ncol = 2,
+        pt.size = 0)
+# Canonical cardiac cell type markers
+cardiac_markers <- c(
+  "Tnnt2", "Myh6", "Myh7",      # Cardiomyocytes
+  "Pecam1", "Cdh5", "Vwf",      # Endothelial
+  "Pdgfra", "Col1a1", "Ddr2",   # Fibroblasts
+  "Acta2", "Tagln", "Myh11",    # Smooth muscle
+  "Ptprc", "Cd68", "Lyz2"       # Immune cells
+)
+
+DotPlot(re_embed_no_rbc_no_hb_yes_qc, features = cardiac_markers) + 
+  RotatedAxis()
+```
+
+
+# Identify marker genes for each cluster
+
+```{r}
+# Make sure seurat clusters are the active identities
+Idents(re_embed_no_rbc_no_hb_yes_qc) <- "seurat_clusters"
+
+# Find markers for all clusters (positive only, Wilcoxon test is default and fine)
+cluster_markers <- FindAllMarkers(
+  re_embed_no_rbc_no_hb_yes_qc,
+  only.pos = TRUE,          # only upregulated markers (most useful for annotation)
+  min.pct = 0.25,           # gene detected in at least 25% of cells in the cluster
+  logfc.threshold = 0.25,   # minimum logFC of 0.25
+  test.use = "wilcox"       # or "MAST" / "DESeq2" if you prefer
+)
+
+# Save top markers per cluster
+top10_markers <- cluster_markers %>%
+  group_by(cluster) %>%
+  slice_max(n = 10, order_by = avg_log2FC)
+
+# add some filtering
+top10_filtered <- cluster_markers %>%
+  group_by(cluster) %>%
+  filter(pct.1 >= 0.25) %>%                  # expressed in ≥25% of cluster
+  filter(avg_log2FC > 0.5) %>%               # stronger fold change
+  slice_max(avg_log2FC, n = 10)               # top 10 after filtering
+
+# only cluster 11
+top10_markers_cluster11 <- subset(top10_markers, cluster %in% 11)
+# Write to file
+write.csv(top10_markers, file = file.path(out_dir, "top10_cluster_markers.csv"))
+
+# Visualise (DotPlot is great for annotation)
+DotPlot(re_embed_no_rbc_no_hb_yes_qc,
+        features = unique(top10_markers$gene)) + 
+  RotatedAxis()
+
+# Get average expression per cluster
+avg_expr <- AverageExpression(re_embed_no_rbc_no_hb_yes_qc, assays = "RNA", slot = "data")$RNA
+
+# Merge with markers and filter
+cluster_markers <- cluster_markers %>%
+  mutate(avg_expr_cluster = avg_expr[gene, as.character(cluster)])
+
+top10_high_expr <- cluster_markers %>%
+  group_by(cluster) %>%
+  filter(avg_expr_cluster > 1) %>%   # e.g., require some minimum average
+  slice_max(avg_log2FC, n = 10)
+```
+
