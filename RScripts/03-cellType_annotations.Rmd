@@ -1,0 +1,390 @@
+---
+title: "03-cellType_annotations"
+author: "Melanie Smith"
+date: "2026-01-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max, scipen = 999, stringsAsFactors = FALSE, dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reprodcibility
+```
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Single Cell
+# BiocManager::install(c("SingleR", "celldex"))
+library(celldex)
+library(SingleR)
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+# BiocManager::install("zellkonverter")
+library(zellkonverter)
+
+library(SingleCellExperiment)
+library(biomaRt)
+library(scuttle)
+```
+
+# Set project directories and file paths
+
+```{r}
+project_name <- "20251104_sophieWiszniak_ncc_pa"
+
+base_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak"
+project_repo_dir <- file.path(base_repo_dir, project_name)
+data_base_dir <- file.path(project_repo_dir, "rawData")
+out_dir <- file.path(project_repo_dir, "outDir")
+downloads <- file.path(project_repo_dir, "downloads")
+
+# Files for reading in
+sophieAnnotation_file <- file.path(project_repo_dir, "cleanData/seurat_clusters.csv")
+
+```
+
+# Load required objects
+- This object has been filtered for doublets, 
+
+```{r}
+# seurat object
+# joined <- read_rds(file = file.path(out_dir, "04-filtering", "filtered.perform_qc.sex_doublets.rds"))
+re_embed_filtered <- readRDS(file = file.path(out_dir, "04-filtering", "re_embed_filtered.mt_qc.nFeature_top_qc.sex_doublets.rds"))
+# Sophie's annotation file
+sophieAnnotation <- read_csv(sophieAnnotation_file)
+
+# one to one mapping of original, merged and Joe barcodes
+joined_metadata_with_barcodes <- read_csv("outDir/03-merged_initial_QC/joined_metadata_with_barcodes.csv")
+
+```
+
+## Get normalised counts
+- note that SingleR will accept raw or normalised counts
+
+```{r}
+raw_counts <- LayerData(re_embed_filtered, assay = "RNA", layer = 'counts') #
+raw_counts[c('Vim', 'Bcl2', 'Trp53', 'Cd4'),1:5]
+norm_counts <- LayerData(re_embed_filtered, assay = "RNA", layer = 'data') #
+norm_counts[c('Vim', 'Bcl2', 'Trp53', 'Cd4'),1:5]
+```
+
+# 1. Manual Annotation using Sophie's list
+- This chunk uses Sophie's manually curated list of cell types
+
+## Add Sophie's cell annotation map to the seurat object
+
+```{r}
+# join Sophie's annotations with the barcode mapping object
+manual_annotation <- dplyr::left_join(
+  joined_metadata_with_barcodes,
+  sophieAnnotation,
+  by = (c("joe_barcode" = "Barcode")
+        )
+  ) %>%
+  dplyr::mutate(
+    seurat_clusters = ifelse(is.na(seurat_clusters), "filtered", seurat_clusters)
+    ) %>%
+  dplyr::select(., merged_barcodes, sophie_annotation = seurat_clusters) %>%
+  tibble::column_to_rownames("merged_barcodes")
+
+# add the manually curated labels to the seurat object
+re_embed_filtered <- AddMetaData(
+  object = re_embed_filtered,
+  metadata = manual_annotation,
+  col.name = "sophie_annotation"
+)
+
+# set the active identity
+re_embed_filtered <- SetIdent(re_embed_filtered,
+                   value = "sophie_annotation")
+# Visualise them on the UMAP
+DimPlot(re_embed_filtered,
+        group.by = "sophie_annotation",
+        label = TRUE,
+        repel = TRUE,
+        label.size = 3)
+
+# Nicer colors + filtered in gray
+n_clusters <- length(unique(re_embed_filtered$sophie_annotation))
+cluster_colours <- c(
+  scales::hue_pal()(n_clusters - 1),   # bright colors for real clusters
+  "gray70"                             # filtered = muted gray
+)
+names(cluster_colours) <- levels(re_embed_filtered$sophie_annotation)
+
+DimPlot(re_embed_filtered,
+        group.by = "sophie_annotation",
+        label = TRUE,
+        repel = TRUE,
+        cols = cluster_colours,
+        pt.size = 0.4) +
+  NoLegend() +   # remove legend if too many clusters
+  ggtitle("Sophie's manual cell type annotation transferred via joe_barcode") +
+  labs(caption = "Filtered for Mt, doublets, nFeatures > 0.5%")
+ggsave(filename = file.path(out_dir, "04-filtering", "umap_sohieAnnotation_sophieCluster.png"),
+       width = 10,
+       height = 8)
+```
+
+## Remove the prefix from Sophie's cell types and replot
+
+```{r}
+re_embed_filtered$sophie_celltype_clean <- sub("^[0-9]+_", "", re_embed_filtered$sophie_annotation)
+
+# Generate colors for all real cell types
+real_types <- setdiff(unique(re_embed_filtered$sophie_celltype_clean), "filtered")
+palette <- scales::hue_pal()(length(real_types))
+names(palette) <- real_types
+
+# Add gray for filtered
+cluster_colours_clean <- c(palette, filtered = "gray70")
+
+DimPlot(re_embed_filtered,
+        group.by = "sophie_celltype_clean",
+        cols = cluster_colours_clean,
+        label = TRUE, repel = TRUE) +
+  NoLegend() +   # remove legend if too many clusters
+  ggtitle("Sophie's manual cell type annotation transferred via joe_barcode") +
+  labs(caption = "Filtered for Mt, doublets, nFeatures > 0.5%")
+ggsave(filename = file.path(out_dir, "04-filtering", "umap_sohieAnnotation.png"),
+       width = 10,
+       height = 8)
+```
+
+# 2. Cell annotation with celldex
+- This chunk uses the celldex mouse RNAseq dataset
+
+## Get reference dataset
+
+```{r}
+ref <- celldex::MouseRNAseqData()
+unique(ref$label.main)
+unique(ref$label.fine)
+```
+
+## Subset the cell types to include only what we expect to see in heart
+
+```{r}
+ref_main <- ref[,grepl('Cardiomyocytes|Fibroblasts|Endothelial cells|Macrophages|Monocytes|T cells|B cells|NK cells|Dendritic cells|Granulocytes|Adipocytes|Erythrocytes', ref$label.main)]
+unique(ref_main$label.main)
+
+ref_fine <- ref[,grepl('Cardiomyocytes|Fibroblasts|Fibroblasts activated|Fibroblasts senescent|Endothelial cells|Macrophages|Macrophages activated|Monocytes|Dendritic cells|T cells|B cells|NK cells|Erythrocytes|Granulocytes|Adipocytes', ref$label.fine)]
+unique(ref_fine$label.fine)
+```
+
+## Run SingleR
+
+```{r}
+# Perform SingleR on the main cell-type reference
+ct_ann_main <- SingleR(test = raw_counts, # we could also use sce or raw_counts
+                  ref = ref_main, 
+                  labels = ref_main$label.main,
+                  de.method = 'classic')
+
+# Compare pruned and initial labels
+unique(ct_ann_main$pruned.labels)
+table(ct_ann_main$pruned.labels)
+table(ct_ann_main$labels)
+summary(is.na(ct_ann_main$pruned.labels))
+
+# Perform SingleR on the fine cell-type reference
+ct_ann_fine <- SingleR(test = raw_counts, # we could also use sce or raw_counts
+                  ref = ref_fine, 
+                  labels = ref_main$label.fine,
+                  de.method = 'classic')
+
+# Compare pruned and initial labels
+unique(ct_ann_fine$pruned.labels)
+table(ct_ann_fine$pruned.labels)
+table(ct_ann_fine$labels)
+summary(is.na(ct_ann_fine$pruned.labels))
+
+```
+
+## Inspect the quality of the SingleR predictions
+
+```{r}
+# Inspect quality of the predictions - main
+plotScoreHeatmap(ct_ann_main)
+plotDeltaDistribution(ct_ann_main,
+                      ncol = 4,
+                      dots.on.top = FALSE)
+
+# Inspect quality of the predictions - main
+plotScoreHeatmap(ct_ann_fine)
+plotDeltaDistribution(ct_ann_fine,
+                      ncol = 4,
+                      dots.on.top = FALSE)
+```
+
+## Add SingleR predictions to Seurat object & visualise with umap
+
+```{r}
+# Add to seurat object
+rownames(ct_ann_main)[1:5] # make sure you have cell IDs
+# add the "main" labels to the seurat object
+re_embed_filtered <- AddMetaData(re_embed_filtered,
+                      ct_ann_main$labels,
+                      col.name = 'SingleR_HCA_main')
+
+# set the active identity
+re_embed_filtered <- SetIdent(re_embed_filtered,
+                   value = "SingleR_HCA_main")
+# Visualise them on the UMAP
+DimPlot(re_embed_filtered,
+        group.by = "SingleR_HCA_main",
+        label = TRUE,
+        repel = TRUE,
+        label.size = 3)
+
+# add the "fine" labels to the seurat object
+re_embed_filtered <- AddMetaData(re_embed_filtered,
+                      ct_ann_fine$labels,
+                      col.name = 'SingleR_HCA_fine')
+
+# set the active identity
+re_embed_filtered <- SetIdent(re_embed_filtered,
+                   value = "SingleR_HCA_fine")
+# Visualise them on the UMAP
+DimPlot(re_embed_filtered,
+        group.by = "SingleR_HCA_fine",
+        label = TRUE,
+        repel = TRUE,
+        label.size = 3)
+```
+
+# 3. Annotate cell types: Tabula Muris Senis
+- This is a method from Nick. I will start by downloading the `cellxgene` dataset and finding if I can use the SingleR method to annotate the cells. If not, I will work through his code.  
+
+## Read in the reference datatset
+```{r}
+# Heart - A single-cell transcriptomic atlas characterizes ageing tissues in the mouse - 10x
+# Assay: 10x 3' V2, Normal, 8,613 cells
+# https://datasets.cellxgene.cziscience.com/13c8cee7-8487-473d-b942-39f9a9762d97.h5ad
+
+ref_tabula_muris_senis <- zellkonverter::readH5AD(file = file.path(downloads, "13c8cee7-8487-473d-b942-39f9a9762d97.h5ad"))
+class(ref_tabula_muris_senis) # SingleCellExperiment
+```
+
+## Convert ensembl IDs to mgi symbols to match the Seurat object
+
+```{r}
+
+# Extract your Ensembl IDs from the SCE
+ensembl_ids <- rownames(ref_tabula_muris_senis)
+
+# Connect to Ensembl biomart
+mart <- useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+
+# Retrieve the mapping table
+id_map <- getBM(
+  attributes = c("ensembl_gene_id", "mgi_symbol"),
+  filters = "ensembl_gene_id",
+  values = ensembl_ids,
+  mart = mart
+)
+
+# Make sure to preserve all rows (including genes lacking symbols)
+id_map <- distinct(id_map)
+
+# Add gene symbols to SCE rowData
+rowData(ref_tabula_muris_senis)$gene_symbol <- 
+  id_map$mgi_symbol[ match(ensembl_ids, id_map$ensembl_gene_id) ]
+
+# Check uniqueness (important)
+sum(duplicated(ref_tabula_muris_senis$gene_symbol))
+
+# overwrite the ensembl rownames
+rownames(ref_tabula_muris_senis) <- rowData(ref_tabula_muris_senis)$gene_symbol
+
+# The cellxgene h5ad has raw counts in assay "X"
+# First, explicitly name it as counts (good practice)
+assay(ref_tabula_muris_senis, "counts") <- assay(ref_tabula_muris_senis, "X")
+
+# Now compute proper log-normalized counts (this creates the "logcounts" assay)
+ref_tabula_muris_senis <- logNormCounts(ref_tabula_muris_senis)
+
+# Confirm it worked
+assayNames(ref_tabula_muris_senis)
+# "X"        "counts"   "logcounts"
+```
+
+## Run SingleR
+
+```{r}
+
+ct_ann_tabula_muris_senis <- SingleR(
+  test = raw_counts,                  # your raw count matrix from Seurat
+  ref = ref_tabula_muris_senis,
+  labels = ref_tabula_muris_senis$cell_type,
+  assay.type.test = "counts",         # raw counts in test
+  assay.type.ref = "logcounts",
+  de.method = "classic"
+)
+gc()
+
+ct_ann_tabula_muris_senis_free <- SingleR(
+  test = raw_counts,                  # your raw count matrix from Seurat
+  ref = ref_tabula_muris_senis,
+  labels = ref_tabula_muris_senis$free_annotation,   # or whichever column you prefer
+  assay.type.test = "counts",         # raw counts in test
+  assay.type.ref = "logcounts",
+  de.method = "classic"
+)
+gc()
+```
+
+## Inspect the quality of the SingleR predictions
+
+```{r}
+
+# Inspect quality of the predictions
+plotScoreHeatmap(ct_ann_tabula_muris_senis)
+plotDeltaDistribution(ct_ann_tabula_muris_senis,
+                      ncol = 4,
+                      dots.on.top = FALSE)
+
+```
+
+## Add SingleR predictions to Seurat object & visualise with umap
+
+```{r}
+# Add to seurat object
+rownames(ct_ann_tabula_muris_senis)[1:5] # make sure you have cell IDs
+# add the "main" labels to the seurat object
+re_embed_filtered <- AddMetaData(re_embed_filtered,
+                      ct_ann_tabula_muris_senis$labels,
+                      col.name = 'SingleR_tms')
+
+# set the active identity
+re_embed_filtered <- SetIdent(re_embed_filtered,
+                   value = "SingleR_tms")
+# Visualise them on the UMAP
+DimPlot(re_embed_filtered,
+        group.by = "SingleR_tms",
+        label = TRUE,
+        repel = TRUE,
+        label.size = 3)
+
+```
+
+# Save the Seurat object for later
+
+```{r}
+# let's save here and reload in a new session
+write_rds(x = re_embed_filtered,
+          file = file.path(out_dir, "04-filtering", "re_embed_filtered.mt_qc.nFeature_top_qc.sex_doublets.annotations.rds"))
+```
