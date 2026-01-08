@@ -33,6 +33,7 @@ library(ggdist)
 # project_scratch <- file.path(scratch_dir, project_name)
 # dir.create(project_scratch)
 
+
 project_name <- "20251104_sophieWiszniak_ncc_pa"
 
 # data_base_dir <- "/uofaresstor/sacgf/ccb/neurovas/SophieWiszniak-mouse_Mib1_KO_scRNA/processed_data"
@@ -142,10 +143,12 @@ dim(e11_ko)
 seurat_list <-
   lapply(c(e11_control, e11_ko, e12_control, e12_ko), function(x) {
     # Run scDblFinder
-    dbl <- scDblFinder::scDblFinder(sce = LayerData(object = x, layer = "counts"))
+    dbl <- scDblFinder::scDblFinder(sce = LayerData(object = x,
+                                                    layer = "counts"))
     # Add to seurat metadata
     add_metadata(object = x,
-                 metadata = dbl@colData %>% as_tibble(rownames = "barcode"))
+                 metadata = dbl@colData %>%
+                   as_tibble(rownames = "barcode"))
   })
 
 # Check
@@ -175,7 +178,7 @@ seurat_list[[1]]@meta.data %>%
 
 # combine the list of Seurat objects
 merged <- seurat_list %>%
-  purrr::reduce(merge) # I have assumed Nick meant purrr here but I could be wrong...
+  purrr::reduce(merge)
 
 
 
@@ -198,12 +201,9 @@ joined
 rm(merged)
 gc()
 
-
 # Store this for now
 dir.create(file.path(out_dir, "03-merged_initial_QC"))
 write_rds(x = joined, file = file.path(out_dir, "03-merged_initial_QC", "joined.rds"))
-
-
 
 # Initial QC --------------------------------------------------------------
 
@@ -223,7 +223,7 @@ gc()
 write_rds(joined,
           file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.rds"))
 
-reload <- FALSE
+reload <- TRUE
 # Can be useful to close everything down at this point and reload the data below
 # Otherwise memory consumption is too high running classifySex()
 
@@ -299,7 +299,18 @@ imap(sample_list,
             y = "Raw counts")) %>%
   patchwork::wrap_plots()
 
+# plot Kdm5d -> on the y-Chr so only expressed on male cells
+imap(sample_list,
+     ~ VlnPlot(object = .x, 
+               features = "Kdm5d", 
+               group.by = "scDblFinder.class") +
+       labs(title = .y,  # Will be the sample name
+            subtitle = "Kdm5d",
+            y = "Raw counts")) %>%
+  patchwork::wrap_plots()
 
+rm(sample_list)
+gc()
 
 # Now to to classify male/female doublets
 # - Firstly, making it classify all cells
@@ -456,6 +467,7 @@ joined@meta.data %>%
   see::scale_fill_okabeito() +
   theme_bw()
 
+
 # Addressing Kat's comments as at 14/05/2025 ------------------------------
 
 DimPlot(joined,
@@ -598,18 +610,6 @@ joined <- AddModuleScore(joined,
                          search = TRUE)
 # Not found: Hsfy2
 
-# joined <- AddModuleScore(joined,
-#                          features = list(Xgenes),
-#                          name = "hs_x_set",
-#                          search = TRUE)
-# Not found: lots
-
-# joined <- AddModuleScore(joined,
-#                          features = list(Ygenes),
-#                          name = "hs_y_set",
-#                          search = TRUE)
-# Not found: lots
-
 joined@meta.data %>%
   head()
 # memory cleanup
@@ -619,98 +619,10 @@ gc()
 write_rds(x = joined,
           file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.sex_doublets.rds"))
 
-reload <- FALSE
+reload <- TRUE
 if(reload) {
   joined <- read_rds(file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.sex_doublets.rds"))  
 }
-
-
-
-# Sex determination -------------------------------------------------------
-
-# Do the scores for the different gene sets correlate?
-joined@meta.data %>%
-  ggplot(aes(x = mm_x_set1,
-             y = hs_x_set1)) +
-  geom_point() +
-  # Dotted x=y line
-  geom_abline(
-    intercept = 0, 
-    slope = 1, 
-    linetype = "dotted", 
-    color = "firebrick", 
-    linewidth = 0.8
-  ) +
-  # force 1:1 aspect ratio, expanding to the larger range
-  coord_equal(expand = TRUE)
-# They correlate well, but probably not as well as I'd expected
-
-joined@meta.data %>%
-  ggplot(aes(x = mm_y_set1, y = hs_y_set1)) +
-  geom_point() +
-  # Dotted x=y line
-  geom_abline(
-    intercept = 0, 
-    slope = 1, 
-    linetype = "dotted", 
-    color = "firebrick", 
-    linewidth = 0.8
-  ) +
-  # force 1:1 aspect ratio, expanding to the larger range
-  coord_equal(expand = TRUE)
-# These chrY gene score correlations are abysmal, but perhaps there's something influencing this - the doublets?
-# No, doublet etc shouldn't influence this as we're comparing the same cells
-# Just vastly different scores, and I have no real way to know which is better
-
-joined@meta.data %>%
-  ggplot(aes(x = mm_y_set1,
-             y = hs_y_set1,
-             colour = predicted_sex)) +
-  geom_point() +
-  facet_wrap(~mf_dbl_prediction.no_qc)
-
-# Just look at this a little more:
-violin_points(object = joined,
-              grouping_variable = "predicted_sex",
-              variables_to_plot = c("mm_x_set1", "hs_x_set1", "mm_y_set1", "hs_y_set1"))
-# Pretty weird to be honest:
-# - the hs x set seems to differentiate between sexes better than the mm set
-# - the y sets are quite different
-# I think I'll use the hs sets, as I'm fairly certain that's what was used in the classification model
-# Obviously this comparison is biased because I'm plotting the signatures that went in to the classification
-
-# How well does the hs x signature match just to Xist? I would hope they're somewhat similar
-joined %>%
-  FeatureScatter(feature1 = "mm_x_set1", feature2 = "Xist", group.by = "predicted_sex")
-# They're not very similar
-# I guess there are lots of cells that lack Xist, but no cells lacking an hs_x_set1 score?
-# And I suppose this is why multiple genes are used
-
-
-# Start exploring the predictions against the gene set scores
-joined@meta.data %>%
-  ggplot(aes(x = mm_x_set1, y = mm_y_set1, colour = predicted_sex)) +
-  geom_point() +
-  facet_wrap(~mf_dbl_prediction.no_qc)
-
-joined@meta.data %>%
-  ggplot(aes(x = hs_x_set1, y = hs_y_set1, colour = mf_dbl_prediction.no_qc)) +
-  geom_point() +
-  facet_wrap(~predicted_sex + mf_dbl_prediction.no_qc)
-# So it seems it's mostly about the y score
-# All cells will express X genes but only male cells will express Y chromosome genes
-# But it is interesting that there are many cells called male that have hs_y_set1 < 0
-
-# Plot X and Y gene expression against cellXY call, and just on UMAP
-FeaturePlot(joined, features = c("hs_x_set1", "hs_y_set1")) %>%
-  lapply(function(x) {x + scale_colour_distiller(palette = "Spectral", direction = -1)}) %>%
-  patchwork::wrap_plots(guides = "keep")
-
-FeaturePlot(joined, features = c("hs_x_set1", "hs_y_set1"), blend = TRUE)#, max.cutoff = "q90")
-
-FeaturePlot(joined, features = "Xist")
-# This has a good strong signal except in low count/gene regions
-FeatureScatter(joined, feature1 = "Xist", feature2 = "nFeature_RNA", group.by = "predicted_sex")
 
 
 # Sophie looked at individual genes, recorded in her slack
@@ -741,59 +653,6 @@ FeatureScatter(joined,
                split.by = "scDblFinder.class", group.by = "predicted_sex")
 # Same
 
-FeatureScatter(joined,
-               feature1 = "Xist", feature2 = "hs_y_set1",
-               split.by = "scDblFinder.class", group.by = "predicted_sex")
-# I guess this looks ok
-
-FeatureScatter(joined,
-               feature1 = "hs_x_set1", feature2 = "hs_y_set1",
-               split.by = "scDblFinder.class", group.by = "predicted_sex")
-# I feel like this looks worse!
-# I guess the take home is that sex classification is quite hard
-# Perhaps a variant calling approach would work better, but I don't know and I'm not going to do it
-
-
-# Ok, this section was a lot of messing around
-# In conclusion:
-# - I'll use hs_x_set1 and hs_y_set1 to quantify the sex gene sets
-# - I don't know if they're more accurate, but I believe these are closest to what was using the the classification
-
-
-
-# Addressing points from meeting 09/05/2025 -------------------------------
-
-# Look at cluster 10 (mostly doublets) in PCA
-# - do cells hang out with other clusters?
-
-DimPlot(joined,
-        group.by = "seurat_clusters",
-        reduction = "pca",
-        label = TRUE,
-        label.box = FALSE)
-DimPlot(joined, group.by = "scDblFinder.class",
-        reduction = "pca",
-        label = TRUE,
-        label.box = FALSE)
-
-
-# PCA by user-specified group
-joined@reductions$pca@cell.embeddings %>%
-  as_tibble(rownames = "barcode") %>%
-  left_join(y = joined@meta.data %>% as_tibble(rownames = "barcode"),
-            by = "barcode") %>%
-  ggplot(aes(x = PC_1,
-             y = PC_2)) +
-  # Plot the background points
-  geom_point(data = . %>% filter(seurat_clusters != 10),
-             size = 0.2, colour = "grey", alpha = 0.3) +
-  # Plot the points of interest
-  geom_point(data = . %>% filter(seurat_clusters == 10),
-             size = 0.2, colour = "dodgerblue", alpha = 0.6) +
-  labs(subtitle = "cluster 10") +
-  theme_bw() +
-  theme(plot.subtitle = element_text(colour = "dodgerblue", face = "bold"))
-
 # Ah, Kat wanted to do this only on the doublets called by either algorithm
 joined@meta.data <-
   joined@meta.data %>%
@@ -801,13 +660,11 @@ joined@meta.data <-
                                  .default = FALSE),
          qc_clustering = seurat_clusters)
 
-doublets <- 
-  joined %>%
+doublets <- joined %>%
   subset(subset = any_doublet == TRUE)
 
 # Quick run through the basic workflow again
-doublets <-
-  doublets %>%
+doublets <- doublets %>%
   NormalizeData(normalization.method = "LogNormalize",
                 scale.factor = 10000,
                 verbose = FALSE) %>%
@@ -830,6 +687,67 @@ DimPlot(doublets,
         group.by = "qc_clustering") +
   labs(subtitle = "Doublets only")
 
+# umap
+DimPlot(doublets,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = TRUE,
+        label.size = 8) +
+  labs(subtitle = "Doublets only",
+       caption = "Unfiltered, no QC")
+
+# Do the clusters separate by predicted sex?
+DimPlot(doublets,
+        reduction = "umap",
+        group.by = "predicted_sex",
+        label = TRUE,
+        label.size = 8,
+        repel = TRUE,
+        cols = c("Male" = "#1f77b4",          # blue
+                 "Female" = "#ff7f0e",        # orange
+                 "undetermined" = "grey70")) +  # light grey
+  labs(title = "UMAP Colored by Predicted Sex",
+       subtitle = "Doublets only",
+       caption = "Unfiltered, no QC")
+
+# What does cell-type marker gene expression tell us?
+FeaturePlot(doublets, 
+            features = c("Fcgr1", "Cdh5", "Upk3b", "Myh7", "Postn", "Cxcl12"),
+            ncol = 2)  &
+  scale_colour_gradientn(
+    colours = rev(
+      RColorBrewer::brewer.pal(
+        n = 11, 
+        name = "Spectral")
+    )
+  )
+
+
+# Do the clusters separate by standard QC metrics?
+FeaturePlot(doublets, 
+            features = c("nCount_RNA", "nFeature_RNA", 
+                         "percent.mt", "percent.hb",),
+            ncol = 2)  &
+  scale_colour_gradientn(
+    colours = rev(
+      RColorBrewer::brewer.pal(
+        n = 11, 
+        name = "Spectral")
+    )
+  )
+
+# lets take a look by doublet prediction algorithm
+FeaturePlot(doublets, 
+            features = c("scDblFinder.score"),
+            ncol = 2)  &
+  scale_colour_gradientn(
+    colours = rev(
+      RColorBrewer::brewer.pal(
+        n = 11, 
+        name = "Spectral")
+    )
+  )
+
 doublets@reductions$pca@cell.embeddings %>%
   as_tibble(rownames = "barcode") %>%
   left_join(y = joined@meta.data %>% as_tibble(rownames = "barcode"),
@@ -846,30 +764,156 @@ doublets@reductions$pca@cell.embeddings %>%
   theme_bw() +
   theme(plot.subtitle = element_text(colour = "dodgerblue", face = "bold"))
 
+# Save the doublets only seurat object in case we want to play around a bit more later
+write_rds(x = doublets,
+          file = file.path(out_dir, "03-merged_initial_QC", "joined_doublets_only.rds"))
+
 rm(doublets)
 gc()
 
+reload <- FALSE
+if(reload) {
+  doublets <- read_rds(file = file.path(out_dir, "03-merged_initial_QC", "joined_doublets_only.rds"))  
+}
 
+# Determine the upper threshold for nCounts/nFeatures based on any doublet detection
+
+dir.create(file.path(out_dir, "03-merged_initial_QC", "qc_doublet_threshold"))
+
+vln_log10_nCount <- VlnPlot(joined,
+                            features = "nCount_RNA",
+                            group.by = "any_doublet") +  
+  scale_y_log10(labels = scales::comma) +  # log10 scale, nice comma formatting
+  labs(title = "nCount_RNA by Doublet Status (log10 scale)",
+       x = "Doublet Status",
+       y = "Total UMI Counts per Cell (log10)") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+vln_log10_nCount
+
+# Save
+ggsave(filename = file.path(out_dir, "03-merged_initial_QC", "qc_doublet_threshold", "violin_nCounts.png"),
+       plot = vln_log10_nCount,
+       width = 8, height = 6, dpi = 300)
+
+
+
+vln_log10_nFeature <- VlnPlot(joined,
+                              features = "nFeature_RNA",
+                              group.by = "any_doublet") +                  # remove points for clarity
+  scale_y_log10(labels = scales::comma) +  # log10 scale, nice comma formatting
+  labs(title = "nFeature_RNA by Doublet Status (log10 scale)",
+       x = "Doublet Status",
+       y = "Total number of genes identified per Cell (log10)") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+vln_log10_nFeature
+
+# Save
+ggsave(filename = file.path(out_dir, "03-merged_initial_QC", "qc_doublet_threshold", "violin_nFeature.png"),
+       plot = vln_log10_nCount,
+       width = 8, height = 6, dpi = 300)
+
+# Extract metadata for plotting
+plot_data <- joined@meta.data %>%
+  select(nCount_RNA, nFeature_RNA, any_doublet) %>%
+  mutate(
+    log10_nCount = log10(nCount_RNA + 1),   # +1 to avoid log10(0)
+    log10_nFeature = log10(nFeature_RNA + 1)
+  ) %>%
+  filter(!is.infinite(log10_nCount), !is.infinite(log10_nFeature))  # safety
+
+# Create the scatter plot
+log10_scatter_facet <- ggplot(plot_data, aes(y = log10_nFeature, x = log10_nCount)) +
+  geom_point(size = 0.8, alpha = 0.6, color = "darkblue") +  # adjust size/alpha for density
+  facet_wrap(~ any_doublet, ncol = 2) +
+  labs(
+    title = "log10(nCount_RNA) vs log10(nFeature_RNA) by Doublet Status",
+    y = "log10(Number of Genes Detected per Cell)",
+    x = "log10(Total UMI Counts per Cell)",
+    caption = "Unfiltered, no QC"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14),
+    strip.background = element_rect(fill = "lightgrey"),
+    strip.text = element_text(size = 12, face = "bold")
+  )
+
+# Display
+print(log10_scatter_facet)
+
+# Save
+ggsave(filename = file.path(out_dir, "03-merged_initial_QC", "qc_doublet_threshold", "log10_scatter_facet.png"),
+       plot = log10_scatter_facet,
+       width = 8, height = 6, dpi = 300)
+
+# Create the scatter plot
+scatter_facet_noLog <- ggplot(plot_data, aes(y = nFeature_RNA, x = nCount_RNA)) +
+  geom_point(size = 0.8, alpha = 0.6, color = "darkblue") +  # adjust size/alpha for density
+  facet_wrap(~ any_doublet, ncol = 2) +
+  labs(
+    title = "nCount_RNA vs nFeature_RNA by Doublet Status",
+    y = "Number of Genes Detected per Cell",
+    x = "Total UMI Counts per Cell",
+    caption = "Unfiltered, no QC"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14),
+    strip.background = element_rect(fill = "lightgrey"),
+    strip.text = element_text(size = 12, face = "bold")
+  )
+
+# Save
+ggsave(filename = file.path(out_dir, "03-merged_initial_QC", "qc_doublet_threshold", "scatter_facet.png"),
+       plot = scatter_facet_noLog,
+       width = 8, height = 6, dpi = 300)
+
+# Based on th top 0.5% nFeatures, which cells will be lost?
+## add a new column to the metadata indicating which cells have nFeatures in the top 0.5%
+
+# joined@meta.data <- joined@meta.data %>%
+#   mutate(nFeature_filter = nFeature_RNA >= quantile(nFeature_RNA, probs = 0.995))
+# The 99.5th percentile corresponds to the top 0.5%
+# (100% - 0.5% = 99.5%)
+
+joined@meta.data <- joined@meta.data %>%
+  tibble::rownames_to_column("cell_id") %>% # preserve the rownames because group_by() removed them
+  dplyr::group_by(seurat_clusters) %>%
+  dplyr::mutate(nFeature_filter = nFeature_RNA >= quantile(nFeature_RNA, probs = 0.995)) %>%
+  dplyr::ungroup() %>%
+  tibble::column_to_rownames("cell_id") # put the rownames backn
 
 # Filtering ---------------------------------------------------------------
 
 # Remove:
 # - doublets
-# x cluster 10 - CHANGED MIND - keep these and track them; do they stay together or not?
-# - High Hb cells (setting threshold suitable to remove erythrocyte doublets as well)
+# - cells with >10% Mt gene expression (lysed)
+# - cells in the top 0.5% of nFeatures (sneaky homotypic doublets)
 
 filtered_dir <- file.path(out_dir, "04-filtering")
 dir.create(filtered_dir, showWarnings = FALSE)
 
+# How many cells are we statring with
 joined
 # 41370 cells
 
+# How many of these cells have been identified as doublets (any)
 joined@meta.data %>% group_by(any_doublet) %>% summarise(n = n())
-# 5638 doublet cells
+# 5581 doublet cells
+
+# How many cells will be removed with high nFeatures
+joined@meta.data %>% group_by(nFeature_filter) %>% summarise(n = n())
+# 215 cells
+
+# How many cells are both doublets and high nFeatures
+sum(joined@meta.data$nFeature_filter & joined@meta.data$any_doublet)
+# 157
 
 # Total cells removed at this stage will be 
-41370 - 5638
-# 35732 cells should remain
+41370 - (5581+157)
+# 35632 cells should remain
 
 
 # Before applying filters, I'll just visualise some other metrics which I haven't yet done
@@ -879,7 +923,7 @@ joined@meta.data %>%
   geom_point() +
   scale_colour_distiller(palette = "Spectral", direction = -1) +
   theme_bw()
-ggsave(filename = file.path(filtered_dir, "01-unfiltered-scatter-nCount_nFeature_mt.png"),
+ggsave(filename = file.path(out_dir, "03-merged_initial_QC", "01-unfiltered-scatter-nCount_nFeature_mt.png"),
        width = 8, height = 6)
 
 
@@ -894,7 +938,7 @@ joined@meta.data %>%
   facet_wrap(~ percent.mt < 10) +
   theme_bw() +
   labs(subtitle = "Faceted by < 10% mt")
-ggsave(filename = file.path(filtered_dir, "01-unfiltered-scatter-nCount_nFeature_mt-facet.png"),
+ggsave(filename = file.path(out_dir, "03-merged_initial_QC", "01-unfiltered-scatter-nCount_nFeature_mt-facet.png"),
        width = 12, height = 7)
 
 
@@ -904,7 +948,7 @@ joined@meta.data %>%
   geom_point() +
   scale_colour_distiller(palette = "Spectral", direction = -1) +
   theme_bw()
-ggsave(filename = file.path(filtered_dir, "02-unfiltered-scatter-nCount_nFeature_hb.png"),
+ggsave(filename = file.path(out_dir, "03-merged_initial_QC", "01-unfiltered-scatter-nCount_nFeature_hb.png"),
        width = 8, height = 6)
 
 
@@ -919,7 +963,7 @@ joined@meta.data %>%
   facet_wrap(~ percent.hb < 10) +
   theme_bw() +
   labs(subtitle = "Faceted by < 10% hb")
-ggsave(filename = file.path(filtered_dir, "02-unfiltered-scatter-nCount_nFeature_hb-facet.png"),
+ggsave(filename = file.path(out_dir, "03-merged_initial_QC", "01-unfiltered-scatter-nCount_nFeature_hb-facet.png"),
        width = 10, height = 5.5)
 
 
@@ -939,111 +983,114 @@ joined@meta.data %>%
   facet_wrap(~ doublet_type) +
   theme_bw() +
   labs(subtitle = "Doublets according to different approaches")
-ggsave(filename = file.path(filtered_dir, "03-unfiltered-scatter-nCount_nFeature_doublets-facet.png"),
+ggsave(filename = file.path(out_dir, "03-merged_initial_QC", "01-unfiltered-scatter-nCount_nFeature_doublets-facet.png"),
+       width = 8, height = 7)
+
+umap_sex <- DimPlot(joined,
+        reduction = "umap",
+        group.by = "predicted_sex",
+        label = TRUE,
+        label.size = 7,
+        repel = TRUE,
+        cols = c("Male" = "#1f77b4",          # blue
+                 "Female" = "#ff7f0e",        # orange
+                 "undetermined" = "grey70")) +  # light grey
+  labs(title = "UMAP Coloured by Predicted Sex",
+       subtitle = "All Cells",
+       caption = "Unfiltered, no QC")
+
+ggsave(umap_sex, filename = file.path(out_dir, "03-merged_initial_QC", "01-unfiltered-umap-sex.png"),
+       width = 8, height = 7)
+
+umap_clusters <- DimPlot(joined,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = TRUE,
+        label.size = 7,
+        repel = TRUE) +
+  labs(title = "UMAP Coloured by Seurat Clusters",
+       subtitle = "All Cells",
+       caption = "Unfiltered, no QC")
+ggsave(umap_clusters, filename = file.path(out_dir, "03-merged_initial_QC", "01-unfiltered-umap-clusters.png"),
        width = 8, height = 7)
 
 
-# Filter 1 + 2: Doublets and high.mt
-# joined@meta.data <-
-#   joined@meta.data %>%
-#   mutate(keep = case_when(any_doublet ~ FALSE,
-#                           percent.mt >= mt_threshold ~ FALSE,
-#                           .default = TRUE))
-# 
-# DimPlot(joined, group.by = "keep")
-
-filtered <-
-  joined %>%
+filtered <- joined %>%
   subset(subset = any_doublet == FALSE) %>%
+  subset(subset = nFeature_filter == FALSE) %>%
   subset(percent.mt < mt_threshold)
 
 # combined before and after filter plots
-(DimPlot(joined, label = TRUE, label.box = TRUE) + labs(subtitle = "All cells")) + 
-  (DimPlot(filtered, label = TRUE, label.box = TRUE) + labs(subtitle = "Removed all doublets and cluster 10"))
+# umap - current embedding, all cells
+DimPlot(joined,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = TRUE,
+        label.size = 8) +
+  labs(subtitle = "All cells",
+       caption = "Unfiltered, no QC")
+
+# umap - current embeddings but filtered cells removed
+DimPlot(filtered,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = TRUE,
+        label.size = 8) +
+  labs(subtitle = "Singlets only",
+       caption = "Doublets, >10% Mt and top 0.5% nFeatures removed - no re-embeding")
 
 rm(joined)
 gc()
 
 filtered
-##--- 33286 cells <- this was written by Nick ---##
 # An object of class Seurat 
-# 24767 features across 33325 samples within 1 assay 
+# 24767 features across 33299 samples within 1 assay 
 # Active assay: RNA (24767 features, 3000 variable features)
 # 3 layers present: counts, data, scale.data
 # 2 dimensional reductions calculated: pca, umap
 
-
-DimPlot(filtered)  
-
-filtered@reductions$umap@cell.embeddings %>%
-  as_tibble(rownames = "barcode") %>%
-  left_join(filtered@meta.data %>% as_tibble(rownames = "barcode"), by = "barcode") %>%
-  filter(umap_1 > -0.1 & umap_1 < 5,
-         umap_2 < -5) %>%
-  ggplot(aes(x = umap_1, y = umap_2)) +
-  geom_point(aes(colour = seurat_clusters)) +
-  labs(subtitle = "Partial UMAP: focus cluster 2 space") +
-  theme_bw()
-ggsave(filename = file.path(filtered_dir, "04-UMAP-cluster_2_space.png"))
-# Cluster 12 contributes a few cells to this space, and maybe one or two from cluster 14
-
-
-# Find a percent.hb threshold to apply
-violin_points(filtered,
-              grouping_variable = "seurat_clusters",
-              variables_to_plot = "percent.hb") +
-  geom_hline(yintercept = 1, linetype = 2,
-             # alpha = 0.3,
-             colour = "darkorange2") +
-  # scale_y_log10() +
-  labs(subtitle = "Percent haemoglobin genes; proposed filter at 1% (orange line)")
-ggsave(filename = file.path(filtered_dir, "05-violin-hb.png"),
-       # width = 10, height = 5.5
-       )
-# 1% looks reasonable, though interesting that cluster 5 and 17 would be affected - doublets?
-
-# I'll remove all of cluster 9, then try again with a linear scale
-# Linear scale still didn't look good due to outliers, and log-scale doesn't need removal of cluster 9 to be useful
-
-
-# I'll just make the violin plot again, as I've made it look better (density line full width)
-qc_metrics <- c("nCount_RNA", "nFeature_RNA", "percent.mt", "percent.ribo", "percent.hb", "percent.most_abundant", "complexity"#,
-                # "log10complexity"
-)
-cell_cycle_metrics <- c("S.Score", "G2M.Score")
+# QC plots
+qc_metrics <- c("nCount_RNA",
+                "nFeature_RNA",
+                "percent.mt",
+                "percent.ribo",
+                "percent.hb",
+                "percent.most_abundant", 
+                "complexity")
+cell_cycle_metrics <- c("S.Score",
+                        "G2M.Score")
 all_qc_metrics <- c(qc_metrics, cell_cycle_metrics)
 
 
-violin_points(object = filtered, grouping_variable = "seurat_clusters", variables_to_plot = all_qc_metrics)
+violin_points(object = filtered,
+              grouping_variable = "seurat_clusters",
+              variables_to_plot = all_qc_metrics)
 ggsave(filename = file.path(filtered_dir, "05-violin_plots-qc_metrics.png"),
        width = 13, height = 9)
 
-
-(filtered %>% subset(subset = seurat_clusters != 9))@meta.data %>%
-  ggplot(aes(x = nFeature_RNA, y = nCount_RNA, colour = percent.hb)) +
-  geom_point(point_size = 0.5) +
-  scale_colour_distiller(palette = "Spectral", direction = -1) +
-  theme_bw() +
-  facet_wrap(~ percent.hb > 1)
-
-
 # let's save here and reload in a new markdown document
-
 write_rds(x = filtered,
-          file = file.path(out_dir, "04-filtering", "filtered.perform_qc.sex_doublets.rds"))
+          file = file.path(out_dir, "04-filtering", "filtered.mt_qc.nFeature_top_qc.sex_doublets.rds"))
+
+reload <- FALSE
+if(reload) {
+  filtered <- read_rds(file = file.path(out_dir, "04-filtering", "filtered.mt_qc.nFeature_top_qc.sex_doublets.rds"))  
+}
+
 
 # re-embed post filtering
 # set the dimensions and cluster resolution -> matches Nick's function
 n_dims = 30
 clustering_resolution = 0.8
 # Re-computation of graph-based clustering and UMAP on the cleaned dataset
-joined_re_embed <- joined %>%
+joined_re_embed <- filtered %>%
   FindVariableFeatures(selection.method = "vst", 
                        nfeatures = 3000,
                        verbose = FALSE) %>%
-  ScaleData(features = rownames(joined),
+  ScaleData(features = rownames(filtered),
             verbose = FALSE) %>%
-  RunPCA(verbose = FALSE) %>% # Defaults to features = VariableFeatures(joined)), but better not to specify as these are not yet stored in that object
+  RunPCA(verbose = FALSE) %>% 
+  # Defaults to features = VariableFeatures(filtered)), but better not to specify as these are not yet stored in that object
   FindNeighbors(dims = 1:n_dims,
                 verbose = FALSE) %>%
   FindClusters(resolution = clustering_resolution,
@@ -1053,6 +1100,6 @@ joined_re_embed <- joined %>%
 
 # let's save here and reload in a new session
 write_rds(x = joined_re_embed,
-          file = file.path(out_dir, "04-filtering", "re_embed_filtered.perform_qc.sex_doublets.rds"))
+          file = file.path(out_dir, "04-filtering", "re_embed_filtered.mt_qc.nFeature_top_qc.sex_doublets.rds"))
 
 
