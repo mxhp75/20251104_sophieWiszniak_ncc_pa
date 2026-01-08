@@ -1,0 +1,247 @@
+---
+title: "Barcode Matching & Recovery Analysis"
+output: html_document
+date: "2026-01-08"
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+- When I tried to ad Sophie's cell-type annotation to her Seurat object I noticed that the original cell IDs had been changed. This script allows me to map the new and old ID's and then add Sophie's annotation. Going forward these are mainly used for visualisation.
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+library(purrr)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+
+# plotting
+library(pheatmap)
+```
+
+# Set project directories and file paths
+
+```{r}
+project_name <- "20251104_sophieWiszniak_ncc_pa"
+
+base_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak"
+project_repo_dir <- file.path(base_repo_dir, project_name)
+data_base_dir <- file.path(project_repo_dir, "rawData")
+out_dir <- file.path(project_repo_dir, "outDir")
+
+# Sophie's manual annotation
+sophieAnnotation_file <- file.path(project_repo_dir, "cleanData/seurat_clusters.csv")
+
+```
+
+# Load raw 10X data and create individual Seurat objects
+
+```{r}
+# Load raw data -----------------------------------------------------------
+
+# There are four sequencing libraries, 2 on each of two days
+# - 240617_A01934_0143_AHFTLVDRX5 is  E12.5, with one 10x well for "WT" and one for "Mut"
+# - 240828_A01934_0164_AHGWM2DRX5 is E11.5, with the same well setup
+# I've never liked this nomenclature; I think I'll opt for control and Mib1_KO
+
+# - E12 control
+e12_control <- Read10X_h5(filename = file.path(data_base_dir, "240617_A01934_0143_AHFTLVDRX5", "SophieW-1", "1_WT", "outs", "filtered_feature_bc_matrix.h5"))
+e12_control <- CreateSeuratObject(counts = e12_control,
+                                  project = "e12_control",
+                                  min.cells = 3)
+e12_control
+dim(e12_control)
+# [1] 23296 11590
+
+
+# - E12 Mib1 KO
+e12_ko <- Read10X_h5(filename = file.path(data_base_dir, "240617_A01934_0143_AHFTLVDRX5", "SophieW-1", "2_Mutant", "outs", "filtered_feature_bc_matrix.h5"))
+e12_ko <- CreateSeuratObject(counts = e12_ko,
+                             project = "e12_ko",
+                             min.cells = 3)
+e12_ko
+dim(e12_ko)
+# [1] 23695 12222
+
+
+# - E11 control
+e11_control <- Read10X_h5(filename = file.path(data_base_dir, "240828_A01934_0164_AHGWM2DRX5", "SophieW-2", "1_WT", "outs", "filtered_feature_bc_matrix.h5"))
+e11_control <- CreateSeuratObject(counts = e11_control,
+                                  project = "e11_control",
+                                  min.cells = 3)
+e11_control
+dim(e11_control)
+# [1] 23104  9061
+
+
+# - E11 Mib1 KO
+e11_ko <- Read10X_h5(filename = file.path(data_base_dir, "240828_A01934_0164_AHGWM2DRX5", "SophieW-2", "2_Mutant", "outs", "filtered_feature_bc_matrix.h5"))
+e11_ko <- CreateSeuratObject(counts = e11_ko,
+                             project = "e11_ko",
+                             min.cells = 3)
+e11_ko
+dim(e11_ko)
+# [1] 23244  8497
+
+```
+
+# Read Sophie's manual annotation file
+
+```{r}
+# Sophie's annotation file
+sophieAnnotation <- read_csv(sophieAnnotation_file)
+```
+
+# Match barcodes (16-bp prefix only) and add match columns
+
+```{r}
+# Your Sophie annotation (assuming it has a column called "Barcode")
+# Example of sophieAnnotation$Barcode
+# [1] "TTTGTTGTCTTGGATG-1" "TTTGTTGTCTTACGGA-2" "AGCTAGCTAGCTAGCT-1" ...
+
+# Put the four original objects in a named list
+seurat_objects <- list(
+  e11_control = e11_control,
+  e11_ko      = e11_ko,
+  e12_control = e12_control,
+  e12_ko      = e12_ko
+)
+
+# Add one column per sample
+for (sample_name in names(seurat_objects)) {
+  bc16_seurat <- substr(colnames(seurat_objects[[sample_name]]), 1, 16)
+  sophieAnnotation[[paste0(sample_name, "_match")]] <- 
+    ifelse(substr(sophieAnnotation$Barcode, 1, 16) %in% bc16_seurat, "yes", "no")
+}
+```
+
+# Split barcode into 16-bp prefix and assay channel
+
+```{r}
+# separate the alpha barcode from the numeric suffix
+sophieAnnotation <- sophieAnnotation %>%
+  separate(
+    col = Barcode,
+    into = c("bc_16", "assay_number"),
+    sep = "-",
+    remove = FALSE   # keeps the original Barcode column; set to TRUE to drop original
+  ) %>%
+  mutate(assay_number = as.integer(assay_number))  # ← critical for correct ordering
+
+# Make sure the four match columns exist and are factors
+sophieAnnotation <- sophieAnnotation %>%
+  mutate(across(ends_with("_match"), ~ factor(., levels = c("no", "yes"))))
+
+# Prepare the matrix for pheatmap (rows = cells, columns = the four samples)
+heat_mat <- sophieAnnotation %>%
+  dplyr::select(e11_control_match, e11_ko_match, e12_control_match, e12_ko_match) %>%
+  as.data.frame()
+# add the rownames
+rownames(heat_mat) <- sophieAnnotation$Barcode 
+
+# Create the row annotation using the assay number
+annotation_row <- data.frame(
+  Assay_Channel = factor(sophieAnnotation$assay_number, levels = 1:4)   # 1,2,3,4 from the original 10x lanes
+)
+# add rownames
+rownames(annotation_row) <- rownames(heat_mat)
+
+# Convert "yes"/"no" to 0/1 so clustering works
+heat_mat_num <- heat_mat %>%
+  mutate(across(everything(), ~ ifelse(. == "yes", 1, 0))) %>%
+  as.matrix()
+
+# Keep original rownames
+rownames(heat_mat_num) <- rownames(heat_mat)
+```
+
+# Plot the barcode match
+
+```{r}
+# FIX 2: Define my_colors (this was missing!)
+my_colors <- list(
+  Assay_Channel = c("1" = "#FF9A00", "2" = "#FFCE00", "3" = "#00C2FF", "4" = "#0077FF"),
+  e11_control_match = c("no" = "#8B0000", "yes" = "#32CD32"),
+  e11_ko_match      = c("no" = "#8B0000", "yes" = "#32CD32"),
+  e12_control_match = c("no" = "#8B0000", "yes" = "#32CD32"),
+  e12_ko_match      = c("no" = "#8B0000", "yes" = "#32CD32")
+)
+
+# Now plot the heatmap
+pheatmap::pheatmap(heat_mat_num,
+                   color = c("#8B0000", "#32CD32"),           # 0 = dark red, 1 = lime green
+                   cluster_rows = TRUE,                       # now works perfectly
+                   cluster_cols = FALSE,
+                   show_rownames = FALSE,
+                   show_colnames = TRUE,
+                   annotation_row = annotation_row,
+                   annotation_colors = my_colors,
+                   annotation_legend = TRUE,
+                   annotation_names_row = FALSE,
+                   main = "Cell recovery from Sophie’s original annotation across four samples",
+                   fontsize = 12,
+                   border_color = NA,
+                   legend = TRUE,
+                   treeheight_row = 50,
+                   clustering_distance_rows = "binary",       # perfect for 0/1 yes/no data
+                   clustering_method = "complete")
+```
+
+# Add original barcode column to the smaller Seurat object
+
+```{r}
+# Fixed version — no self-overwriting bug
+seurat_objects <- lapply(seurat_objects, function(obj) {
+  sample_name <- obj@project.name
+  suffix <- c(e12_control = "-1", e12_ko = "-2", e11_control = "-3", e11_ko = "-4")[sample_name]
+  obj$original_barcode <- colnames(obj)
+  obj$joe_barcode <- paste0(substr(colnames(obj), 1, 16), suffix)
+  return(obj)
+})
+```
+
+# Merge objects and join layers
+
+```{r}
+merged <- purrr::reduce(seurat_objects, merge)
+
+# Add clean metadata
+merged@meta.data <- merged@meta.data %>%
+  mutate(
+    stage = str_extract(orig.ident, "^[^_]+"),
+    genotype = str_extract(orig.ident, "_(.+)$") %>% str_remove("_"),
+    genotype = case_when(genotype == "ko" ~ "Mib1_KO", TRUE ~ "control")
+  )
+
+# Join layers (v5)
+joined <- JoinLayers(merged)
+rm(merged); gc()
+
+# Save final metadata with all barcodes for downstream use
+write_csv(joined@meta.data %>%
+            rownames_to_column("merged_barcodes"),
+          file.path(out_dir, "03-merged_initial_QC", "joined_metadata_with_barcodes.csv"))
+
+cat("All done! Final object has", ncol(joined), "cells and", nrow(joined), "features.\n")
+joined
+```
