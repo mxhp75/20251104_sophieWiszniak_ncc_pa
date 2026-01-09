@@ -1,0 +1,698 @@
+---
+title: "04-secondary_QC"
+author: "Melanie Smith"
+date: "2026-01-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+
+library(SingleCellExperiment)
+library(biomaRt)
+library(scuttle)
+
+# additional plotting functions
+library(patchwork)
+library(pheatmap)
+library(RColorBrewer)
+```
+
+# User defined functions
+
+```{r}
+# quick function (following from Nick's) to plot the QC metrics
+my_plot_function <- function(object, grouping_variable, variables_to_plot) {
+  
+  group_var_sym <- sym(grouping_variable)
+  
+  object[[]] %>%
+    as_tibble(rownames = "barcode") %>%
+    dplyr::select(barcode, !!group_var_sym, all_of(variables_to_plot)) %>%
+    pivot_longer(
+      cols = -c(barcode, !!group_var_sym),
+      names_to = "metric",
+      values_to = "values"
+    ) %>%
+    ggplot(aes(x = !!group_var_sym, y = values)) +
+    
+    # Right half: density + median line
+    ggdist::stat_halfeye(
+      side = "right",
+      fill = "dodgerblue",
+      alpha = 0.5,
+      .width = 0.5,           # median line
+      justification = -0.2,
+      scale = 0.9,
+      linewidth = 0.4,
+      color = "black"
+    ) +
+    
+    # Left half: dots
+    ggdist::stat_dots(
+      side = "left",
+      alpha = 0.3,
+      justification = 1.25,
+      quantiles = NULL,       # prevents binwidth error
+      dotsize = 0.7
+    ) +
+
+    facet_wrap(~ metric, scales = "free") +
+    theme_bw() +
+    theme(
+      panel.grid.major.x = element_blank(),
+      axis.text.x = element_text(angle = 90, hjust = 0.5)
+    )
+}
+```
+
+
+# Set project directories and file paths
+
+```{r}
+project_name <- "20251104_sophieWiszniak_ncc_pa"
+
+base_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak"
+project_repo_dir <- file.path(base_repo_dir, project_name)
+data_base_dir <- file.path(project_repo_dir, "rawData")
+out_dir <- file.path(project_repo_dir, "outDir")
+
+new_out_dir <- file.path(out_dir, "05-secondary_QC")
+
+if (!dir.exists(new_out_dir)) {
+  dir.create(new_out_dir, recursive = TRUE)
+}
+
+```
+
+# Load required objects
+- This object has been filtered for doublets and >10% MT genes
+
+```{r}
+# read in the latest seurat object. This object has had "any" detected doublet removed, cells with >10% Mt expression removed, cell-type annotations added
+re_embed_filtered <- readRDS(file = file.path(out_dir, "04-filtering", "re_embed_filtered.mt_qc.nFeature_top_qc.sex_doublets.annotations.rds"))
+
+# Ensure sophie's annotation is the default identity from here
+re_embed_filtered <- SetIdent(re_embed_filtered, value = "sophie_celltype_clean")
+```
+
+# Identify GFP reporter gene
+
+```{r}
+# Let's find that GFP reporter gene by gene name
+grep("GFP", 
+     rownames(re_embed_filtered),
+     ignore.case = TRUE,
+     value = TRUE)
+
+# [1] "Gfpt1"   "Gfpt2"   "pEGFP-1"
+# the GFP reporter is annotated as pEGFP-1
+```
+
+## UMAP - Original identity
+
+```{r}
+DimPlot(re_embed_filtered,
+        reduction = "umap",
+        group.by = "orig.ident",
+        ) +
+  labs(
+    title = "E11–E12 mouse heart",
+    subtitle = "Mib1 KO vs control",
+    caption = "Filtered: <10% MT, nFeatures >0.5%, singlets only"
+  )
+
+DimPlot(re_embed_filtered,
+        group.by = "orig.ident",
+        pt.size = 0.8,
+        order = c("e11_control", "e11_ko")) +
+  # Manually set the colours — E12 samples become light gray, E11 get strong colours
+  scale_color_manual(
+    values = c(
+      "e11_control" = "#2b8cbe",   # strong blue
+      "e11_ko"      = "#e34a33",   # strong red/orange
+      "e12_control" = "white",    # almost invisible
+      "e12_ko"      = "white"     # almost invisible
+    )
+  ) +
+    labs(
+    title = "E11.5 mouse heart",
+    subtitle = "Mib1 KO vs control (e11 samples highlighted)",
+    caption = "Filtered: <10% MT, nFeatures >0.5%, singlets only"
+  ) +
+  theme(legend.position = "right")
+ggsave(filename = file.path(out_dir, "04-filtering/Filter.reembed.umap.e11.png"),
+       width = 8, height = 8)
+
+DimPlot(re_embed_filtered,
+        group.by = "orig.ident",
+        pt.size = 0.8,
+        order = c("e12_control", "e12_ko")) +
+  # Manually set the colours — E12 samples become light gray, E11 get strong colours
+  scale_color_manual(
+    values = c(
+      "e12_control" = "#2b8cbe",    # almost invisible
+      "e12_ko"      = "#e34a33",     # almost invisible
+      "e11_control" = "white",   # strong blue
+      "e11_ko"      = "white"   # strong red/orange
+    )
+  ) +
+  labs(
+    title = "E12.5 mouse heart",
+    subtitle = "Mib1 KO vs control (e12 samples highlighted)",
+    caption = "Filtered: <10% MT, nFeatures >0.5%, singlets only"
+  ) +
+  theme(legend.position = "right")
+ggsave(filename = file.path(out_dir, "04-filtering/Filter.reembed.umap.e12.png"),
+       width = 8, height = 8)
+
+# plot the umap with cluster numbers and colours
+DimPlot(re_embed_filtered,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = TRUE,
+        label.size = 4
+        ) +
+    NoLegend() +   # remove legend if too many clusters
+  labs(
+    title = "E11–E12 mouse heart",
+    subtitle = "Mib1 KO vs control",
+    caption = "Filtered: <10% MT, nFeatures >0.5%, singlets only"
+  )
+ggsave(filename = file.path(out_dir, "04-filtering/Filter.reembed.umap.clusters.png"),
+       width = 10, height = 8)
+
+```
+
+# Automatic thresholding via MAD (median absolute deviations)
+
+```{r}
+# Enter the number of deviations required
+n_mad_hb <- 5 # number of MADs for hb deviation
+n_mad <- 3    # number of MADs for nCount and nFeature deviation
+
+# Upper bound for percent.hb -> remove everything ABOVE this number
+percent.hb_upper <- median(re_embed_filtered@meta.data$percent.hb) + 
+  (mad(re_embed_filtered@meta.data$percent.hb) * n_mad_hb)
+
+# Lower bound for nCounts
+nCounts_lower <- median(log10(re_embed_filtered@meta.data$nCount_RNA)) - 
+  (mad(log10(re_embed_filtered@meta.data$nCount_RNA)) * n_mad)
+
+# Lower bound for nFeatures -> remove everything BELOW this number
+nFeatures_lower <- median(log10(re_embed_filtered@meta.data$nFeature_RNA)) - 
+  (mad(log10(re_embed_filtered@meta.data$nFeature_RNA)) * n_mad)
+
+# Calculate the percentage of counts in the top 20 features
+counts <- GetAssayData(re_embed_filtered, layer = "counts")
+top20_per_cell <- apply(counts, 2, function(x) {
+  if(sum(x) == 0) return(0)
+  sum(sort(x, decreasing = TRUE)[1:20])
+})
+
+# Add to the seurat object
+re_embed_filtered$pct_counts_in_top_20_features <- 100 * top20_per_cell / colSums(counts)
+
+# Clean up large object
+rm(counts, top20_per_cell)
+gc()
+
+# Upper bound for percentage top 20 transcripts (lenient 5 mads)
+percent_top20_upper <- median(re_embed_filtered@meta.data$pct_counts_in_top_20_features) + 
+  (mad(re_embed_filtered@meta.data$pct_counts_in_top_20_features) * 5)
+
+# Calculate the feature count distance
+re_embed_filtered$featcount_dist <- {
+  abs(resid(lm(log10(nFeature_RNA + 1) ~ log10(nCount_RNA + 1), 
+               data = re_embed_filtered@meta.data)))
+}
+
+# Upper bound for feature-count distance (lenient 5 mads)
+featCount_dist_upper <- median(re_embed_filtered@meta.data$featcount_dist) + 
+  (mad(re_embed_filtered@meta.data$featcount_dist) * 5)
+
+```
+
+# Secondary QC plots
+
+```{r}
+
+# plot the umap with QC metrics (colour using the Spectral palette from RColorBrewer)
+FeaturePlot(
+  re_embed_filtered,
+  features = c(
+    "nCount_RNA",
+    "nFeature_RNA",
+    "percent.mt",
+    "percent.hb",
+    "featcount_dist",
+    "pct_counts_in_top_20_features"
+    )
+  ) &
+  scale_colour_gradientn(
+    colours = rev(
+      RColorBrewer::brewer.pal(
+        n = 11, 
+        name = "Spectral")
+      )
+    )
+ggsave(filename = file.path(out_dir, "04-filtering/Filter.reembed.umap.clusters.umap.QC.spectral.png"),
+       width = 10, height = 8)
+
+# Specify which metrics we want to look at
+qc_metrics <- c("nCount_RNA",
+                "nFeature_RNA",
+                "percent.mt",
+                "percent.hb",
+                "percent.ribo",
+                "featcount_dist",
+                "pct_counts_in_top_20_features",
+                "percent.most_abundant",
+                "complexity")
+
+# make the plots
+secondary_qc_plot <- my_plot_function(
+  object = re_embed_filtered,
+  grouping_variable = "seurat_clusters",
+  variables_to_plot = qc_metrics
+)
+
+# add threshold lines to the QC plot
+hline_lower <- tibble(
+  metric = c("nCount_RNA", "nFeature_RNA"),
+  threshold = c(10^nCounts_lower, 10^nFeatures_lower)   # thresholds for each
+)
+hline_upper <- tibble(
+  metric = c("percent.hb", "pct_counts_in_top_20_features", "featcount_dist"),
+  threshold = c(percent.hb_upper, percent_top20_upper, featCount_dist_upper)   # thresholds for each
+)
+
+# add the hlines
+secondary_qc_plot +
+  geom_hline(data = hline_lower,
+             aes(yintercept = threshold),
+             colour = "red",
+             linewidth = 1,
+             linetype = "dashed")+
+  geom_hline(data = hline_upper,
+             aes(yintercept = threshold),
+             colour = "red",
+             linewidth = 1,
+             linetype = "dashed")
+
+# plot the nCount x nFeature scatter coloured by %hb
+re_embed_filtered@meta.data %>%
+  ggplot(aes(x = nCount_RNA,
+             y = nFeature_RNA,
+             colour = percent.hb)) +
+  geom_point() +
+  scale_colour_gradient(low = "lightcoral",   # light red for low %
+                        high = "darkred",     # dark red for high %
+                        na.value = "grey80") +  # gray for any missing values
+  geom_hline(yintercept = c(2000, 7500),
+             colour = "red",
+             linewidth = 1,
+             linetype = "dotted") +
+  geom_vline(xintercept = c(3500, 50000),
+             colour = "red",
+             linewidth = 1,
+             linetype = "dotted") +
+  theme_bw() +
+  labs(colour = "% Hb",                      # nicer legend label
+       x = "nCount_RNA",                     # optional: clean axis labels
+       y = "nFeature_RNA") +
+  theme(legend.position = "right")           # optional: legend placement
+ggsave(filename = file.path(out_dir, "05-secondary_QC/scatter_all_filters.png"),
+       width = 8, height = 8)
+
+## log10 scale the percent.hb for better visualisation
+re_embed_filtered$log10_percent.hb <- log10(re_embed_filtered$percent.hb + 1)  # +1 avoids log10(0)
+
+my_plot_function(
+  object = re_embed_filtered,
+  grouping_variable = "seurat_clusters",
+  variables_to_plot = "log10_percent.hb") +
+  geom_hline(yintercept = log10(20),
+             colour = "red",
+             linetype = "dashed",
+             linewidth = 2)
+
+## log10 scale the nCount and nFeatures for better visualisation
+re_embed_filtered$log10_nCount_RNA <- log10(re_embed_filtered$nCount_RNA + 1)
+
+my_plot_function(
+  object = re_embed_filtered,
+  grouping_variable = "seurat_clusters",
+  variables_to_plot = "log10_nCount_RNA") +
+  geom_hline(yintercept = nCounts_lower,
+             colour = "red",
+             linetype = "dashed",
+             linewidth = 1.5)
+
+re_embed_filtered$log10_nFeatures_RNA <- log10(re_embed_filtered$nFeature_RNA + 1)
+my_plot_function(
+  object = re_embed_filtered,
+  grouping_variable = "seurat_clusters",
+  variables_to_plot = "log10_nFeatures_RNA") +
+  geom_hline(yintercept = nFeatures_lower,
+             colour = "red",
+             linetype = "dashed",
+             linewidth = 1.5)
+
+# Log10 plots - aids visualisation
+# Specify which metrics we want to look at
+qc_metrics_log10 <- c("log10_nCount_RNA",
+                      "log10_nFeatures_RNA",
+                      "featcount_dist",
+                      "pct_counts_in_top_20_features",
+                      "percent.most_abundant",
+                      "log10complexity")
+
+# make the plots
+secondary_qc_plot <- my_plot_function(
+  object = re_embed_filtered,
+  grouping_variable = "seurat_clusters",
+  variables_to_plot = qc_metrics_log10
+)
+
+# add threshold lines to the QC plot
+hline_lower_log10 <- tibble(
+  metric = c("log10_nCount_RNA", "log10_nFeatures_RNA"),
+  threshold = c(nCounts_lower, nFeatures_lower)   # thresholds for each
+)
+hline_upper_log10 <- tibble(
+  metric = c("pct_counts_in_top_20_features", "featcount_dist"),
+  threshold = c(percent_top20_upper, featCount_dist_upper)   # thresholds for each
+)
+
+# add the hlines
+secondary_qc_plot +
+  geom_hline(data = hline_lower_log10,
+             aes(yintercept = threshold),
+             colour = "red",
+             linewidth = 1,
+             linetype = "dashed")+
+  geom_hline(data = hline_upper_log10,
+             aes(yintercept = threshold),
+             colour = "red",
+             linewidth = 1,
+             linetype = "dashed")
+```
+
+## Complexity plots
+
+```{r}
+# Complexity plot coloured by % haemoglobin gene expression
+ggplot(re_embed_filtered@meta.data,
+       aes(x = log10_nCount_RNA,
+           y = log10_nFeatures_RNA,
+           color = percent.hb)) +
+  geom_point(size = 1, alpha = 0.7) +
+  scale_color_gradient(low = "grey80", high = "#8B0000",      # DarkRed
+                       name = "% Haemoglobin",
+                       breaks = scales::pretty_breaks(n = 5)) +
+  labs(title = "Library complexity vs library size",
+       x = "log₁₀(nCount_RNA + 1)",
+       y = "log₁₀(nFeature_RNA + 1)") +
+  geom_vline(xintercept = nCounts_lower,
+             colour = "red",
+             linetype = "dashed",
+             linewidth = 1) +
+  geom_hline(yintercept = nFeatures_lower,
+             colour = "red",
+             linetype = "dashed",
+             linewidth = 1) +
+  theme_bw()
+
+# Complexity plot showing only cells from clusters 5, 8, 12, 18, 20, 21, 24 (seurat_clusters)
+re_embed_filtered@meta.data %>%
+  filter(seurat_clusters %in% c(5, 8, 12, 18, 20, 21, 24)) %>%
+  ggplot(aes(x = log10_nCount_RNA,
+             y = log10_nFeatures_RNA,
+             color = factor(seurat_clusters))) +
+  geom_point(size = 1.5, alpha = 0.9) +
+  scale_color_viridis_d(option = "turbo", end = 0.95) +
+  geom_vline(xintercept = nCounts_lower,   colour = "red", linetype = "dashed", linewidth = 1.2) +
+  geom_hline(yintercept = nFeatures_lower, colour = "red", linetype = "dashed", linewidth = 1.2) +
+  labs(title = "E11–E12 mouse heart",
+    subtitle = "Clusters of questionable quality",
+    caption = "Filtered: <10% MT, singlets only",
+       x = "log₁₀(nCount_RNA + 1)",
+       y = "log₁₀(nFeature_RNA + 1)",
+       color = "Cluster") +
+  theme_bw(base_size = 14)
+
+# facet all cell types
+re_embed_filtered@meta.data %>%
+  arrange(percent.hb) %>%                                   # sort so high Hb on top
+  ggplot(aes(x = log10_nCount_RNA,
+             y = log10_nFeatures_RNA,
+             color = percent.hb)) +                         # ← + goes HERE
+  geom_point(size = 1.8, alpha = 0.9) +
+  scale_color_gradient(low = "white", high = "#8B0000",
+                       name = "% Haemoglobin") +
+  geom_vline(xintercept = nCounts_lower,   colour = "red", linetype = "dashed", linewidth = 1.2) +
+  geom_hline(yintercept = nFeatures_lower, colour = "red", linetype = "dashed", linewidth = 1.2) +
+  facet_wrap(~ sophie_celltype_clean, ncol = 5) +
+  labs(title = "Library complexity vs library size — selected clusters",
+       x = "log₁₀(nCount_RNA + 1)",
+       y = "log₁₀(nFeature_RNA + 1)") +
+  theme_bw(base_size = 14) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+# facet all clusters
+re_embed_filtered@meta.data %>%
+  # filter(seurat_clusters %in% c(2, 18, 28, 29)) %>%
+  arrange(percent.hb) %>%                                   # sort so high Hb on top
+  ggplot(aes(x = log10_nCount_RNA,
+             y = log10_nFeatures_RNA,
+             color = percent.hb)) +                         # ← + goes HERE
+  geom_point(size = 1.8, alpha = 0.9) +
+  scale_color_gradient(low = "white", high = "#8B0000",
+                       name = "% Haemoglobin") +
+  geom_vline(xintercept = nCounts_lower,   colour = "red", linetype = "dashed", linewidth = 1.2) +
+  geom_hline(yintercept = nFeatures_lower, colour = "red", linetype = "dashed", linewidth = 1.2) +
+  facet_wrap(~ seurat_clusters, ncol = 5) +
+  labs(title = "Library complexity vs library size — selected clusters",
+       x = "log₁₀(nCount_RNA + 1)",
+       y = "log₁₀(nFeature_RNA + 1)") +
+  theme_bw(base_size = 14) +
+  theme(legend.position = "right",
+        panel.grid.minor = element_blank())
+
+# Plot the percentage of expression from the top 20 genes
+VlnPlot(re_embed_filtered,
+        features = "pct_counts_in_top_20_features",
+        group.by = "seurat_clusters") +
+  geom_hline(yintercept = percent_top20_upper, 
+             colour = "red",
+             linetype = "dashed",
+             linewidth = 1.2) +
+  theme_bw()
+
+# Plot the distance from the expected relationship between nCounts and nFeatures
+# Now plot it — you’ll love it
+VlnPlot(re_embed_filtered,
+        features = "featcount_dist",
+        group.by = "seurat_clusters") +
+  geom_hline(yintercept = featCount_dist_upper,
+             colour = "red",
+             linetype = "dashed") + 
+  theme_bw()
+  
+```
+
+## Define final thresholds
+
+```{r}
+qc_thresholds <- list(
+  nCount_RNA_lower      = 10^nCounts_lower,
+  nFeature_RNA_lower    = 10^nFeatures_lower,
+  percent.hb_upper      = percent.hb_upper,
+  pct_top20_upper       = percent_top20_upper,
+  featcount_dist_upper  = featCount_dist_upper
+)
+
+# Print thresholds for documentation
+cat("=== QC Thresholds Applied ===\n")
+cat("nCount_RNA_lower:     ", round(qc_thresholds$nCount_RNA_lower, 2), "\n")
+cat("nFeature_RNA_lower:   ", round(qc_thresholds$nFeature_RNA_lower, 2), "\n")
+cat("percent.hb_upper:     ", round(qc_thresholds$percent.hb_upper, 2), "%\n")
+cat("pct_top20_upper:      ", round(qc_thresholds$pct_top20_upper, 2), "%\n")
+cat("featcount_dist_upper: ", round(qc_thresholds$featcount_dist_upper, 4), "\n\n")
+```
+
+# Remove low quality clusters (5, 8, 12, 18, 20, 21, 24) and re-embed
+
+```{r}
+# Check starting number of cells
+cat("Starting number of cells:", ncol(re_embed_filtered), "\n")
+cat("Cells in cluster 5:", sum(re_embed_filtered$seurat_clusters == 5), "\n")
+cat("Cells in cluster 8:", sum(re_embed_filtered$seurat_clusters == 8), "\n")
+cat("Cells in cluster 12:", sum(re_embed_filtered$seurat_clusters == 12), "\n")
+cat("Cells in cluster 18:", sum(re_embed_filtered$seurat_clusters == 18), "\n")
+cat("Cells in cluster 20:", sum(re_embed_filtered$seurat_clusters == 20), "\n")
+cat("Cells in cluster 21:", sum(re_embed_filtered$seurat_clusters == 21), "\n")
+cat("Cells in cluster 24:", sum(re_embed_filtered$seurat_clusters == 24), "\n")
+cat("Total low-quality cells to remove:", sum(re_embed_filtered$seurat_clusters %in% c(5, 8, 12, 18, 20, 21, 24)), "\n\n")
+
+# save the existing seurat cluster assignments in the metadata
+re_embed_filtered$original_clusters_mt_dbl <- re_embed_filtered$seurat_clusters
+
+# Subset to remove low-quality clusters
+re_embed_no_low.qual <- subset(re_embed_filtered, 
+                          subset = seurat_clusters %in% c(5, 8, 12, 18, 20, 21, 24), 
+                          invert = TRUE)
+
+cat("Cells after low-quality removal:", ncol(re_embed_no_low.qual), "\n\n")
+
+```
+
+# Re-embed: Normalise, find variable features, scale, PCA, UMAP, cluster
+
+```{r}
+n_dims = 30
+clustering_resolution = 0.8
+# Re-computation of graph-based clustering and UMAP on the cleaned dataset
+re_embed_no_low.qual <- FindVariableFeatures(re_embed_no_low.qual,
+                                        selection.method = "vst", 
+                                        nfeatures = 3000,
+                                        verbose = FALSE) %>%
+  ScaleData(features = rownames(re_embed_no_low.qual),
+            verbose = FALSE) %>%
+  RunPCA(verbose = FALSE) %>% # Defaults to features = VariableFeatures()), but better not to specify as these are not yet stored in that object
+  FindNeighbors(dims = 1:n_dims,
+                verbose = FALSE) %>%
+  FindClusters(resolution = clustering_resolution,
+               verbose = FALSE) %>%
+  RunUMAP(dims = 1:n_dims,
+          verbose = FALSE)
+
+# plot the umap with old cluster numbers and colours
+DimPlot(re_embed_no_low.qual,
+        reduction = "umap",
+        group.by = "original_clusters_mt_dbl",
+        label = TRUE,
+        label.size = 6
+        ) +
+  labs(
+    title = "UMAP - new embedding (old clusters)",
+    caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24) old clusters"
+  ) +
+  NoLegend()
+ggsave(filename = file.path(new_out_dir, "umap_filtered_mt_doublet_nFeature_top.low_quality.old_clusters.png"),
+       width = 8, height = 8)
+
+# plot the umap with old cluster numbers and colours
+DimPlot(re_embed_no_low.qual,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = TRUE,
+        label.size = 6
+        ) +
+  labs(
+    title = "UMAP - new embedding (new clusters)",
+    caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24) new clusters"
+  ) +
+  NoLegend()
+ggsave(filename = file.path(new_out_dir, "umap_filtered_mt_doublet_nFeature_top.low_quality.new_clusters.png"),
+       width = 8, height = 8)
+
+# plot the umap with cluster numbers and colours
+DimPlot(re_embed_no_low.qual,
+        reduction = "umap",
+        group.by = "sophie_celltype_clean",
+        label = TRUE,
+        label.size = 4
+        ) +
+  labs(
+    title = "UMAP - new embedding (Sophie anno)",
+    caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24) Sophie anno."
+  )
+ggsave(filename = file.path(new_out_dir, "umap_filtered_mt_doublet_nFeature_top.low_quality.sophie_anno.png"),
+       width = 8, height = 8)
+
+# let's save here and reload in a new session
+write_rds(x = re_embed_no_low.qual,
+          file = file.path(new_out_dir, "filtered_mt_doublet_nFeature_top.low_quality.rds"))
+
+```
+
+# Visualize the new embedding
+
+```{r}
+
+# UMAP by new clusters
+p1 <- DimPlot(re_embed_no_low.qual, 
+              reduction = "umap",
+              group.by = "seurat_clusters",
+              label = TRUE,
+              label.size = 4) +
+  NoLegend() +
+    labs(
+    title = "UMAP - New Clusters (after low quality removal)",
+    caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24)"
+  )
+
+# UMAP by Sophie's cell type annotations
+p2 <- DimPlot(re_embed_no_low.qual, 
+              reduction = "umap",
+              group.by = "sophie_celltype_clean",
+              label = TRUE,
+              label.size = 3,
+              repel = TRUE) +
+    NoLegend() +
+    labs(
+    title = "UMAP - Sophie's Cell Type Annotations (after low quality removal)",
+    caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24)"
+  )
+
+# Display plots
+p1 + p2
+
+# Check QC metrics in the new embedding
+p3 <- FeaturePlot(re_embed_no_low.qual, 
+                  features = c("nCount_RNA", "nFeature_RNA", 
+                               "percent.mt", "percent.hb",
+                               "featcount_dist", "pct_counts_in_top_20_features"),
+                  ncol = 3)  &
+  scale_colour_gradientn(
+    colours = rev(
+      RColorBrewer::brewer.pal(
+        n = 11, 
+        name = "Spectral")
+      )
+    )
+print(p3)
+ggsave(p3, 
+       filename = file.path(new_out_dir, "filtered_mt_doublet_nFeature_top.low_quality_QCmetrics.png"),
+       width = 12,
+       height = 8)
+
+```
