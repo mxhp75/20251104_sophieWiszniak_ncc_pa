@@ -327,22 +327,25 @@ vsmc_genes <- c("Cxcl12", "Iigp1", "Eln", "Fbln5", "Rgs5")
 vsmc_c3 <- c("Sfrp2", "Osr1", "Bgn", "Cd34")
 vsmc_c6 <- c("Rbp1", "Fbln5", "Gja4")
 vsmc_c12 <- c("Emcn", "Klhl4", "Gatm", "Akap12")
+
+platelet_genes <- c("Nrgn", "Pf4", "Ppbp", "Myl9", "Gng11")
+  
+rbc_genes <- c("Hba-a1", "Hba-a2", "Hba-x", "Hbb-bh1", "Hbb-bs", "Hbb-bt", "Hbq1b")
 ```
 
 ## Macrophage dotplot
 
 ```{r}
-# Generate DotPlot for original_clusters_mt_dbl markers
-Idents(re_embed_no_rbc) <- "original_clusters_mt_dbl"
-dotPlot_original_clusters_macrophage <- DotPlot(re_embed_no_rbc,
+# Generate DotPlot for seurat clusters
+Idents(re_embed_no_low.qual) <- "seurat_clusters"
+dotPlot_original_clusters_macrophage <- DotPlot(re_embed_no_low.qual,
         features = macrophage_genes,
         dot.scale = 6,
         cols = c("blue", "red")) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "Macrophage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
-    caption = "Mib1 KO vs control"
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
 ggsave(dotPlot_original_clusters_macrophage,
@@ -354,15 +357,14 @@ ggsave(dotPlot_original_clusters_macrophage,
 ## Epicardial dotplot
 
 ```{r}
-dotPlot_original_clusters_epicardial <- DotPlot(re_embed_no_rbc,
+dotPlot_original_clusters_epicardial <- DotPlot(re_embed_no_low.qual,
         features = epicardial_genes,
         dot.scale = 6,
         cols = c("blue", "red")) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "Epicardial lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
-    caption = "Mib1 KO vs control"
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
 ggsave(dotPlot_original_clusters_epicardial,
@@ -372,15 +374,14 @@ ggsave(dotPlot_original_clusters_epicardial,
 
 # all the epicardial genes
 epicardial_plus <- c(epicardial_genes, ep_c10, ep_c11)
-dotPlot_epicardial_plus <- DotPlot(re_embed_no_rbc,
+dotPlot_epicardial_plus <- DotPlot(re_embed_no_low.qual,
         features = epicardial_plus,
         dot.scale = 6,
         cols = c("blue", "red")) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "Epicardial (plus) lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
-    caption = "Mib1 KO vs control"
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
 ggsave(dotPlot_epicardial_plus,
@@ -392,15 +393,14 @@ ggsave(dotPlot_epicardial_plus,
 ## Endocardial dotplot
 
 ```{r}
-dotPlot_original_clusters_endocardial <- DotPlot(re_embed_no_rbc,
+dotPlot_original_clusters_endocardial <- DotPlot(re_embed_no_low.qual,
         features = endocardial_genes,
         dot.scale = 6,
         cols = c("blue", "red")) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "Endocardial lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
-    caption = "Mib1 KO vs control"
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
 ggsave(dotPlot_original_clusters_endocardial,
@@ -410,15 +410,14 @@ ggsave(dotPlot_original_clusters_endocardial,
 
 # all the endocardial genes
 endocardial_plus <- c(endocardial_genes, ed_c5, ed_c6, ed_c12)
-dotPlot_endocardial_plus <- DotPlot(re_embed_no_rbc,
+dotPlot_endocardial_plus <- DotPlot(re_embed_no_low.qual,
         features = unique(endocardial_plus),
         dot.scale = 6,
         cols = c("blue", "red")) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "Endocardial (plus) lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
-    caption = "Mib1 KO vs control"
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
 ggsave(dotPlot_endocardial_plus,
@@ -430,15 +429,14 @@ ggsave(dotPlot_endocardial_plus,
 ## Myocardial dotplots
 
 ```{r}
-dotPlot_original_clusters_myocardial <- DotPlot(re_embed_no_rbc,
+dotPlot_original_clusters_myocardial <- DotPlot(re_embed_no_low.qual,
         features = myocardial_genes,
         dot.scale = 6,
         cols = c("blue", "red")) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "Myocardial lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
-    caption = "Mib1 KO vs control"
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
 ggsave(dotPlot_original_clusters_myocardial,
@@ -448,15 +446,14 @@ ggsave(dotPlot_original_clusters_myocardial,
 
 # all the myocardial genes
 myocardial_plus <- c(myocardial_genes, mc_c2, mc_c9)
-dotPlot_myocardial_plus <- DotPlot(re_embed_no_rbc,
+dotPlot_myocardial_plus <- DotPlot(re_embed_no_low.qual,
         features = unique(myocardial_plus),
         dot.scale = 6,
         cols = c("blue", "red")) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "Myocardial (plus) lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
-    caption = "Mib1 KO vs control"
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
 ggsave(dotPlot_myocardial_plus,
@@ -468,15 +465,14 @@ ggsave(dotPlot_myocardial_plus,
 ## Mesenchymal dotplots
 
 ```{r}
-dotPlot_original_clusters_mesenchymal <- DotPlot(re_embed_no_rbc,
+dotPlot_original_clusters_mesenchymal <- DotPlot(re_embed_no_low.qual,
         features = mesenchymal_genes,
         dot.scale = 6,
         cols = c("blue", "red")) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "Mesenchymal lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
-    caption = "Mib1 KO vs control"
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
 ggsave(dotPlot_original_clusters_mesenchymal,
@@ -486,15 +482,14 @@ ggsave(dotPlot_original_clusters_mesenchymal,
 
 # all the mesenchymal genes
 mesenchymal_plus <- c(mesenchymal_genes, ms_c0, ms_c1, ms_c7, ms_c8)
-dotPlot_mesenchymal_plus <- DotPlot(re_embed_no_rbc,
+dotPlot_mesenchymal_plus <- DotPlot(re_embed_no_low.qual,
         features = unique(mesenchymal_plus),
         dot.scale = 6,
         cols = c("blue", "red")) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "Mesenchymal (plus) lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
-    caption = "Mib1 KO vs control"
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
 ggsave(dotPlot_mesenchymal_plus,
@@ -506,15 +501,14 @@ ggsave(dotPlot_mesenchymal_plus,
 ## VSMC dotplots
 
 ```{r}
-dotPlot_original_clusters_vsmc <- DotPlot(re_embed_no_rbc,
+dotPlot_original_clusters_vsmc <- DotPlot(re_embed_no_low.qual,
         features = vsmc_genes,
         dot.scale = 6,
         cols = c("blue", "red")) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "VSMC lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
-    caption = "Mib1 KO vs control"
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
 ggsave(dotPlot_original_clusters_vsmc,
@@ -524,15 +518,14 @@ ggsave(dotPlot_original_clusters_vsmc,
 
 # all the VSMC genes
 vsmc_plus <- c(vsmc_genes, vsmc_c3, vsmc_c6, vsmc_c12)
-dotPlot_vsmc_plus <- DotPlot(re_embed_no_rbc,
+dotPlot_vsmc_plus <- DotPlot(re_embed_no_low.qual,
         features = unique(vsmc_plus),
         dot.scale = 6,
         cols = c("blue", "red")) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "VSMC (plus) lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
-    caption = "Mib1 KO vs control"
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
 ggsave(dotPlot_vsmc_plus,
@@ -542,25 +535,67 @@ ggsave(dotPlot_vsmc_plus,
 
 ```
 
+## RBC dotplots
+
+```{r}
+dotPlot_original_clusters_rbc <- DotPlot(re_embed_no_low.qual,
+        features = rbc_genes,
+        dot.scale = 6,
+        cols = c("blue", "red")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+    labs(
+    title = "RBC lineage Genes",
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
+    )
+   
+ggsave(dotPlot_original_clusters_rbc,
+       filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_original_clusters_rbc.png"),
+       width = 16,
+       height = 6)
+
+```
+
+## Platelet dotplots
+
+```{r}
+dotPlot_original_clusters_platelet <- DotPlot(re_embed_no_low.qual,
+        features = platelet_genes,
+        dot.scale = 6,
+        cols = c("blue", "red")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+    labs(
+    title = "Platelet lineage Genes",
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
+    )
+   
+ggsave(dotPlot_original_clusters_platelet,
+       filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_original_clusters_platelet.png"),
+       width = 16,
+       height = 6)
+
+```
+
 ## All markers
 - level one boxes only
 
 ```{r}
-dotPlot_markers <- DotPlot(re_embed_no_rbc,
+Idents(re_embed_no_low.qual) <- "seurat_clusters"
+dotPlot_markers <- DotPlot(re_embed_no_low.qual,
         features = c(mesenchymal_genes,
-                     vsmc_genes,
-                     epicardial_genes,
+                     myocardial_genes,
                      endocardial_genes,
+                     epicardial_genes,
+                     vsmc_genes,
+                     rbc_genes,
                      macrophage_genes,
-                     myocardial_genes
+                     platelet_genes
                      ),
         dot.scale = 6,
         cols = c("blue", "red")) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
     title = "Level 1 lineage Genes",
-    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
-    caption = "Mib1 KO vs control"
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
 print(dotPlot_markers)   
 ggsave(dotPlot_markers,
@@ -568,28 +603,55 @@ ggsave(dotPlot_markers,
        width = 16,
        height = 8)
 
-# all the marker genes
-all_markers <- c(mesenchymal_plus,
-                 vsmc_plus,
-                 epicardial_plus,
-                 endocardial_plus,
-                 macrophage_genes,
-                 myocardial_plus
-                 )
-dotPlot_all_markers <- DotPlot(re_embed_no_rbc,
-        features = unique(all_markers),
+DotPlot(re_embed_no_low.qual,
+        features = c(mesenchymal_genes,
+                     myocardial_genes,
+                     endocardial_genes,
+                     epicardial_genes,
+                     vsmc_genes,
+                     rbc_genes,
+                     macrophage_genes,
+                     platelet_genes
+                     ),
         dot.scale = 6,
         cols = c("blue", "red")) +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
     labs(
-    title = "Combined (aka all level) cell-type marker genes",
-    subtitle = "Filtered: <10% MT, singlets only, RBC removed",
-    caption = "Mib1 KO vs control"
-    )
-   
-ggsave(dotPlot_all_markers,
-       filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_all_markers.png"),
-       width = 20,
-       height = 12)
+    title = "Level 1 lineage Genes",
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
+    ) + 
+  NoLegend() +
+  scale_y_discrete(limits = c("0", "1", "2", "3", "9", "11", "12", "4", "8", "14", "25", "5", "13", "18", "20", "23", "6", "17", "7", "10", "16", "19", "15", "21", "22", "24"))  # any custom order
 
 ```
+
+```{r}
+
+DimPlot(re_embed_no_low.qual,
+        group.by = "sophie_celltype_clean",
+        label = TRUE,
+        repel = TRUE,
+        # cols = cluster_colours,
+        pt.size = 0.4) +
+  NoLegend() +   # remove legend if too many clusters
+  labs(title = "Sophie's manual cell type annotation transferred via joe_barcode",
+       caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality")
+ggsave(filename = file.path(out_dir, "04-filtering", "umap_sohieAnnotation_sophieCluster.png"),
+       width = 10,
+       height = 8)
+
+DimPlot(re_embed_no_low.qual,
+        group.by = "seurat_clusters",
+        label = TRUE,
+        repel = TRUE,
+        # cols = cluster_colours,
+        pt.size = 0.4) +
+  NoLegend() +   # remove legend if too many clusters
+  labs(title = "Seurat clusters",
+       caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality")
+
+
+
+
+```
+
