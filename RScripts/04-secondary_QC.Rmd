@@ -207,6 +207,26 @@ DimPlot(re_embed_filtered,
 ggsave(filename = file.path(out_dir, "04-filtering/Filter.reembed.umap.clusters.png"),
        width = 10, height = 8)
 
+gfp_reporter <- FeaturePlot(
+  object = re_embed_filtered,
+  features = c("pEGFP-1"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "GFP Reporter",
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+
 ```
 
 # Automatic thresholding via MAD (median absolute deviations)
