@@ -91,7 +91,6 @@ my_plot_function <- function(object, grouping_variable, variables_to_plot) {
 }
 ```
 
-
 # Set project directories and file paths
 
 ```{r}
@@ -548,7 +547,7 @@ VlnPlot(re_embed_filtered,
   
 ```
 
-## Define final thresholds
+## Define final thresholds (all cells combined)
 
 ```{r}
 qc_thresholds <- list(
@@ -593,6 +592,97 @@ re_embed_no_low.qual <- subset(re_embed_filtered,
 cat("Cells after low-quality removal:", ncol(re_embed_no_low.qual), "\n\n")
 
 ```
+
+# Perform secodary QC per cluster and remove remaining low quality cells
+## nFeatures
+
+```{r}
+# Enter the number of deviations required
+n_mad_3 <- 3    # number of MADs for nCount and nFeature deviation
+n_mad_5 <- 5    # number of MADs for featcount_dist and pct_counts_in_top_20_features deviation
+```
+
+
+```{r}
+# Compute per-cluster lower threshold and add logical flag
+re_embed_no_low.qual@meta.data <- re_embed_no_low.qual@meta.data %>%
+  tibble::rownames_to_column("cell_id") %>%
+  dplyr::group_by(seurat_clusters) %>%
+  dplyr::mutate(
+    # Compute threshold per cluster (on log scale for skewness)
+    lower_threshold = median(log10(nFeature_RNA + 1)) - (mad(log10(nFeature_RNA + 1)) * n_mad_3),
+    # Flag cells below the threshold (TRUE = low quality)
+    nFeature_filter = log10(nFeature_RNA + 1) < lower_threshold
+  ) %>%
+  dplyr::ungroup() %>%
+  tibble::column_to_rownames("cell_id")
+
+# Count flagged cells per cluster
+table(re_embed_no_low.qual@meta.data$seurat_clusters, re_embed_no_low.qual@meta.data$nFeature_filter)
+
+# Per-cluster thresholds
+threshold_nFeature <- re_embed_no_low.qual@meta.data %>%
+  group_by(seurat_clusters) %>%
+  summarize(unique_threshold_nFeature = unique(lower_threshold)) %>%
+  dplyr::mutate(threshold_nFeature = 10^unique_threshold_nFeature)
+
+# Step 2: Create VlnPlot (on linear scale, which is most common for nFeature)
+p <- VlnPlot(re_embed_no_low.qual,
+             features = "nFeature_RNA",
+             group.by = "seurat_clusters",
+             pt.size = 0.5,
+             cols = scales::hue_pal()(length(unique(re_embed_no_low.qual$seurat_clusters)))) +
+  labs(title = "Per Cluster Lower nFeature QC Thresholds",
+       y = "nFeature_RNA",
+       subtitle = paste("Threshold = median(log10(nFeature)) -", n_mad_3, "× MAD"),
+       caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24) old clusters") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# manually set the y-limit
+p <- p + 
+  ylim(0, max(re_embed_no_low.qual@meta.data$nFeature_RNA, na.rm = TRUE) * 1.05)
+
+# Short cluster level red dashed segment and threshold value centered on each violin
+p + geom_segment(
+  data = threshold_nFeature,
+  aes(
+    x = as.numeric(seurat_clusters) - 0.35,     # start a bit left of center
+    xend = as.numeric(seurat_clusters) + 0.35,  # end a bit right of center
+    y = threshold_nFeature,
+    yend = threshold_nFeature
+  ),
+  color = "red",
+  linetype = "dashed",
+  size = 0.9,
+  inherit.aes = FALSE
+) +
+  # White box label with slight padding and border
+  geom_label(
+    data = threshold_nFeature,
+    aes(
+      x = as.numeric(seurat_clusters),
+      y = threshold_nFeature * 1.12,
+      label = round(threshold_nFeature, 0)
+    ),
+    color = "black",                # text color
+    fill = "white",                 # background color (white box)
+    label.size = 0.35,              # thickness of the border (set to 0 for no border)
+    size = 3.2,                     # text size
+    fontface = "bold",
+    inherit.aes = FALSE
+  ) +
+  NoLegend()
+
+# clean up object
+rm(thresholds_nFeatures)
+gc()
+```
+
+
+
+
+
+
 
 # Re-embed: Normalise, find variable features, scale, PCA, UMAP, cluster
 
