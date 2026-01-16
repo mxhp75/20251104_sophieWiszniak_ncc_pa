@@ -594,7 +594,7 @@ cat("Cells after low-quality removal:", ncol(re_embed_no_low.qual), "\n\n")
 ```
 
 # Perform secodary QC per cluster and remove remaining low quality cells
-## nFeatures
+## Set MADs
 
 ```{r}
 # Enter the number of deviations required
@@ -602,6 +602,7 @@ n_mad_3 <- 3    # number of MADs for nCount and nFeature deviation
 n_mad_5 <- 5    # number of MADs for featcount_dist and pct_counts_in_top_20_features deviation
 ```
 
+## nFeatures
 
 ```{r}
 # Compute per-cluster lower threshold and add logical flag
@@ -674,15 +675,401 @@ p + geom_segment(
   NoLegend()
 
 # clean up object
-rm(thresholds_nFeatures)
+rm(threshold_nFeature)
 gc()
 ```
 
+## nCounts
+
+```{r}
+# Compute per-cluster lower threshold and add logical flag
+re_embed_no_low.qual@meta.data <- re_embed_no_low.qual@meta.data %>%
+  tibble::rownames_to_column("cell_id") %>%
+  dplyr::group_by(seurat_clusters) %>%
+  dplyr::mutate(
+    # Compute threshold per cluster (on log scale for skewness)
+    lower_threshold = median(log10(nCount_RNA + 1)) - (mad(log10(nCount_RNA + 1)) * n_mad_3),
+    # Flag cells below the threshold (TRUE = low quality)
+    nCounts_filter = log10(nCount_RNA + 1) < lower_threshold
+  ) %>%
+  dplyr::ungroup() %>%
+  tibble::column_to_rownames("cell_id")
+
+# Count flagged cells per cluster
+table(re_embed_no_low.qual@meta.data$seurat_clusters, re_embed_no_low.qual@meta.data$nCounts_filter)
+
+# Per-cluster thresholds
+threshold_nCounts <- re_embed_no_low.qual@meta.data %>%
+  group_by(seurat_clusters) %>%
+  summarize(unique_threshold_nCounts = unique(lower_threshold)) %>%
+  dplyr::mutate(threshold_nCounts = 10^unique_threshold_nCounts)
+
+# Step 2: Create VlnPlot (on linear scale, which is most common for nFeature)
+p <- VlnPlot(re_embed_no_low.qual,
+             features = "nCount_RNA",
+             group.by = "seurat_clusters",
+             pt.size = 0.5,
+             cols = scales::hue_pal()(length(unique(re_embed_no_low.qual$seurat_clusters)))) +
+  labs(title = "Per Cluster Lower nCounts QC Thresholds",
+       y = "nCount_RNA",
+       subtitle = paste("Threshold = median(log10(nCounts)) -", n_mad_3, "× MAD"),
+       caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24) old clusters") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# manually set the y-limit
+p <- p + ylim(0, max(re_embed_no_low.qual@meta.data$nCount_RNA, na.rm = TRUE) * 1.05)
+
+# Short cluster level red dashed segment and threshold value centered on each violin
+p + geom_segment(
+  data = threshold_nCounts,
+  aes(
+    x = as.numeric(seurat_clusters) - 0.35,     # start a bit left of center
+    xend = as.numeric(seurat_clusters) + 0.35,  # end a bit right of center
+    y = threshold_nCounts,
+    yend = threshold_nCounts
+  ),
+  color = "red",
+  linetype = "dashed",
+  size = 0.9,
+  inherit.aes = FALSE
+) +
+  # White box label with slight padding and border
+  geom_label(
+    data = threshold_nCounts,
+    aes(
+      x = as.numeric(seurat_clusters),
+      y = threshold_nCounts * 1.12,
+      label = round(threshold_nCounts, 0)
+    ),
+    color = "black",                # text color
+    fill = "white",                 # background color (white box)
+    label.size = 0.35,              # thickness of the border (set to 0 for no border)
+    size = 3.2,                     # text size
+    fontface = "bold",
+    inherit.aes = FALSE
+  ) +
+  NoLegend()
+
+# clean up object
+rm(threshold_nCounts)
+gc()
+```
+
+## featcount_dist
+
+```{r}
+# Compute per-cluster lower threshold and add logical flag
+re_embed_no_low.qual@meta.data <- re_embed_no_low.qual@meta.data %>%
+  tibble::rownames_to_column("cell_id") %>%
+  dplyr::group_by(seurat_clusters) %>%
+  dplyr::mutate(
+    # Compute threshold per cluster (on log10 scale for skewness)
+    upper_threshold = median(log10(featcount_dist + 1)) + (mad(log10(featcount_dist + 1)) * n_mad_3),
+    # Flag cells above the threshold (TRUE = low quality)
+    featcount_dist_filter = log10(featcount_dist + 1) > upper_threshold
+  ) %>%
+  dplyr::ungroup() %>%
+  tibble::column_to_rownames("cell_id")
+
+# Count flagged cells per cluster
+table(re_embed_no_low.qual@meta.data$seurat_clusters, re_embed_no_low.qual@meta.data$featcount_dist_filter)
+
+# Per-cluster thresholds
+threshold_featcount_dist <- re_embed_no_low.qual@meta.data %>%
+  group_by(seurat_clusters) %>%
+  summarize(unique_threshold_featcount_dist = unique(upper_threshold)) %>%
+  dplyr::mutate(threshold_featcount_dist = 10^unique_threshold_featcount_dist)
+
+# Step 2: Create VlnPlot (on linear scale, which is most common for nFeature)
+p <- VlnPlot(re_embed_no_low.qual,
+             features = "featcount_dist",
+             group.by = "seurat_clusters",
+             pt.size = 0.5,
+             cols = scales::hue_pal()(length(unique(re_embed_no_low.qual$seurat_clusters)))) +
+  labs(title = "Per Cluster Lower featcount_dist QC Thresholds",
+       y = "featcount_dist",
+       subtitle = paste("Threshold = median(log10(featcount_dist)) +", n_mad_3, "× MAD"),
+       caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24) old clusters") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# manually set the y-limit
+p <- p + ylim(0, max(re_embed_no_low.qual@meta.data$featcount_dist, na.rm = TRUE) * 1.5)
+
+# Short cluster level red dashed segment and threshold value centered on each violin
+p + geom_segment(
+  data = threshold_featcount_dist,
+  aes(
+    x = as.numeric(seurat_clusters) - 0.35,     # start a bit left of center
+    xend = as.numeric(seurat_clusters) + 0.35,  # end a bit right of center
+    y = threshold_featcount_dist,
+    yend = threshold_featcount_dist
+  ),
+  color = "red",
+  linetype = "dashed",
+  size = 0.9,
+  inherit.aes = FALSE
+) +
+  # White box label with slight padding and border
+  geom_label(
+    data = threshold_featcount_dist,
+    aes(
+      x = as.numeric(seurat_clusters),
+      y = threshold_featcount_dist * 1.05,
+      label = round(threshold_featcount_dist, 0)
+    ),
+    color = "black",                # text color
+    fill = "white",                 # background color (white box)
+    label.size = 0.35,              # thickness of the border (set to 0 for no border)
+    size = 3.2,                     # text size
+    fontface = "bold",
+    inherit.aes = FALSE
+  ) +
+  NoLegend()
+
+# clean up object
+rm(threshold_featcount_dist)
+gc()
+```
+
+## pct_counts_in_top_20_features
+
+```{r}
+# Compute per-cluster lower threshold and add logical flag
+re_embed_no_low.qual@meta.data <- re_embed_no_low.qual@meta.data %>%
+  tibble::rownames_to_column("cell_id") %>%
+  dplyr::group_by(seurat_clusters) %>%
+  dplyr::mutate(
+    # Compute threshold per cluster
+    upper_threshold = median(pct_counts_in_top_20_features) + (mad(pct_counts_in_top_20_features) * n_mad_3),
+    # Flag cells above the threshold (TRUE = low quality)
+    pct_counts_in_top_20_features_filter = pct_counts_in_top_20_features > upper_threshold
+  ) %>%
+  dplyr::ungroup() %>%
+  tibble::column_to_rownames("cell_id")
+
+# Count flagged cells per cluster
+table(re_embed_no_low.qual@meta.data$seurat_clusters, re_embed_no_low.qual@meta.data$pct_counts_in_top_20_features_filter)
+
+# Per-cluster thresholds
+threshold_pct_counts_in_top_20_features <- re_embed_no_low.qual@meta.data %>%
+  group_by(seurat_clusters) %>%
+  summarize(unique_threshold_pct_counts_in_top_20_features = unique(upper_threshold)) %>%
+  dplyr::mutate(threshold_pct_counts_in_top_20_features = unique_threshold_pct_counts_in_top_20_features)
+
+# Step 2: Create VlnPlot (on linear scale, which is most common for nFeature)
+p <- VlnPlot(re_embed_no_low.qual,
+             features = "pct_counts_in_top_20_features",
+             group.by = "seurat_clusters",
+             pt.size = 0.5,
+             cols = scales::hue_pal()(length(unique(re_embed_no_low.qual$seurat_clusters)))) +
+  labs(title = "Per Cluster Lower pct_counts_in_top_20_features QC Thresholds",
+       y = "pct_counts_in_top_20_features",
+       subtitle = paste("Threshold = median(pct_counts_in_top_20_features) +", n_mad_3, "× MAD"),
+       caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24) old clusters") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# manually set the y-limit
+p <- p + ylim(0, max(re_embed_no_low.qual@meta.data$pct_counts_in_top_20_features, na.rm = TRUE) * 1.3)
+
+# Short cluster level red dashed segment and threshold value centered on each violin
+p + geom_segment(
+  data = threshold_pct_counts_in_top_20_features,
+  aes(
+    x = as.numeric(seurat_clusters) - 0.35,     # start a bit left of center
+    xend = as.numeric(seurat_clusters) + 0.35,  # end a bit right of center
+    y = threshold_pct_counts_in_top_20_features,
+    yend = threshold_pct_counts_in_top_20_features
+  ),
+  color = "red",
+  linetype = "dashed",
+  size = 0.9,
+  inherit.aes = FALSE
+) +
+  # White box label with slight padding and border
+  geom_label(
+    data = threshold_pct_counts_in_top_20_features,
+    aes(
+      x = as.numeric(seurat_clusters),
+      y = threshold_pct_counts_in_top_20_features * 1.5,
+      label = round(threshold_pct_counts_in_top_20_features, 0)
+    ),
+    color = "black",                # text color
+    fill = "white",                 # background color (white box)
+    label.size = 0.35,              # thickness of the border (set to 0 for no border)
+    size = 3.2,                     # text size
+    fontface = "bold",
+    inherit.aes = FALSE
+  ) +
+  NoLegend()
+
+# clean up object
+rm(threshold_pct_counts_in_top_20_features)
+gc()
+```
+
+# Test QC fails
+
+```{r}
+# Step 1: Create combined "any fail" and "fail 2+" columns
+re_embed_no_low.qual@meta.data <- re_embed_no_low.qual@meta.data %>%
+  mutate(
+    any_qc_fail = nFeature_filter |
+      nCounts_filter | 
+      pct_counts_in_top_20_features_filter | 
+      featcount_dist_filter,
+    
+    # Count how many filters each cell fails
+    num_qc_fails = rowSums(across(c(nFeature_filter, 
+                                    nCounts_filter, 
+                                    pct_counts_in_top_20_features_filter, 
+                                    featcount_dist_filter)), na.rm = TRUE),
+    
+    # NEW: TRUE only if cell fails 2 or more filters
+    fail_any_2 = num_qc_fails >= 2
+  )
+
+# Step 2: Summary table per cluster
+qc_fail_summary <- re_embed_no_low.qual@meta.data %>%
+  group_by(seurat_clusters) %>%
+  summarise(
+    total_cells       = n(),
+    n_fail_any        = sum(any_qc_fail, na.rm = TRUE),
+    pct_fail_any      = round(100 * n_fail_any / total_cells, 2),
+    
+    n_fail_nFeature   = sum(nFeature_filter, na.rm = TRUE),
+    n_fail_nCounts    = sum(nCounts_filter, na.rm = TRUE),
+    n_fail_top20      = sum(pct_counts_in_top_20_features_filter, na.rm = TRUE),
+    n_fail_featdist   = sum(featcount_dist_filter, na.rm = TRUE),
+    
+    # Updated: only cells failing 2 or more filters
+    fail_any_2        = sum(fail_any_2, na.rm = TRUE),
+    pct_fail_any_2    = round(100 * fail_any_2 / total_cells, 2)
+  ) %>%
+  ungroup() %>%
+  arrange(as.numeric(seurat_clusters))  # sort by cluster number
+
+# Print the summary table
+print(qc_fail_summary)
+
+# Optional: Save to CSV
+write_csv(qc_fail_summary, 
+          file = file.path(out_dir, "05-secondary_QC", "per_cluster_qc_fail_summary.csv"))
 
 
+```
+
+# Perform secondary filtering
+
+```{r}
+# Double-check the numbers before subsetting
+# How many cells fail 0, 1, 2, 3, or 4 filters?
+table(re_embed_no_low.qual@meta.data$num_qc_fails)
+
+# How many would be kept vs removed?
+re_embed_no_low.qual@meta.data %>%
+  summarise(
+    total_cells = n(),
+    keep_cells = sum(fail_any_2 == FALSE, na.rm = TRUE),
+    remove_cells = sum(fail_any_2 == TRUE, na.rm = TRUE),
+    pct_removed = round(100 * remove_cells / total_cells, 2)
+  )
+
+# Subset to keep only cells that fail < 2 filters (i.e. fail_any_2 == FALSE)
+re_embed_filtered <- subset(re_embed_no_low.qual,
+                            subset = fail_any_2 == FALSE)
+
+# Or equivalently (using the count):
+# re_embed_filtered <- subset(re_embed_no_low.qual,
+#                             subset = num_qc_fails < 2)
+
+# Quick sanity check after subsetting
+cat("Original cells:", ncol(re_embed_no_low.qual), "\n")
+cat("Kept cells:", ncol(re_embed_filtered), "\n")
+cat("Removed cells:", ncol(re_embed_no_low.qual) - ncol(re_embed_filtered), "\n")
+
+# Create individual VlnPlots for each feature
+p1 <- VlnPlot(re_embed_no_low.qual, features = "nFeature_RNA", 
+              group.by = "seurat_clusters",
+              pt.size = 0.5,
+              alpha = 0.4,
+              cols = scales::hue_pal()(length(unique(re_embed_no_low.qual$seurat_clusters)))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "none")
+
+p2 <- VlnPlot(re_embed_no_low.qual, features = "nCount_RNA", 
+              group.by = "seurat_clusters",
+              pt.size = 0.5,
+              alpha = 0.4,
+              cols = scales::hue_pal()(length(unique(re_embed_no_low.qual$seurat_clusters)))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "none")
+
+p3 <- VlnPlot(re_embed_no_low.qual, features = "featcount_dist", 
+              group.by = "seurat_clusters",
+              pt.size = 0.5,
+              alpha = 0.4,
+              cols = scales::hue_pal()(length(unique(re_embed_no_low.qual$seurat_clusters)))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "none")
+
+p4 <- VlnPlot(re_embed_no_low.qual, features = "pct_counts_in_top_20_features", 
+              group.by = "seurat_clusters",
+              pt.size = 0.5,
+              alpha = 0.4,
+              cols = scales::hue_pal()(length(unique(re_embed_no_low.qual$seurat_clusters)))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "none")
+
+# Combine into 2x2 grid with shared title & caption
+(p1 | p2) / (p3 | p4) +
+  plot_annotation(
+    title = "Pre-filter QC Metrics",
+    caption = "Filtered: MT, doublets, low qual clusters & cells (old clusters)",
+    theme = theme(plot.title = element_text(hjust = 0.5, size = 14))
+  ) +
+  plot_layout(guides = "collect")
+
+ggsave(filename = file.path(new_out_dir, "Pre-filter-violins.png"))
 
 
+# Post filtering
+# Create individual VlnPlots for each feature
+p1 <- VlnPlot(re_embed_filtered, features = "nFeature_RNA", 
+              group.by = "seurat_clusters",
+              pt.size = 0.5,
+              alpha = 0.4,
+              cols = scales::hue_pal()(length(unique(re_embed_no_low.qual$seurat_clusters)))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "none")
 
+p2 <- VlnPlot(re_embed_filtered, features = "nCount_RNA", 
+              group.by = "seurat_clusters",
+              pt.size = 0.5,
+              alpha = 0.4,
+              cols = scales::hue_pal()(length(unique(re_embed_no_low.qual$seurat_clusters)))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "none")
+
+p3 <- VlnPlot(re_embed_filtered, features = "featcount_dist", 
+              group.by = "seurat_clusters",
+              pt.size = 0.5,
+              alpha = 0.4,
+              cols = scales::hue_pal()(length(unique(re_embed_no_low.qual$seurat_clusters)))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "none")
+
+p4 <- VlnPlot(re_embed_filtered, features = "pct_counts_in_top_20_features", 
+              group.by = "seurat_clusters",
+              pt.size = 0.5,
+              alpha = 0.4,
+              cols = scales::hue_pal()(length(unique(re_embed_no_low.qual$seurat_clusters)))) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), legend.position = "none")
+
+# Combine into 2x2 grid with shared title & caption
+(p1 | p2) / (p3 | p4) +
+  plot_annotation(
+    title = "Post-filter QC Metrics",
+    caption = "Filtered: MT, doublets, low qual clusters & cells (old clusters)",
+    theme = theme(plot.title = element_text(hjust = 0.5, size = 14))
+  ) +
+  plot_layout(guides = "collect")
+
+ggsave(filename = file.path(new_out_dir, "Post-filter-violins.png"))
+
+```
 
 # Re-embed: Normalise, find variable features, scale, PCA, UMAP, cluster
 
@@ -690,7 +1077,7 @@ gc()
 n_dims = 30
 clustering_resolution = 0.8
 # Re-computation of graph-based clustering and UMAP on the cleaned dataset
-re_embed_no_low.qual <- FindVariableFeatures(re_embed_no_low.qual,
+re_embed_filtered <- FindVariableFeatures(re_embed_filtered,
                                         selection.method = "vst", 
                                         nfeatures = 3000,
                                         verbose = FALSE) %>%
@@ -705,7 +1092,7 @@ re_embed_no_low.qual <- FindVariableFeatures(re_embed_no_low.qual,
           verbose = FALSE)
 
 # plot the umap with old cluster numbers and colours
-DimPlot(re_embed_no_low.qual,
+DimPlot(re_embed_filtered,
         reduction = "umap",
         group.by = "original_clusters_mt_dbl",
         label = TRUE,
@@ -713,14 +1100,14 @@ DimPlot(re_embed_no_low.qual,
         ) +
   labs(
     title = "UMAP - new embedding (old clusters)",
-    caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24) old clusters"
+    caption = "Filtered: MT, doublets, low qual clusters & cells (old clusters)"
   ) +
   NoLegend()
-ggsave(filename = file.path(new_out_dir, "umap_filtered_mt_doublet_nFeature_top.low_quality.old_clusters.png"),
+ggsave(filename = file.path(new_out_dir, "umap.filtered.mt.doublet.nFeature_top.low_quality_clust_cell.old_clusters.png"),
        width = 8, height = 8)
 
 # plot the umap with old cluster numbers and colours
-DimPlot(re_embed_no_low.qual,
+DimPlot(re_embed_filtered,
         reduction = "umap",
         group.by = "seurat_clusters",
         label = TRUE,
@@ -728,14 +1115,14 @@ DimPlot(re_embed_no_low.qual,
         ) +
   labs(
     title = "UMAP - new embedding (new clusters)",
-    caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24) new clusters"
+    caption = "Filtered: MT, doublets, low qual clusters & cells (new clusters)"
   ) +
   NoLegend()
-ggsave(filename = file.path(new_out_dir, "umap_filtered_mt_doublet_nFeature_top.low_quality.new_clusters.png"),
+ggsave(filename = file.path(new_out_dir, "umap.filtered.mt.doublet.nFeature_top.low_quality_clust_cell.new_clusters.png"),
        width = 8, height = 8)
 
 # plot the umap with cluster numbers and colours
-DimPlot(re_embed_no_low.qual,
+DimPlot(re_embed_filtered,
         reduction = "umap",
         group.by = "sophie_celltype_clean",
         label = TRUE,
@@ -743,14 +1130,14 @@ DimPlot(re_embed_no_low.qual,
         ) +
   labs(
     title = "UMAP - new embedding (Sophie anno)",
-    caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24) Sophie anno."
+    caption = "Filtered: MT, doublets, low qual clusters & cells (Sophie Anno)"
   )
-ggsave(filename = file.path(new_out_dir, "umap_filtered_mt_doublet_nFeature_top.low_quality.sophie_anno.png"),
+ggsave(filename = file.path(new_out_dir, "umap.filtered.mt.doublet.nFeature_top.low_quality_clust_cell.sophie_anno.png"),
        width = 8, height = 8)
 
 # let's save here and reload in a new session
-write_rds(x = re_embed_no_low.qual,
-          file = file.path(new_out_dir, "filtered_mt_doublet_nFeature_top.low_quality.rds"))
+write_rds(x = re_embed_filtered,
+          file = file.path(new_out_dir, "re_embed_filtered_no_multi_fail.rds"))
 
 ```
 
@@ -758,36 +1145,8 @@ write_rds(x = re_embed_no_low.qual,
 
 ```{r}
 
-# UMAP by new clusters
-p1 <- DimPlot(re_embed_no_low.qual, 
-              reduction = "umap",
-              group.by = "seurat_clusters",
-              label = TRUE,
-              label.size = 4) +
-  NoLegend() +
-    labs(
-    title = "UMAP - New Clusters (after low quality removal)",
-    caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24)"
-  )
-
-# UMAP by Sophie's cell type annotations
-p2 <- DimPlot(re_embed_no_low.qual, 
-              reduction = "umap",
-              group.by = "sophie_celltype_clean",
-              label = TRUE,
-              label.size = 3,
-              repel = TRUE) +
-    NoLegend() +
-    labs(
-    title = "UMAP - Sophie's Cell Type Annotations (after low quality removal)",
-    caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24)"
-  )
-
-# Display plots
-p1 + p2
-
 # Check QC metrics in the new embedding
-p3 <- FeaturePlot(re_embed_no_low.qual, 
+p3 <- FeaturePlot(re_embed_filtered, 
                   features = c("nCount_RNA", "nFeature_RNA", 
                                "percent.mt", "percent.hb",
                                "featcount_dist", "pct_counts_in_top_20_features"),
@@ -801,7 +1160,7 @@ p3 <- FeaturePlot(re_embed_no_low.qual,
     )
 print(p3)
 ggsave(p3, 
-       filename = file.path(new_out_dir, "filtered_mt_doublet_nFeature_top.low_quality_QCmetrics.png"),
+       filename = file.path(new_out_dir, "filtered.mt.doublet.nFeature_top.low_quality.QCmetrics.png"),
        width = 12,
        height = 8)
 
