@@ -67,7 +67,7 @@ new_out_dir <- file.path(out_dir, "05-secondary_QC")
 - This object has been filtered for doublets, >10% MT genes and low quality clusters have been removed
 
 ```{r}
-re_embed_no_low.qual <- readRDS(file = file.path(new_out_dir, "filtered_mt_doublet_nFeature_top.low_quality.rds"))
+re_embed_no_low.qual <- readRDS(file = file.path(new_out_dir, "re_embed_filtered_no_multi_fail.rds"))
 ```
 
 ## Plot cell-type marker genes
@@ -328,7 +328,7 @@ vsmc_c3 <- c("Sfrp2", "Osr1", "Bgn", "Cd34")
 vsmc_c6 <- c("Rbp1", "Fbln5", "Gja4")
 vsmc_c12 <- c("Emcn", "Klhl4", "Gatm", "Akap12")
 
-platelet_genes <- c("Nrgn", "Pf4", "Ppbp", "Myl9", "Gng11")
+platelet_genes <- c("Nrgn", "Pf4", "Ppbp")
   
 rbc_genes <- c("Hba-a1", "Hba-a2", "Hba-x", "Hbb-bh1", "Hbb-bs", "Hbb-bt", "Hbq1b")
 ```
@@ -621,7 +621,7 @@ DotPlot(re_embed_no_low.qual,
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     ) + 
   NoLegend() +
-  scale_y_discrete(limits = c("0", "1", "2", "3", "9", "11", "12", "4", "8", "14", "25", "5", "13", "18", "20", "23", "6", "17", "7", "10", "16", "19", "15", "21", "22", "24"))  # any custom order
+  scale_y_discrete(limits = c("0", "1", "2", "11", "4", "3", "8", "25", "15", "9", "12", "18", "23", "21", "7", "17", "5", "16", "19", "14", "20", "22", "24"))  # any custom order
 
 ```
 
