@@ -45,6 +45,18 @@ library(pheatmap)
 # User defined functions
 
 ```{r}
+# Helper function (put this at the top of your script)
+save_if <- function(plot_object, filename, width, height, ...) {
+  if (save_plots) {
+    ggsave(plot = plot_object,
+           filename = filename,
+           width = width,
+           height = height,
+           dpi = 300)
+  }
+}
+# change to TRUE to save plots
+save_plots <- FALSE
 
 ```
 
@@ -95,7 +107,7 @@ macrophage_markers <- FeaturePlot(
     plot.title = element_text(hjust = 0.5, face = "bold"),
     plot.subtitle = element_text(hjust = 0.5)
   )
-ggsave(macrophage_markers, 
+save_if(macrophage_markers, 
        filename = file.path(new_out_dir, "05-umap.macrophage_genes.png"),
        width = 16,
        height = 8)
@@ -123,7 +135,7 @@ epicardial_markers <- FeaturePlot(
     plot.title = element_text(hjust = 0.5, face = "bold"),
     plot.subtitle = element_text(hjust = 0.5)
   )
-ggsave(epicardial_markers, 
+save_if(epicardial_markers, 
        filename = file.path(new_out_dir, "05-umap.epicardial_genes.png"),
        width = 16,
        height = 8)
@@ -151,7 +163,7 @@ mesenchymal_markers <- FeaturePlot(
     plot.title = element_text(hjust = 0.5, face = "bold"),
     plot.subtitle = element_text(hjust = 0.5)
   )
-ggsave(mesenchymal_markers, 
+save_if(mesenchymal_markers, 
        filename = file.path(new_out_dir, "umap.mesenchymal_genes.png"),
        width = 16,
        height = 8)
@@ -179,7 +191,7 @@ myocardial_markers <- FeaturePlot(
     plot.title = element_text(hjust = 0.5, face = "bold"),
     plot.subtitle = element_text(hjust = 0.5)
   )
-ggsave(myocardial_markers, 
+save_if(myocardial_markers, 
        filename = file.path(new_out_dir, "05-umap.myocardial_genes.png"),
        width = 16,
        height = 8)
@@ -207,7 +219,7 @@ endocardial_markers <- FeaturePlot(
     plot.title = element_text(hjust = 0.5, face = "bold"),
     plot.subtitle = element_text(hjust = 0.5)
   )
-ggsave(endocardial_markers, 
+save_if(endocardial_markers, 
        filename = file.path(new_out_dir, "05-umap.endocardial_genes.png"),
        width = 16,
        height = 8)
@@ -235,7 +247,7 @@ vsmc_markers <- FeaturePlot(
     plot.title = element_text(hjust = 0.5, face = "bold"),
     plot.subtitle = element_text(hjust = 0.5)
   )
-ggsave(vsmc_markers, 
+save_if(vsmc_markers, 
        filename = file.path(new_out_dir, "05-umap.vsmc_genes.png"),
        width = 16,
        height = 8)
@@ -263,7 +275,7 @@ rbc_markers <- FeaturePlot(
     plot.title = element_text(hjust = 0.5, face = "bold"),
     plot.subtitle = element_text(hjust = 0.5)
   )
-ggsave(rbc_markers, 
+save_if(rbc_markers, 
        filename = file.path(new_out_dir, "05-umap.rbc_genes.png"),
        width = 16,
        height = 8)
@@ -291,7 +303,7 @@ platelet_markers <- FeaturePlot(
     plot.title = element_text(hjust = 0.5, face = "bold"),
     plot.subtitle = element_text(hjust = 0.5)
   )
-ggsave(platelet_markers, 
+save_if(platelet_markers, 
        filename = file.path(new_out_dir, "05-umap.platelet_genes.png"),
        width = 16,
        height = 8)
@@ -348,7 +360,7 @@ dotPlot_original_clusters_macrophage <- DotPlot(re_embed_no_low.qual,
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
-ggsave(dotPlot_original_clusters_macrophage,
+save_if(dotPlot_original_clusters_macrophage,
        filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_original_clusters_macrophage.png"),
        width = 16,
        height = 6)
@@ -367,7 +379,7 @@ dotPlot_original_clusters_epicardial <- DotPlot(re_embed_no_low.qual,
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
-ggsave(dotPlot_original_clusters_epicardial,
+save_if(dotPlot_original_clusters_epicardial,
        filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_original_clusters_epicardial.png"),
        width = 16,
        height = 6)
@@ -384,7 +396,7 @@ dotPlot_epicardial_plus <- DotPlot(re_embed_no_low.qual,
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
-ggsave(dotPlot_epicardial_plus,
+save_if(dotPlot_epicardial_plus,
        filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_epicardial_plus.png"),
        width = 16,
        height = 6)
@@ -403,7 +415,7 @@ dotPlot_original_clusters_endocardial <- DotPlot(re_embed_no_low.qual,
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
-ggsave(dotPlot_original_clusters_endocardial,
+save_if(dotPlot_original_clusters_endocardial,
        filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_original_clusters_endocardial.png"),
        width = 16,
        height = 6)
@@ -420,7 +432,7 @@ dotPlot_endocardial_plus <- DotPlot(re_embed_no_low.qual,
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
-ggsave(dotPlot_endocardial_plus,
+save_if(dotPlot_endocardial_plus,
        filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_endocardial_plus.png"),
        width = 16,
        height = 6)
@@ -439,7 +451,7 @@ dotPlot_original_clusters_myocardial <- DotPlot(re_embed_no_low.qual,
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
-ggsave(dotPlot_original_clusters_myocardial,
+save_if(dotPlot_original_clusters_myocardial,
        filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_original_clusters_myocardial.png"),
        width = 16,
        height = 6)
@@ -456,7 +468,7 @@ dotPlot_myocardial_plus <- DotPlot(re_embed_no_low.qual,
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
-ggsave(dotPlot_myocardial_plus,
+save_if(dotPlot_myocardial_plus,
        filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_myocardial_plus.png"),
        width = 16,
        height = 7)
@@ -475,7 +487,7 @@ dotPlot_original_clusters_mesenchymal <- DotPlot(re_embed_no_low.qual,
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
-ggsave(dotPlot_original_clusters_mesenchymal,
+save_if(dotPlot_original_clusters_mesenchymal,
        filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_original_clusters_mesenchymal.png"),
        width = 16,
        height = 6)
@@ -492,7 +504,7 @@ dotPlot_mesenchymal_plus <- DotPlot(re_embed_no_low.qual,
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
-ggsave(dotPlot_mesenchymal_plus,
+save_if(dotPlot_mesenchymal_plus,
        filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_mesenchymal_plus.png"),
        width = 16,
        height = 7)
@@ -511,7 +523,7 @@ dotPlot_original_clusters_vsmc <- DotPlot(re_embed_no_low.qual,
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
-ggsave(dotPlot_original_clusters_vsmc,
+save_if(dotPlot_original_clusters_vsmc,
        filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_original_clusters_vsmc.png"),
        width = 16,
        height = 6)
@@ -528,7 +540,7 @@ dotPlot_vsmc_plus <- DotPlot(re_embed_no_low.qual,
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
-ggsave(dotPlot_vsmc_plus,
+save_if(dotPlot_vsmc_plus,
        filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_vsmc_plus.png"),
        width = 16,
        height = 7)
@@ -548,7 +560,7 @@ dotPlot_original_clusters_rbc <- DotPlot(re_embed_no_low.qual,
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
-ggsave(dotPlot_original_clusters_rbc,
+save_if(dotPlot_original_clusters_rbc,
        filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_original_clusters_rbc.png"),
        width = 16,
        height = 6)
@@ -568,7 +580,7 @@ dotPlot_original_clusters_platelet <- DotPlot(re_embed_no_low.qual,
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
    
-ggsave(dotPlot_original_clusters_platelet,
+save_if(dotPlot_original_clusters_platelet,
        filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_original_clusters_platelet.png"),
        width = 16,
        height = 6)
@@ -598,30 +610,35 @@ dotPlot_markers <- DotPlot(re_embed_no_low.qual,
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     )
 print(dotPlot_markers)   
-ggsave(dotPlot_markers,
+save_if(dotPlot_markers,
        filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_markers.png"),
        width = 16,
        height = 8)
 
-DotPlot(re_embed_no_low.qual,
-        features = c(mesenchymal_genes,
-                     myocardial_genes,
-                     endocardial_genes,
-                     epicardial_genes,
-                     vsmc_genes,
-                     rbc_genes,
-                     macrophage_genes,
-                     platelet_genes
-                     ),
-        dot.scale = 6,
-        cols = c("blue", "red")) +
-    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
-    labs(
+dotPlot_markers_ordered <- DotPlot(re_embed_no_low.qual,
+                                   features = c(mesenchymal_genes,
+                                                myocardial_genes,
+                                                endocardial_genes,
+                                                epicardial_genes,
+                                                vsmc_genes,
+                                                rbc_genes,
+                                                macrophage_genes,
+                                                platelet_genes
+                                                ),
+                                   scale = TRUE,
+                                   dot.scale = 6,
+                                   cols = c("blue", "red")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  labs(
     title = "Level 1 lineage Genes",
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     ) + 
   NoLegend() +
-  scale_y_discrete(limits = c("0", "1", "2", "11", "4", "3", "8", "25", "15", "9", "12", "18", "23", "21", "7", "17", "5", "16", "19", "14", "20", "22", "24"))  # any custom order
+  scale_y_discrete(limits = c("0", "1", "2", "11", "4", "3", "8", "25", "15", "9", "12", "18", "23", "21", "7", "17", "5", "16", "19", "14", "20", "22", "24"))  # custom order to best align clusters of common cell types
+save_if(dotPlot_markers_ordered,
+       filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_markers_ordered.png"),
+       width = 16,
+       height = 8)
 
 ```
 
