@@ -1,0 +1,162 @@
+---
+  title: "06-cluster_marker_genes"
+author: "Melanie Smith"
+date: "2026-01-21"
+output: html_document
+---
+  
+  ```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+
+library(SingleCellExperiment)
+library(biomaRt)
+library(scuttle)
+
+# additional plotting functions
+library(patchwork)
+library(pheatmap)
+```
+
+# Set project directories and file paths
+
+```{r}
+project_name <- "20251104_sophieWiszniak_ncc_pa"
+
+base_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak"
+project_repo_dir <- file.path(base_repo_dir, project_name)
+filtered_dir <- file.path(project_repo_dir, "outDir", "05-secondary_QC")
+out_dir <- file.path(project_repo_dir, "outDir", "06-cluster_marker_genes")
+# Create directory if it doesn't exist
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir, recursive = TRUE)
+}
+```
+
+# Load required objects
+- This object has been filtered for doublets and >10% MT genes
+
+```{r}
+# load seurat object
+re_embed_no_low.qual <- readRDS(file = file.path(filtered_dir, "re_embed_filtered_no_multi_fail.rds"))
+# ensure suerat clusters the active identities
+Idents(re_embed_no_low.qual) <- "seurat_clusters"
+```
+
+# Quick UMAP for orientation
+
+```{r}
+DimPlot(re_embed_no_low.qual,
+        group.by = "seurat_clusters",
+        label = TRUE,
+        repel = TRUE,
+        label.size = 3) &
+  plot_annotation(
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality cells"
+  ) +
+  NoLegend()
+
+```
+
+# Identify marker genes
+## Seurat Cluster level
+
+```{r}
+# Find markers for all clusters (positive only, Wilcoxon test is default and fine)
+cluster_markers <- FindAllMarkers(
+  re_embed_no_low.qual,
+  only.pos = TRUE,          # only upregulated markers (most useful for annotation)
+  min.pct = 0.25,           # gene detected in at least 25% of cells in the cluster
+  logfc.threshold = 0.25,   # minimum logFC of 0.25
+  test.use = "wilcox"       # or "MAST" / "DESeq2" if you prefer
+)
+
+# Save top markers per cluster
+top10_markers <- cluster_markers %>%
+  group_by(cluster) %>%
+  slice_max(n = 10, order_by = avg_log2FC)
+
+# add some filtering
+top10_filtered <- cluster_markers %>%
+  group_by(cluster) %>%
+  filter(pct.1 >= 0.25) %>%                  # expressed in ≥25% of cluster
+  filter(avg_log2FC > 0.5) %>%               # stronger fold change
+  slice_max(avg_log2FC, n = 10)               # top 10 after filtering
+# 
+# # only cluster 11
+# top10_markers_cluster11 <- subset(top10_markers, cluster %in% 11)
+# # Write to file
+# write.csv(top10_markers, file = file.path(out_dir, "top10_cluster_markers.csv"))
+
+# Visualise (DotPlot is great for annotation)
+DotPlot(re_embed_no_low.qual,
+        features = unique(top10_markers$gene)) + 
+  NoLegend() +
+  scale_y_discrete(limits = c("0", "1", "2", "11", "4", "3", "8", "25", "15", "9", "12", "18", "23", "21", "7", "17", "5", "16", "19", "14", "20", "22", "24")) 
+  RotatedAxis()
+# 
+# # Get average expression per cluster
+# avg_expr_cluster <- AverageExpression(re_embed_no_low.qual, assays = "RNA", slot = "data")$RNA
+# 
+# # Merge with markers and filter
+# cluster_markers <- cluster_markers %>%
+#   mutate(avg_expr_cluster = avg_expr[gene, as.character(cluster)])
+# 
+# top10_high_expr <- cluster_markers %>%
+#   group_by(cluster) %>%
+#   filter(avg_expr_cluster > 1) %>%   # e.g., require some minimum average
+#   slice_max(avg_log2FC, n = 10)
+```
+
+## Sophie cell-type level
+```{r}
+# ensure sophie_celltype_clean is the active identity
+Idents(re_embed_no_low.qual) <- "sophie_celltype_clean"
+# Find markers for all clusters (positive only, Wilcoxon test is default and fine)
+cell_type_markers <- FindAllMarkers(
+  re_embed_no_low.qual,
+  only.pos = TRUE,          # only upregulated markers (most useful for annotation)
+  min.pct = 0.25,           # gene detected in at least 25% of cells in the cluster
+  logfc.threshold = 0.25,   # minimum logFC of 0.25
+  test.use = "wilcox"       # or "MAST" / "DESeq2" if you prefer
+)
+
+# Save top markers per cluster
+top10_celltype_markers <- cell_type_markers %>%
+  group_by(cluster) %>%
+  slice_max(n = 10, order_by = avg_log2FC)
+
+# Visualise (DotPlot is great for annotation)
+DotPlot(re_embed_no_low.qual,
+        scale = TRUE,
+        features = unique(top10_celltype_markers$gene))
+
+```
+
+
+
+
