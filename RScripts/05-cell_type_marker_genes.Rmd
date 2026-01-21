@@ -642,7 +642,21 @@ save_if(dotPlot_markers_ordered,
 
 ```
 
+# Dimplots
+
 ```{r}
+
+DimPlot(re_embed_no_low.qual,
+        group.by = "seurat_clusters",
+        label = TRUE,
+        repel = TRUE,
+        # cols = cluster_colours,
+        pt.size = 0.4,
+        label.size = 6) +
+  NoLegend() +   # remove legend if too many clusters
+  labs(title = "Seurat clusters",
+       caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality")
+
 
 DimPlot(re_embed_no_low.qual,
         group.by = "sophie_celltype_clean",
@@ -651,24 +665,56 @@ DimPlot(re_embed_no_low.qual,
         # cols = cluster_colours,
         pt.size = 0.4) +
   NoLegend() +   # remove legend if too many clusters
-  labs(title = "Sophie's manual cell type annotation transferred via joe_barcode",
+  labs(title = "Sophie's manual cell type annotation",
        caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality")
 ggsave(filename = file.path(out_dir, "04-filtering", "umap_sohieAnnotation_sophieCluster.png"),
        width = 10,
        height = 8)
 
-DimPlot(re_embed_no_low.qual,
-        group.by = "seurat_clusters",
-        label = TRUE,
-        repel = TRUE,
-        # cols = cluster_colours,
-        pt.size = 0.4) +
-  NoLegend() +   # remove legend if too many clusters
-  labs(title = "Seurat clusters",
-       caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality")
-
-
-
 
 ```
 
+# Featureplots
+
+```{r}
+FeaturePlot(
+  object = re_embed_no_low.qual,
+  features = vsmc_genes,
+  ncol = 2,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "VSMC lineage markers",
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+
+
+FeaturePlot(
+  object = re_embed_no_low.qual,
+  features = c("Upk3b", "Upk1b"),
+  ncol = 2,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "Epicardial lineage markers",
+    caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
