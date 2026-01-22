@@ -40,6 +40,7 @@ library(scuttle)
 # additional plotting functions
 library(patchwork)
 library(pheatmap)
+library(ggokabeito) # colour blind palette
 ```
 
 # User defined functions

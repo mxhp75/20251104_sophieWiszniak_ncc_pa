@@ -1,0 +1,413 @@
+---
+title: "06-cluster_investigations"
+author: "Melanie Smith"
+date: "2026-01-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+
+library(SingleCellExperiment)
+library(biomaRt)
+library(scuttle)
+
+# additional plotting functions
+library(patchwork)
+library(pheatmap)
+```
+
+# User defined functions
+
+```{r}
+# Helper function (put this at the top of your script)
+save_if <- function(plot_object, filename, width, height, ...) {
+  if (save_plots) {
+    ggsave(plot = plot_object,
+           filename = filename,
+           width = width,
+           height = height,
+           dpi = 300)
+  }
+}
+# change to TRUE to save plots
+save_plots <- TRUE
+```
+
+# Set project directories and file paths
+
+```{r}
+project_name <- "20251104_sophieWiszniak_ncc_pa"
+
+base_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak"
+project_repo_dir <- file.path(base_repo_dir, project_name)
+out_dir <- file.path(project_repo_dir, "outDir", "06-cluster_marker_genes")
+```
+
+# Load required objects
+- This object has been filtered for doublets, >10% MT genes and low quality clusters have been removed
+
+```{r}
+re_embed_intersting_cells_0.6 <- readRDS(file = file.path(out_dir, "re_embed_intersting_cells_0.6.rds"))
+# Ensure seurat_custers is the active identity
+Ident(re_embed_intersting_cells_0.6) <- "seurat_clusters"
+```
+
+```{r}
+# plot the umap with old cluster numbers and colours
+umap_oldCluster <- DimPlot(re_embed_intersting_cells_0.6,
+                           reduction = "umap",
+                           group.by = "seurat_clusters_mt_dbl_quality",
+                           label = TRUE,
+                           label.size = 6
+) +
+  labs(
+    title = "UMAP - new embedding (old clusters)",
+    caption = "Filtered: Interesting cells, cluster resolution 0.6 (old clusters)"
+  ) +
+  NoLegend()
+
+# plot the umap with new cluster numbers and colours
+umap_newCluster <- DimPlot(re_embed_intersting_cells_0.6,
+                           reduction = "umap",
+                           group.by = "seurat_clusters",
+                           label = TRUE,
+                           label.size = 6,
+                           cols = viridis::viridis(22, option = "turbo")
+                           ) +
+  labs(
+    title = "UMAP - new embedding (new clusters)",
+    caption = "Filtered: Interesting cells, cluster resolution 0.6 (new clusters)"
+  ) +
+  NoLegend()
+save_if(umap_newCluster,
+        filename = file.path(out_dir, "06-umap.re_embed_interesting_cells.new_clusters.0.6.png"),
+        width = 8,
+        height = 8)
+
+# plot the umap with new cluster numbers and colours
+umap_sophieCluster <- DimPlot(re_embed_intersting_cells_0.6,
+                              reduction = "umap",
+                              group.by = "sophie_celltype_clean",
+                              label = TRUE,
+                              label.size = 6) +
+  labs(
+    title = "UMAP - new embedding (Sophie anno)",
+    caption = "Filtered: Interesting cells, cluster resolution 0.6 (Sophie Anno)"
+  )  +
+  scale_color_okabe_ito()
+save_if(umap_sophieCluster,
+        filename = file.path(out_dir, "06-umap.re_embed_intersting_cells.sophie_anno.0.6.png"),
+        width = 8,
+        height = 8)
+
+FeaturePlot(re_embed_intersting_cells_0.6,
+            features = c("G2M.Score", "S.Score"),
+            reduction = "umap",
+            label = TRUE,
+            label.size = 6) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+    )
+
+FeaturePlot(re_embed_intersting_cells_0.6,
+            features = c("num_qc_fails"),
+            reduction = "umap",
+            label = TRUE,
+            label.size = 6) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  )
+
+DimPlot(re_embed_intersting_cells_0.6,
+        reduction = "umap",
+        split.by = "orig.ident",
+        label = TRUE,
+        label.size = 6,
+        cols = viridis::viridis(18, option = "turbo")
+        )
+```
+
+# Explore clusters 10 and 17
+
+```{r}
+cluster_17 <- subset(re_embed_intersting_cells_0.6@meta.data, seurat_clusters %in% 17)
+
+# make sure seurat clusters are the current identity
+Idents(re_embed_intersting_cells_0.6) <- "seurat_clusters"
+
+DimPlot(re_embed_intersting_cells_0.6,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = FALSE,
+        repel = TRUE,
+        
+        # Highlight only cluster 17
+        cells.highlight = WhichCells(re_embed_intersting_cells_0.6, idents = "17"),
+        cols.highlight = 'red',
+        cols = "grey80",
+        sizes.highlight = 1.2,
+        pt.size = 0.6) +
+  NoLegend() +
+  labs(title = "UMAP: Cluster 17",
+       caption = "Filtered: Interesting cells")
+
+# Make sure the active identity is your clustering
+Idents(re_embed_intersting_cells_0.6) <- "seurat_clusters"
+
+# Find markers: cluster 10 vs cluster 17 only
+markers_10_vs_17 <- FindMarkers(
+  re_embed_intersting_cells_0.6,
+  ident.1 = "10",                # positive markers = upregulated in 10
+  ident.2 = "17",                # compared against 17
+  test.use = "wilcox",           # or "MAST", "LR", etc.
+  min.pct = 0.25,                # genes detected in ≥25% of cells in at least one group
+  logfc.threshold = 0.25,        # minimum log2 fold-change
+  verbose = FALSE
+)
+
+# Add gene name as column (makes downstream easier)
+markers_10_vs_17$gene <- rownames(markers_10_vs_17)
+
+# Optional: filter to significant & sort by logFC or p-val
+markers_10_vs_17_sig <- markers_10_vs_17 %>%
+  filter(p_val_adj < 0.05) %>%
+  arrange(desc(avg_log2FC))         # highest fold-change in 10 first
+
+# View top 10
+head(markers_10_vs_17_sig, 10)
+
+# Get top 10 genes upregulated in cluster 10
+top10_10vs17 <- markers_10_vs_17 %>%
+  filter(avg_log2FC > 0) %>%          # upregulated in 10
+  arrange(desc(avg_log2FC)) %>%
+  slice_head(n = 10) %>%
+  pull(gene)
+
+# Or top 10 upregulated in 17 vs 10 (reverse)
+top10_17vs10 <- markers_10_vs_17 %>%
+  filter(avg_log2FC < 0) %>%
+  arrange(desc(abs(avg_log2FC))) %>%
+  slice_head(n = 10) %>%
+  pull(gene)
+
+# Now make the DotPlot using only these genes
+DotPlot(re_embed_intersting_cells_0.6,
+        features = top10_10vs17,          # or top10_17vs10
+        group.by = "seurat_clusters",
+        dot.scale = 8,
+        cols = c("lightgrey", "red"),     # low to high expression
+        col.min = -2, col.max = 2) +      # adjust scale if needed
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  labs(title = "Top markers: Cluster 10 vs 17",
+       subtitle = "Upregulated in cluster 10",
+       y = "Cluster") +
+  NoLegend()   # optional
+
+top_markers_both <- c(
+  markers_10_vs_17 %>% filter(avg_log2FC > 0) %>% arrange(desc(avg_log2FC)) %>% slice_head(n = 8) %>% pull(gene),
+  markers_10_vs_17 %>% filter(avg_log2FC < 0) %>% arrange(desc(abs(avg_log2FC))) %>% slice_head(n = 8) %>% pull(gene)
+) %>% unique()
+
+DotPlot(re_embed_intersting_cells_0.6,
+        features = top_markers_both,
+        group.by = "seurat_clusters",
+        dot.scale = 7) +
+  RotatedAxis() +
+  labs(title = "Top markers: Cluster 10 vs 17 (both directions)")
+```
+
+# Explore clusters 7 and 14
+
+```{r}
+cluster_7 <- subset(re_embed_intersting_cells_0.6@meta.data, seurat_clusters %in% 7)
+cluster_14 <- subset(re_embed_intersting_cells_0.6@meta.data, seurat_clusters %in% 14)
+
+DimPlot(re_embed_intersting_cells_0.6,
+        reduction = "umap",
+        split.by = "orig.ident",
+        label = TRUE,
+        label.size = 6,
+        cols = viridis::viridis(18, option = "turbo")
+        )
+
+# make sure seurat clusters are the current identity
+Idents(re_embed_intersting_cells_0.6) <- "seurat_clusters"
+
+DimPlot(re_embed_intersting_cells_0.6,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = FALSE,
+        repel = TRUE,
+        
+        # Highlight only cluster 17
+        cells.highlight = WhichCells(re_embed_intersting_cells_0.6,
+                                     idents = c("7", "14")),
+        cols.highlight = 'red',
+        cols = "grey80",
+        sizes.highlight = 1.2,
+        pt.size = 0.6) +
+  NoLegend() +
+  labs(title = "UMAP: Cluster 7 & 14",
+       caption = "Filtered: Interesting cells")
+
+
+
+# Make sure the active identity is your clustering
+Idents(re_embed_intersting_cells_0.6) <- "seurat_clusters"
+
+# Find markers: cluster 7 vs cluster 14 only
+markers_7_vs_14 <- FindMarkers(
+  re_embed_intersting_cells_0.6,
+  ident.1 = "7",                # positive markers = upregulated in 7
+  ident.2 = "14",                # compared against 14
+  test.use = "wilcox",           # or "MAST", "LR", etc.
+  min.pct = 0.25,                # genes detected in ≥25% of cells in at least one group
+  logfc.threshold = 0.25,        # minimum log2 fold-change
+  verbose = FALSE
+)
+
+# Add gene name as column (makes downstream easier)
+markers_7_vs_14$gene <- rownames(markers_7_vs_14)
+
+# Optional: filter to significant & sort by logFC or p-val
+markers_7_vs_14_sig <- markers_7_vs_14 %>%
+  filter(p_val_adj < 0.05) %>%
+  arrange(desc(avg_log2FC))         # highest fold-change in 10 first
+
+# View top 10
+head(markers_7_vs_14_sig, 10)
+
+# Get top 10 genes upregulated in cluster 10
+top10_7vs14 <- markers_7_vs_14 %>%
+  filter(avg_log2FC > 0) %>%          # upregulated in 10
+  arrange(desc(avg_log2FC)) %>%
+  slice_head(n = 10) %>%
+  pull(gene)
+
+# Or top 10 upregulated in 17 vs 10 (reverse)
+top10_7vs14 <- markers_7_vs_14 %>%
+  filter(avg_log2FC < 0) %>%
+  arrange(desc(abs(avg_log2FC))) %>%
+  slice_head(n = 10) %>%
+  pull(gene)
+
+# Now make the DotPlot using only these genes
+DotPlot(re_embed_intersting_cells_0.6,
+        features = top10_7vs14,          # or top10_7vs14
+        group.by = "seurat_clusters",
+        dot.scale = 8,
+        cols = c("lightgrey", "red"),     # low to high expression
+        col.min = -2, col.max = 2) +      # adjust scale if needed
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  labs(title = "Top markers: Cluster 7 vs 14",
+       subtitle = "Upregulated in cluster 7",
+       y = "Cluster") +
+  NoLegend()   # optional
+
+top_markers_both <- c(
+  markers_7_vs_14 %>% filter(avg_log2FC > 0) %>% arrange(desc(avg_log2FC)) %>% slice_head(n = 8) %>% pull(gene),
+  markers_7_vs_14 %>% filter(avg_log2FC < 0) %>% arrange(desc(abs(avg_log2FC))) %>% slice_head(n = 8) %>% pull(gene)
+) %>% unique()
+
+DotPlot(re_embed_intersting_cells_0.6,
+        features = top_markers_both,
+        group.by = "seurat_clusters",
+        dot.scale = 7) +
+  RotatedAxis() +
+  labs(title = "Top markers: Cluster 7 vs 14 (both directions)")
+```
+
+# Rename filtered and uncertain cells
+
+```{r}
+
+# How many cells are we talking about here?
+dim(subset(re_embed_intersting_cells_0.6@meta.data, sophie_celltype_clean == "filtered"))
+# [1]  2 53
+dim(subset(re_embed_intersting_cells_0.6@meta.data, sophie_celltype_clean == "uncertain"))
+# [1]  1 53
+
+# save the new seurat object
+write_rds(re_embed_intersting_cells_0.6,
+      file.path(out_dir, "re_embed_interesting_0.6_rename.rds"))
+
+# make sure Sophie's clusters are the current identity
+Idents(re_embed_intersting_cells_0.6) <- "sophie_celltype_clean"
+
+DimPlot(re_embed_intersting_cells_0.6,
+        reduction = "umap",
+        group.by = "sophie_celltype_clean",
+        label = FALSE,
+        repel = TRUE,
+        cells.highlight = WhichCells(re_embed_intersting_cells_0.6, idents = "filtered"),
+        cols.highlight = 'red',
+        cols = "grey80",
+        sizes.highlight = 1.2,
+        pt.size = 0.6) +
+  NoLegend() +
+  labs(title = "UMAP: 'filtered'only",
+       caption = "Filtered: Interesting cells")
+
+# rename the 2 cells currently annotated as "filtered" to "VSMC"
+re_embed_intersting_cells_0.6@meta.data <- re_embed_intersting_cells_0.6@meta.data %>%
+  dplyr::mutate(
+    sophie_celltype_clean = if_else(
+      sophie_celltype_clean == "filtered",
+      "VSMC",
+      sophie_celltype_clean
+    )
+  )
+
+DimPlot(re_embed_intersting_cells_0.6,
+        reduction = "umap",
+        group.by = "sophie_celltype_clean",
+        label = FALSE,
+        repel = TRUE,
+        cells.highlight = WhichCells(re_embed_intersting_cells_0.6, idents = "uncertain"),
+        cols.highlight = 'red',
+        cols = "grey80",
+        sizes.highlight = 1.2,
+        pt.size = 0.6) +
+  NoLegend() +
+  labs(title = "UMAP: 'uncertain' only",
+       caption = "Filtered: Interesting cells")
+
+# rename the 1 cell currently annotated as "uncertain" to "Mesenchyme"
+re_embed_intersting_cells_0.6@meta.data <- re_embed_intersting_cells_0.6@meta.data %>%
+  dplyr::mutate(
+    sophie_celltype_clean = if_else(
+      sophie_celltype_clean == "uncertain",
+      "Mesenchyme",
+      sophie_celltype_clean
+    )
+  )
+```
+
