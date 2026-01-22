@@ -40,6 +40,7 @@ library(scuttle)
 # additional plotting functions
 library(patchwork)
 library(pheatmap)
+library(ggokabeito)
 ```
 
 # User defined functions
