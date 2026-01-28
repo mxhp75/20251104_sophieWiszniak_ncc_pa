@@ -74,14 +74,14 @@ out_dir <- file.path(project_repo_dir, "outDir", "06-cluster_marker_genes")
 - This object has been filtered for doublets, >10% MT genes and low quality clusters have been removed
 
 ```{r}
-re_embed_intersting_cells_0.6 <- readRDS(file = file.path(out_dir, "re_embed_intersting_cells_0.6.rds"))
+re_embed_interesting_cells_0.6 <- readRDS(file = file.path(out_dir, "re_embed_interesting_cells_0.6.rds"))
 # Ensure seurat_custers is the active identity
-Ident(re_embed_intersting_cells_0.6) <- "seurat_clusters"
+Idents(re_embed_interesting_cells_0.6) <- "seurat_clusters"
 ```
 
 ```{r}
 # plot the umap with old cluster numbers and colours
-umap_oldCluster <- DimPlot(re_embed_intersting_cells_0.6,
+umap_oldCluster <- DimPlot(re_embed_interesting_cells_0.6,
                            reduction = "umap",
                            group.by = "seurat_clusters_mt_dbl_quality",
                            label = TRUE,
@@ -94,7 +94,7 @@ umap_oldCluster <- DimPlot(re_embed_intersting_cells_0.6,
   NoLegend()
 
 # plot the umap with new cluster numbers and colours
-umap_newCluster <- DimPlot(re_embed_intersting_cells_0.6,
+umap_newCluster <- DimPlot(re_embed_interesting_cells_0.6,
                            reduction = "umap",
                            group.by = "seurat_clusters",
                            label = TRUE,
@@ -112,7 +112,7 @@ save_if(umap_newCluster,
         height = 8)
 
 # plot the umap with new cluster numbers and colours
-umap_sophieCluster <- DimPlot(re_embed_intersting_cells_0.6,
+umap_sophieCluster <- DimPlot(re_embed_interesting_cells_0.6,
                               reduction = "umap",
                               group.by = "sophie_celltype_clean",
                               label = TRUE,
@@ -123,11 +123,11 @@ umap_sophieCluster <- DimPlot(re_embed_intersting_cells_0.6,
   )  +
   scale_color_okabe_ito()
 save_if(umap_sophieCluster,
-        filename = file.path(out_dir, "06-umap.re_embed_intersting_cells.sophie_anno.0.6.png"),
+        filename = file.path(out_dir, "06-umap.re_embed_interesting_cells.sophie_anno.0.6.png"),
         width = 8,
         height = 8)
 
-FeaturePlot(re_embed_intersting_cells_0.6,
+FeaturePlot(re_embed_interesting_cells_0.6,
             features = c("G2M.Score", "S.Score"),
             reduction = "umap",
             label = TRUE,
@@ -137,7 +137,7 @@ FeaturePlot(re_embed_intersting_cells_0.6,
     name = "Expression"
     )
 
-FeaturePlot(re_embed_intersting_cells_0.6,
+FeaturePlot(re_embed_interesting_cells_0.6,
             features = c("num_qc_fails"),
             reduction = "umap",
             label = TRUE,
@@ -147,31 +147,32 @@ FeaturePlot(re_embed_intersting_cells_0.6,
     name = "Expression"
   )
 
-DimPlot(re_embed_intersting_cells_0.6,
+DimPlot(re_embed_interesting_cells_0.6,
         reduction = "umap",
         split.by = "orig.ident",
         label = TRUE,
         label.size = 6,
         cols = viridis::viridis(18, option = "turbo")
-        )
+        ) +
+  NoLegend()
 ```
 
-# Explore clusters 10 and 17
+# Explore clusters 9 and 17
 
 ```{r}
-cluster_17 <- subset(re_embed_intersting_cells_0.6@meta.data, seurat_clusters %in% 17)
+cluster_17 <- subset(re_embed_interesting_cells_0.6@meta.data, seurat_clusters %in% 17)
 
 # make sure seurat clusters are the current identity
-Idents(re_embed_intersting_cells_0.6) <- "seurat_clusters"
+Idents(re_embed_interesting_cells_0.6) <- "seurat_clusters"
 
-DimPlot(re_embed_intersting_cells_0.6,
+DimPlot(re_embed_interesting_cells_0.6,
         reduction = "umap",
         group.by = "seurat_clusters",
         label = FALSE,
         repel = TRUE,
         
         # Highlight only cluster 17
-        cells.highlight = WhichCells(re_embed_intersting_cells_0.6, idents = "17"),
+        cells.highlight = WhichCells(re_embed_interesting_cells_0.6, idents = "17"),
         cols.highlight = 'red',
         cols = "grey80",
         sizes.highlight = 1.2,
@@ -181,12 +182,12 @@ DimPlot(re_embed_intersting_cells_0.6,
        caption = "Filtered: Interesting cells")
 
 # Make sure the active identity is your clustering
-Idents(re_embed_intersting_cells_0.6) <- "seurat_clusters"
+Idents(re_embed_interesting_cells_0.6) <- "seurat_clusters"
 
-# Find markers: cluster 10 vs cluster 17 only
-markers_10_vs_17 <- FindMarkers(
-  re_embed_intersting_cells_0.6,
-  ident.1 = "10",                # positive markers = upregulated in 10
+# Find markers: cluster 9 vs cluster 17 only
+markers_9_vs_17 <- FindMarkers(
+  re_embed_interesting_cells_0.6,
+  ident.1 = "9",                # positive markers = upregulated in 9
   ident.2 = "17",                # compared against 17
   test.use = "wilcox",           # or "MAST", "LR", etc.
   min.pct = 0.25,                # genes detected in ≥25% of cells in at least one group
@@ -195,63 +196,63 @@ markers_10_vs_17 <- FindMarkers(
 )
 
 # Add gene name as column (makes downstream easier)
-markers_10_vs_17$gene <- rownames(markers_10_vs_17)
+markers_9_vs_17$gene <- rownames(markers_9_vs_17)
 
 # Optional: filter to significant & sort by logFC or p-val
-markers_10_vs_17_sig <- markers_10_vs_17 %>%
+markers_9_vs_17_sig <- markers_9_vs_17 %>%
   filter(p_val_adj < 0.05) %>%
-  arrange(desc(avg_log2FC))         # highest fold-change in 10 first
+  arrange(desc(avg_log2FC))         # highest fold-change in 9 first
 
 # View top 10
-head(markers_10_vs_17_sig, 10)
+head(markers_9_vs_17_sig, 10)
 
-# Get top 10 genes upregulated in cluster 10
-top10_10vs17 <- markers_10_vs_17 %>%
-  filter(avg_log2FC > 0) %>%          # upregulated in 10
+# Get top 10 genes upregulated in cluster 9
+top10_9vs17 <- markers_9_vs_17 %>%
+  filter(avg_log2FC > 0) %>%          # upregulated in 9
   arrange(desc(avg_log2FC)) %>%
   slice_head(n = 10) %>%
   pull(gene)
 
 # Or top 10 upregulated in 17 vs 10 (reverse)
-top10_17vs10 <- markers_10_vs_17 %>%
+top10_17vs9 <- markers_9_vs_17 %>%
   filter(avg_log2FC < 0) %>%
   arrange(desc(abs(avg_log2FC))) %>%
   slice_head(n = 10) %>%
   pull(gene)
 
 # Now make the DotPlot using only these genes
-DotPlot(re_embed_intersting_cells_0.6,
-        features = top10_10vs17,          # or top10_17vs10
+DotPlot(re_embed_interesting_cells_0.6,
+        features = top10_9vs17,          # or top9_17vs10
         group.by = "seurat_clusters",
         dot.scale = 8,
         cols = c("lightgrey", "red"),     # low to high expression
         col.min = -2, col.max = 2) +      # adjust scale if needed
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
-  labs(title = "Top markers: Cluster 10 vs 17",
-       subtitle = "Upregulated in cluster 10",
+  labs(title = "Top markers: Cluster 9 vs 17",
+       subtitle = "Upregulated in cluster 9",
        y = "Cluster") +
   NoLegend()   # optional
 
 top_markers_both <- c(
-  markers_10_vs_17 %>% filter(avg_log2FC > 0) %>% arrange(desc(avg_log2FC)) %>% slice_head(n = 8) %>% pull(gene),
-  markers_10_vs_17 %>% filter(avg_log2FC < 0) %>% arrange(desc(abs(avg_log2FC))) %>% slice_head(n = 8) %>% pull(gene)
+  markers_9_vs_17 %>% filter(avg_log2FC > 0) %>% arrange(desc(avg_log2FC)) %>% slice_head(n = 8) %>% pull(gene),
+  markers_9_vs_17 %>% filter(avg_log2FC < 0) %>% arrange(desc(abs(avg_log2FC))) %>% slice_head(n = 8) %>% pull(gene)
 ) %>% unique()
 
-DotPlot(re_embed_intersting_cells_0.6,
+DotPlot(re_embed_interesting_cells_0.6,
         features = top_markers_both,
         group.by = "seurat_clusters",
         dot.scale = 7) +
   RotatedAxis() +
-  labs(title = "Top markers: Cluster 10 vs 17 (both directions)")
+  labs(title = "Top markers: Cluster 9 vs 17 (both directions)")
 ```
 
 # Explore clusters 7 and 14
 
 ```{r}
-cluster_7 <- subset(re_embed_intersting_cells_0.6@meta.data, seurat_clusters %in% 7)
-cluster_14 <- subset(re_embed_intersting_cells_0.6@meta.data, seurat_clusters %in% 14)
+cluster_7 <- subset(re_embed_interesting_cells_0.6@meta.data, seurat_clusters %in% 7)
+cluster_14 <- subset(re_embed_interesting_cells_0.6@meta.data, seurat_clusters %in% 14)
 
-DimPlot(re_embed_intersting_cells_0.6,
+DimPlot(re_embed_interesting_cells_0.6,
         reduction = "umap",
         split.by = "orig.ident",
         label = TRUE,
@@ -260,16 +261,16 @@ DimPlot(re_embed_intersting_cells_0.6,
         )
 
 # make sure seurat clusters are the current identity
-Idents(re_embed_intersting_cells_0.6) <- "seurat_clusters"
+Idents(re_embed_interesting_cells_0.6) <- "seurat_clusters"
 
-DimPlot(re_embed_intersting_cells_0.6,
+DimPlot(re_embed_interesting_cells_0.6,
         reduction = "umap",
         group.by = "seurat_clusters",
         label = FALSE,
         repel = TRUE,
         
         # Highlight only cluster 17
-        cells.highlight = WhichCells(re_embed_intersting_cells_0.6,
+        cells.highlight = WhichCells(re_embed_interesting_cells_0.6,
                                      idents = c("7", "14")),
         cols.highlight = 'red',
         cols = "grey80",
@@ -282,11 +283,11 @@ DimPlot(re_embed_intersting_cells_0.6,
 
 
 # Make sure the active identity is your clustering
-Idents(re_embed_intersting_cells_0.6) <- "seurat_clusters"
+Idents(re_embed_interesting_cells_0.6) <- "seurat_clusters"
 
 # Find markers: cluster 7 vs cluster 14 only
 markers_7_vs_14 <- FindMarkers(
-  re_embed_intersting_cells_0.6,
+  re_embed_interesting_cells_0.6,
   ident.1 = "7",                # positive markers = upregulated in 7
   ident.2 = "14",                # compared against 14
   test.use = "wilcox",           # or "MAST", "LR", etc.
@@ -321,7 +322,7 @@ top10_7vs14 <- markers_7_vs_14 %>%
   pull(gene)
 
 # Now make the DotPlot using only these genes
-DotPlot(re_embed_intersting_cells_0.6,
+DotPlot(re_embed_interesting_cells_0.6,
         features = top10_7vs14,          # or top10_7vs14
         group.by = "seurat_clusters",
         dot.scale = 8,
@@ -338,7 +339,7 @@ top_markers_both <- c(
   markers_7_vs_14 %>% filter(avg_log2FC < 0) %>% arrange(desc(abs(avg_log2FC))) %>% slice_head(n = 8) %>% pull(gene)
 ) %>% unique()
 
-DotPlot(re_embed_intersting_cells_0.6,
+DotPlot(re_embed_interesting_cells_0.6,
         features = top_markers_both,
         group.by = "seurat_clusters",
         dot.scale = 7) +
@@ -351,24 +352,20 @@ DotPlot(re_embed_intersting_cells_0.6,
 ```{r}
 
 # How many cells are we talking about here?
-dim(subset(re_embed_intersting_cells_0.6@meta.data, sophie_celltype_clean == "filtered"))
+dim(subset(re_embed_interesting_cells_0.6@meta.data, sophie_celltype_clean == "filtered"))
 # [1]  2 53
-dim(subset(re_embed_intersting_cells_0.6@meta.data, sophie_celltype_clean == "uncertain"))
+dim(subset(re_embed_interesting_cells_0.6@meta.data, sophie_celltype_clean == "uncertain"))
 # [1]  1 53
 
-# save the new seurat object
-write_rds(re_embed_intersting_cells_0.6,
-      file.path(out_dir, "re_embed_interesting_0.6_rename.rds"))
-
 # make sure Sophie's clusters are the current identity
-Idents(re_embed_intersting_cells_0.6) <- "sophie_celltype_clean"
+Idents(re_embed_interesting_cells_0.6) <- "sophie_celltype_clean"
 
-DimPlot(re_embed_intersting_cells_0.6,
+DimPlot(re_embed_interesting_cells_0.6,
         reduction = "umap",
         group.by = "sophie_celltype_clean",
         label = FALSE,
         repel = TRUE,
-        cells.highlight = WhichCells(re_embed_intersting_cells_0.6, idents = "filtered"),
+        cells.highlight = WhichCells(re_embed_interesting_cells_0.6, idents = "filtered"),
         cols.highlight = 'red',
         cols = "grey80",
         sizes.highlight = 1.2,
@@ -378,7 +375,7 @@ DimPlot(re_embed_intersting_cells_0.6,
        caption = "Filtered: Interesting cells")
 
 # rename the 2 cells currently annotated as "filtered" to "VSMC"
-re_embed_intersting_cells_0.6@meta.data <- re_embed_intersting_cells_0.6@meta.data %>%
+re_embed_interesting_cells_0.6@meta.data <- re_embed_interesting_cells_0.6@meta.data %>%
   dplyr::mutate(
     sophie_celltype_clean = if_else(
       sophie_celltype_clean == "filtered",
@@ -387,12 +384,12 @@ re_embed_intersting_cells_0.6@meta.data <- re_embed_intersting_cells_0.6@meta.da
     )
   )
 
-DimPlot(re_embed_intersting_cells_0.6,
+DimPlot(re_embed_interesting_cells_0.6,
         reduction = "umap",
         group.by = "sophie_celltype_clean",
         label = FALSE,
         repel = TRUE,
-        cells.highlight = WhichCells(re_embed_intersting_cells_0.6, idents = "uncertain"),
+        cells.highlight = WhichCells(re_embed_interesting_cells_0.6, idents = "uncertain"),
         cols.highlight = 'red',
         cols = "grey80",
         sizes.highlight = 1.2,
@@ -402,7 +399,7 @@ DimPlot(re_embed_intersting_cells_0.6,
        caption = "Filtered: Interesting cells")
 
 # rename the 1 cell currently annotated as "uncertain" to "Mesenchyme"
-re_embed_intersting_cells_0.6@meta.data <- re_embed_intersting_cells_0.6@meta.data %>%
+re_embed_interesting_cells_0.6@meta.data <- re_embed_interesting_cells_0.6@meta.data %>%
   dplyr::mutate(
     sophie_celltype_clean = if_else(
       sophie_celltype_clean == "uncertain",
@@ -410,5 +407,9 @@ re_embed_intersting_cells_0.6@meta.data <- re_embed_intersting_cells_0.6@meta.da
       sophie_celltype_clean
     )
   )
+
+# save the new seurat object
+write_rds(re_embed_interesting_cells_0.6,
+      file.path(out_dir, "re_embed_interesting_0.6_rename.rds"))
 ```
 
