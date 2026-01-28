@@ -433,6 +433,6 @@ re_embed_interesting_cells_0.6 <- FindVariableFeatures(re_embed_interesting_cell
           verbose = FALSE)
 
 # let's save here and reload in a new session
-write_rds(x = re_embed_intersting_cells_0.6,
+write_rds(x = re_embed_interesting_cells_0.6,
           file = file.path(out_dir, "06-cluster_marker_genes", "re_embed_interesting_cells_0.6.rds"))
 ```
