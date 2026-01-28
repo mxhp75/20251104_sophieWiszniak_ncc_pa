@@ -337,7 +337,7 @@ secondary_qc_plot +
              aes(yintercept = threshold),
              colour = "red",
              linewidth = 1,
-             linetype = "dashed")+
+             linetype = "dashed") +
   geom_hline(data = hline_upper,
              aes(yintercept = threshold),
              colour = "red",
