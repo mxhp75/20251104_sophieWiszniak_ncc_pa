@@ -578,5 +578,25 @@ DimPlot(re_embed_interesting_cells_endocardial_0.1,
 
 DimPlot(re_embed_interesting_cells_endocardial_0.1,
         group.by = "SingleR_tms")
+
+DimPlot(re_embed_interesting_cells_endocardial_0.1,
+        group.by = "seurat_clusters",
+                # Highlight only cluster 17
+        cells.highlight = WhichCells(re_embed_interesting_cells_0.6, idents = "16"),
+        cols.highlight = 'red',
+        cols = "grey80",
+        sizes.highlight = 1.2,
+        pt.size = 0.6) +
+  NoLegend()
+
+DimPlot(re_embed_interesting_cells_endocardial_0.1,
+        group.by = "seurat_clusters",
+                # Highlight only cluster 17
+        cells.highlight = WhichCells(re_embed_interesting_cells_0.6, idents = "6"),
+        cols.highlight = 'red',
+        cols = "grey80",
+        sizes.highlight = 1.2,
+        pt.size = 0.6) +
+  NoLegend()
 ```
 
