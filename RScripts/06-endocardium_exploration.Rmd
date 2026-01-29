@@ -1,0 +1,582 @@
+---
+title: "endocardium_exploration"
+author: "Melanie Smith"
+date: "2026-01-22"
+output: html_document
+---
+
+- In this markdown I will subset the endocardial cells from the rest of the dataset to explore the relationships between possible endocaridal sub-populations.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+
+library(SingleCellExperiment)
+library(biomaRt)
+library(scuttle)
+
+# additional plotting functions
+library(patchwork)
+library(pheatmap)
+library(ggokabeito)
+```
+
+# User defined functions
+
+```{r}
+# Helper function (put this at the top of your script)
+save_if <- function(plot_object, filename, width, height, ...) {
+  if (save_plots) {
+    ggsave(plot = plot_object,
+           filename = filename,
+           width = width,
+           height = height,
+           dpi = 300)
+  }
+}
+# change to TRUE to save plots
+save_plots <- TRUE
+
+# negate %in%
+`%notin%` <- Negate(`%in%`)
+```
+
+# Set project directories and file paths
+
+```{r}
+project_name <- "20251104_sophieWiszniak_ncc_pa"
+
+base_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak"
+project_repo_dir <- file.path(base_repo_dir, project_name)
+out_dir <- file.path(project_repo_dir, "outDir", "06-cluster_marker_genes")
+```
+
+# Load required objects
+- This object has been filtered for doublets, >10% MT genes and low quality clusters have been removed, uncertain and filtered are renamed
+
+```{r}
+re_embed_interesting_cells_0.6 <- readRDS(file = file.path(out_dir, "re_embed_interesting_0.6_rename.rds"))
+# Ensure seurat_custers is the active identity
+Idents(re_embed_interesting_cells_0.6) <- "seurat_clusters"
+```
+
+# Quick umap for orientation
+
+```{r}
+# quick umap of all cells before subsetting
+DimPlot(re_embed_interesting_cells_0.6,
+                           reduction = "umap",
+                           group.by = "seurat_clusters",
+                           label = TRUE,
+                           label.size = 6,
+                           cols = viridis::viridis(22, option = "turbo")
+                           ) +
+  labs(
+    title = "UMAP - new embedding (new clusters)",
+    caption = "Filtered: Interesting cells, cluster resolution 0.6 (new clusters)"
+  ) +
+  NoLegend()
+
+DimPlot(re_embed_interesting_cells_0.6,
+                           reduction = "umap",
+                           group.by = "sophie_celltype_clean",
+                           label = TRUE,
+                           label.size = 6,
+                           cols = viridis::viridis(22, option = "turbo")
+                           ) +
+  labs(
+    title = "UMAP - new embedding (new clusters)",
+    caption = "Filtered: Interesting cells, cluster resolution 0.6 (sophie celltype)"
+  ) +
+  NoLegend()
+```
+
+# Subset to keep only endocardial clusters
+
+```{r}
+# Check starting number of cells
+cat("Starting number of cells:", ncol(re_embed_interesting_cells_0.6), "\n")
+cat("Cells in cluster 6:", sum(re_embed_interesting_cells_0.6$seurat_clusters == 6), "\n")
+cat("Cells in cluster 8:", sum(re_embed_interesting_cells_0.6$seurat_clusters == 10), "\n")
+cat("Cells in cluster 15:", sum(re_embed_interesting_cells_0.6$seurat_clusters == 15), "\n")
+cat("Cells in cluster 16:", sum(re_embed_interesting_cells_0.6$seurat_clusters == 16), "\n")
+
+cat("Total endocardial cells to subset:", sum(re_embed_interesting_cells_0.6$seurat_clusters %in% c(6, 10, 15, 16)), "\n\n")
+
+# save the existing seurat cluster assignments in the metadata
+re_embed_interesting_cells_0.6$original_cluster_0.6 <- re_embed_interesting_cells_0.6$seurat_clusters
+
+# Subset to keep only endocardial clusters
+re_embed_interesting_cells_0.6_endocardial <- subset(re_embed_interesting_cells_0.6, 
+                          subset = seurat_clusters %notin% c(6, 10, 15, 16), 
+                          invert = TRUE)
+
+cat("Cells after endocardial subset:", ncol(re_embed_interesting_cells_0.6_endocardial), "\n\n")
+```
+
+# Re-embed: Normalise, find variable features, scale, PCA, UMAP, cluster
+
+```{r}
+n_dims = 30
+clustering_resolution = 0.6
+# Re-computation of graph-based clustering and UMAP on the cleaned dataset
+re_embed_interesting_cells_0.6_endocardial <- FindVariableFeatures(re_embed_interesting_cells_0.6_endocardial,
+                                        selection.method = "vst", 
+                                        nfeatures = 3000,
+                                        verbose = FALSE) %>%
+  ScaleData(features = rownames(re_embed_interesting_cells_0.6),
+            verbose = FALSE) %>%
+  RunPCA(verbose = FALSE) %>% # Defaults to features = VariableFeatures()), but better not to specify as these are not yet stored in that object
+  FindNeighbors(dims = 1:n_dims,
+                verbose = FALSE) %>%
+  FindClusters(resolution = clustering_resolution,
+               verbose = FALSE) %>%
+  RunUMAP(dims = 1:n_dims,
+          verbose = FALSE)
+
+# let's save here
+write_rds(x = re_embed_interesting_cells_0.6_endocardial,
+          file = file.path(out_dir, "re_embed_interesting_cells_0.6_endocardial.rds"))
+
+# plot the umap with old cluster numbers and colours
+umap_old_clusters <- DimPlot(re_embed_interesting_cells_0.6_endocardial,
+        reduction = "umap",
+        group.by = "original_cluster_0.6",
+        label = TRUE,
+        label.size = 6
+        ) +
+  labs(
+    title = "UMAP - new embedding (old clusters)",
+    caption = "Filtered: Endocardial only"
+  ) +
+  NoLegend()
+save_if(umap_old_clusters,
+        filename = file.path(out_dir, "06-umap.filtered.endocardial.old_clusters.png"),
+        width = 8,
+        height = 8)
+
+# plot the umap with old cluster numbers and colours
+umap_new_clusters <- DimPlot(re_embed_interesting_cells_0.6_endocardial,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = TRUE,
+        label.size = 6
+        ) +
+  labs(
+    title = "UMAP - new embedding (new clusters)",
+    caption = "Filtered: Endocardial only"
+  ) +
+  NoLegend() +
+  scale_color_okabe_ito()
+save_if(umap_new_clusters,
+        filename = file.path(out_dir, "06-umap.filtered.endocardial.new_clusters.png"),
+        width = 8,
+        height = 8)
+
+# plot the umap with cluster numbers and colours
+DimPlot(re_embed_interesting_cells_0.6_endocardial,
+        reduction = "umap",
+        group.by = "sophie_celltype_clean",
+        label = TRUE,
+        label.size = 4
+        ) +
+  labs(
+    title = "UMAP - new embedding (Sophie anno)",
+    caption = "Filtered: Endocardial only"
+  )
+
+FeaturePlot(re_embed_interesting_cells_0.6_endocardial,
+            features = c("G2M.Score", "S.Score"),
+            reduction = "umap",
+            blend = FALSE,
+            label = TRUE,
+            label.size = 6) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+    )
+
+# Quick look at cell-cycle distribution
+DimPlot(re_embed_interesting_cells_0.6_endocardial,
+        group.by = "Phase") +
+  labs(title = "Cell cycle phase")
+
+# Violin plot of scores per cluster
+VlnPlot(re_embed_interesting_cells_0.6_endocardial, 
+        features = c("S.Score", "G2M.Score"), 
+        group.by = "seurat_clusters", 
+        pt.size = 0)
+```
+
+
+```{r}
+n_dims = 30
+
+# Re-computation of graph-based clustering and UMAP on the cleaned dataset
+re_embed_interesting_cells_endocardial <- FindVariableFeatures(re_embed_interesting_cells_0.6_endocardial,
+                                                                   selection.method = "vst", 
+                                                                   nfeatures = 3000,
+                                                                   verbose = FALSE) %>%
+  ScaleData(features = rownames(re_embed_interesting_cells_0.6),
+            verbose = FALSE) %>%
+  RunPCA(verbose = FALSE) %>% 
+  FindNeighbors(dims = 1:n_dims,
+                verbose = FALSE) %>%
+  RunUMAP(dims = 1:n_dims,
+          verbose = FALSE)
+
+clustering_resolutions <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6)
+
+for (res in clustering_resolutions) {
+  clustered <- FindClusters(re_embed_interesting_cells_endocardial,
+                            resolution = res,
+                            verbose = FALSE)
+  
+  p1 <- DimPlot(clustered,
+               group.by = paste0("RNA_snn_res.", res),
+               label = TRUE,
+               label.size = 6) +
+    # ggtitle(paste("Resolution:", res)) +
+    scale_color_okabe_ito() +
+    labs(
+      title = paste("Resolution:", res),
+      caption = "Filtered: Endocardial only"
+    )
+  
+  print(p1)
+  
+p2 <- FeaturePlot(clustered,
+              features = c("G2M.Score", "S.Score"),
+              reduction = "umap",
+              blend = FALSE,
+              label = TRUE,
+              label.size = 6) &
+    scale_colour_gradientn(
+      colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+      name = "Expression"
+    )
+
+print(p2)
+}
+
+# from the umaps I think a cluster resolution of 0.1 best describes the total structure. I will make a new object with 0.1 as the clustering resolution and use those clusters for marker gene investigation
+re_embed_interesting_cells_endocardial_0.1 <- FindClusters(re_embed_interesting_cells_endocardial,
+                          resolution = 0.1,
+                          verbose = FALSE)
+
+# Find markers for all clusters (positive only, Wilcoxon test is default and fine)
+cluster_markers_0.1 <- FindAllMarkers(
+  re_embed_interesting_cells_endocardial_0.1,
+  only.pos = TRUE,          # only upregulated markers (most useful for annotation)
+  min.pct = 0.25,           # gene detected in at least 25% of cells in the cluster
+  logfc.threshold = 0.25,   # minimum logFC of 0.25
+  test.use = "wilcox"       # or "MAST" / "DESeq2" if you prefer
+)
+
+# Save top markers per cluster
+top10_markers_0.1 <- cluster_markers_0.1 %>%
+  group_by(cluster) %>%
+  slice_max(n = 10, order_by = avg_log2FC)
+
+# add some filtering
+top10_filtered_0.1 <- cluster_markers_0.1 %>%
+  group_by(cluster) %>%
+  filter(pct.1 >= 0.25) %>%                  # expressed in ≥25% of cluster
+  filter(avg_log2FC > 0.5) %>%               # stronger fold change
+  slice_max(avg_log2FC, n = 10)               # top 10 after filtering
+
+
+# Visualise (DotPlot is great for annotation)
+DotPlot(re_embed_interesting_cells_endocardial_0.1,
+        features = unique(top10_markers_0.1$gene),
+        dot.scale = 8,
+        cols = c("lightgrey", "red"),     # low to high expression
+        col.min = -2, col.max = 2) +      # adjust scale if needed
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  labs(title = "Top markers: All Clusters (Res 0.1)",
+       y = "Cluster") +
+  NoLegend()
+
+```
+
+## Find all markers
+- 0.6 resolution
+
+```{r}
+# Find markers for all clusters (positive only, Wilcoxon test is default and fine)
+cluster_markers <- FindAllMarkers(
+  re_embed_interesting_cells_0.6_endocardial,
+  only.pos = TRUE,          # only upregulated markers (most useful for annotation)
+  min.pct = 0.25,           # gene detected in at least 25% of cells in the cluster
+  logfc.threshold = 0.25,   # minimum logFC of 0.25
+  test.use = "wilcox"       # or "MAST" / "DESeq2" if you prefer
+)
+
+# Save top markers per cluster
+top10_markers <- cluster_markers %>%
+  group_by(cluster) %>%
+  slice_max(n = 10, order_by = avg_log2FC)
+
+# add some filtering
+top10_filtered <- cluster_markers %>%
+  group_by(cluster) %>%
+  filter(pct.1 >= 0.25) %>%                  # expressed in ≥25% of cluster
+  filter(avg_log2FC > 0.5) %>%               # stronger fold change
+  slice_max(avg_log2FC, n = 10)               # top 10 after filtering
+# 
+# # only cluster 11
+# top10_markers_cluster11 <- subset(top10_markers, cluster %in% 11)
+# # Write to file
+# write.csv(top10_markers, file = file.path(out_dir, "top10_cluster_markers.csv"))
+
+# Visualise (DotPlot is great for annotation)
+DotPlot(re_embed_interesting_cells_0.6_endocardial,
+        features = unique(top10_markers$gene),
+        dot.scale = 8,
+        cols = c("lightgrey", "red"),     # low to high expression
+        col.min = -2, col.max = 2) +      # adjust scale if needed
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  labs(title = "Top markers: All Clusters (Res 0.6)",
+       y = "Cluster") +
+  NoLegend()
+```
+
+
+## Difference between 3 (island) and 0 (largest main body)
+
+```{r}
+# make sure seurat clusters are the current identity
+Idents(re_embed_interesting_cells_endocardial_0.1) <- "seurat_clusters"
+
+DimPlot(re_embed_interesting_cells_endocardial_0.1,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = FALSE,
+        repel = TRUE,
+        
+        # Highlight only cluster 17
+        cells.highlight = WhichCells(re_embed_interesting_cells_0.6_endocardial, idents = "7"),
+        cols.highlight = 'red',
+        cols = "grey80",
+        sizes.highlight = 1.2,
+        pt.size = 0.6) +
+  NoLegend() +
+  labs(title = "UMAP: Cluster 7",
+       caption = "Filtered: Interesting cells")
+
+# Make sure the active identity is your clustering
+Idents(re_embed_interesting_cells_endocardial_0.1) <- "seurat_clusters"
+
+# Find markers: cluster 4 vs cluster 2 only
+markers_3_vs_0 <- FindMarkers(
+  re_embed_interesting_cells_endocardial_0.1,
+  ident.1 = "3",                # positive markers = upregulated in 3
+  ident.2 = "0",                # compared against 0
+  test.use = "wilcox",           # or "MAST", "LR", etc.
+  min.pct = 0.25,                # genes detected in ≥25% of cells in at least one group
+  logfc.threshold = 0.25,        # minimum log2 fold-change
+  verbose = FALSE
+)
+
+# Add gene name as column (makes downstream easier)
+markers_3_vs_0$gene <- rownames(markers_3_vs_0)
+
+# Optional: filter to significant & sort by logFC or p-val
+markers_3_vs_0_sig <- markers_3_vs_0 %>%
+  filter(p_val_adj < 0.05) %>%
+  arrange(desc(avg_log2FC))         # highest fold-change in 3 first
+
+# View top 10
+head(markers_3_vs_0_sig, 10)
+
+# Get top 10 genes upregulated in cluster 3
+top10_3vs0 <- markers_3_vs_0 %>%
+  filter(avg_log2FC > 0) %>%          # upregulated in 3
+  arrange(desc(avg_log2FC)) %>%
+  slice_head(n = 10) %>%
+  pull(gene)
+
+# Or top 10 upregulated in 0 vs 3 (reverse)
+top10_0vs3 <- markers_3_vs_0 %>%
+  filter(avg_log2FC < 0) %>%
+  arrange(desc(abs(avg_log2FC))) %>%
+  slice_head(n = 10) %>%
+  pull(gene)
+
+# Now make the DotPlot using only these genes
+DotPlot(re_embed_interesting_cells_endocardial_0.1,
+        features = top10_3vs0,          # or top10_17vs10
+        group.by = "seurat_clusters",
+        dot.scale = 8,
+        cols = c("lightgrey", "red"),     # low to high expression
+        col.min = -2, col.max = 2) +      # adjust scale if needed
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  labs(title = "Top markers: Cluster 3 vs 0",
+       subtitle = "Upregulated in cluster 3",
+       y = "Cluster") +
+  NoLegend()   # optional
+
+top_markers_both <- c(
+  markers_3_vs_0 %>%
+    filter(avg_log2FC > 0) %>%
+    arrange(desc(avg_log2FC)) %>%
+    slice_head(n = 8) %>%
+    pull(gene),
+  markers_3_vs_0 %>%
+    filter(avg_log2FC < 0) %>%
+    arrange(desc(abs(avg_log2FC))) %>%
+    slice_head(n = 8) %>%
+    pull(gene)
+  ) %>%
+  unique()
+
+DotPlot(re_embed_interesting_cells_endocardial_0.1,
+        features = top_markers_both,
+        group.by = "seurat_clusters",
+                dot.scale = 8) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  labs(title = "Top markers: Cluster 3 vs 0 (both directions)",
+       y = "Cluster") +
+  NoLegend()
+```
+
+# Explore clusters 0 and 2
+
+```{r}
+cluster_0 <- subset(re_embed_interesting_cells_endocardial_0.1@meta.data, seurat_clusters %in% 0)
+cluster_2 <- subset(re_embed_interesting_cells_endocardial_0.1@meta.data, seurat_clusters %in% 2)
+
+# make sure seurat clusters are the current identity
+Idents(re_embed_interesting_cells_endocardial_0.1) <- "seurat_clusters"
+
+DimPlot(re_embed_interesting_cells_endocardial_0.1,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = FALSE,
+        repel = TRUE,
+        
+        # Highlight only cluster 17
+        cells.highlight = WhichCells(re_embed_interesting_cells_endocardial_0.1, idents = "2"),
+        cols.highlight = 'red',
+        cols = "grey80",
+        sizes.highlight = 1.2,
+        pt.size = 0.6) +
+  NoLegend() +
+  labs(title = "UMAP: Cluster 2",
+       caption = "Filtered: Interesting cells")
+
+DimPlot(re_embed_interesting_cells_endocardial_0.1,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = FALSE,
+        repel = TRUE,
+        
+        # Highlight only cluster 17
+        cells.highlight = WhichCells(re_embed_interesting_cells_endocardial_0.1, idents = "0"),
+        cols.highlight = 'red',
+        cols = "grey80",
+        sizes.highlight = 1.2,
+        pt.size = 0.6) +
+  NoLegend() +
+  labs(title = "UMAP: Cluster 0",
+       caption = "Filtered: Interesting cells")
+
+# Make sure the active identity is your clustering
+Idents(re_embed_interesting_cells_endocardial_0.1) <- "seurat_clusters"
+
+# Find markers: cluster 2 vs cluster 0 only
+markers_2_vs_0 <- FindMarkers(
+  re_embed_interesting_cells_endocardial_0.1,
+  ident.1 = "2",                # positive markers = upregulated in 2
+  ident.2 = "0",                # compared against 0
+  test.use = "wilcox",           # or "MAST", "LR", etc.
+  min.pct = 0.25,                # genes detected in ≥25% of cells in at least one group
+  logfc.threshold = 0.25,        # minimum log2 fold-change
+  verbose = FALSE
+)
+
+# Add gene name as column (makes downstream easier)
+markers_2_vs_0$gene <- rownames(markers_2_vs_0)
+
+# Optional: filter to significant & sort by logFC or p-val
+markers_2_vs_0_sig <- markers_2_vs_0 %>%
+  filter(p_val_adj < 0.05) %>%
+  arrange(desc(avg_log2FC))         # highest fold-change in 10 first
+
+# View top 10
+head(markers_2_vs_0_sig, 10)
+
+# Get top 10 genes upregulated in cluster 2
+top10_2vs0 <- markers_2_vs_0 %>%
+  filter(avg_log2FC > 0) %>%          # upregulated in 2
+  arrange(desc(avg_log2FC)) %>%
+  slice_head(n = 10) %>%
+  pull(gene)
+
+# Or top 10 upregulated in 2 (reverse)
+top10_2vs0 <- markers_2_vs_0 %>%
+  filter(avg_log2FC < 0) %>%
+  arrange(desc(abs(avg_log2FC))) %>%
+  slice_head(n = 10) %>%
+  pull(gene)
+
+# Now make the DotPlot using only these genes
+DotPlot(re_embed_interesting_cells_0.6_endocardial,
+        features = top10_2vs0,          # or top10_17vs10
+        group.by = "seurat_clusters",
+        dot.scale = 8,
+        cols = c("lightgrey", "red"),     # low to high expression
+        col.min = -2, col.max = 2) +      # adjust scale if needed
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  labs(title = "Top markers: Cluster 2 vs 0",
+       subtitle = "Upregulated in cluster 2",
+       y = "Cluster") +
+  NoLegend()   # optional
+
+top_markers_both <- c(
+  markers_2_vs_0 %>% filter(avg_log2FC > 0) %>% arrange(desc(avg_log2FC)) %>% slice_head(n = 8) %>% pull(gene),
+  markers_2_vs_0 %>% filter(avg_log2FC < 0) %>% arrange(desc(abs(avg_log2FC))) %>% slice_head(n = 8) %>% pull(gene)
+) %>% unique()
+
+DotPlot(re_embed_interesting_cells_endocardial_0.1,
+        features = top_markers_both,
+        group.by = "seurat_clusters",
+                dot.scale = 8) +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  labs(title = "Top markers: Cluster 2 vs 0 (both directions)",
+       y = "Cluster") +
+  NoLegend()
+```
+
+```{r}
+DimPlot(re_embed_interesting_cells_endocardial_0.1,
+        group.by = "SingleR_HCA_fine")
+
+DimPlot(re_embed_interesting_cells_endocardial_0.1,
+        group.by = "SingleR_tms")
+```
+
