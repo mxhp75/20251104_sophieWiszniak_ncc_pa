@@ -81,6 +81,20 @@ norm_counts <- LayerData(re_embed_filtered, assay = "RNA", layer = 'data') #
 norm_counts[c('Vim', 'Bcl2', 'Trp53', 'Cd4'),1:5]
 ```
 
+# Quick umap of starting structure
+
+```{r}
+DimPlot(re_embed_filtered,
+        split.by = "orig.ident",
+        group.by = "seurat_clusters",
+        label = TRUE,
+        repel = TRUE) +
+  NoLegend() +   # remove legend if too many clusters
+  ggtitle("Time point and genotype") +
+  labs(caption = "Filtered for Mt, doublets, nFeatures > 0.5%")
+
+```
+
 # 1. Manual Annotation using Sophie's list
 - This chunk uses Sophie's manually curated list of cell types
 
@@ -377,7 +391,7 @@ DimPlot(re_embed_filtered,
         group.by = "SingleR_tms",
         label = TRUE,
         repel = TRUE,
-        label.size = 3)
+        label.size = 5)
 
 ```
 
