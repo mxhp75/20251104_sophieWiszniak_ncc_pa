@@ -41,6 +41,7 @@ library(scuttle)
 library(patchwork)
 library(pheatmap)
 library(RColorBrewer)
+library(ggokabeito)
 ```
 
 # User defined functions
@@ -513,10 +514,17 @@ re_embed_filtered@meta.data %>%
              y = log10_nFeatures_RNA,
              color = percent.hb)) +                         # ← + goes HERE
   geom_point(size = 1.8, alpha = 0.9) +
-  scale_color_gradient(low = "white", high = "#8B0000",
+  scale_color_gradient(low = "white",
+                       high = "#8B0000",
                        name = "% Haemoglobin") +
-  geom_vline(xintercept = nCounts_lower,   colour = "red", linetype = "dashed", linewidth = 1.2) +
-  geom_hline(yintercept = nFeatures_lower, colour = "red", linetype = "dashed", linewidth = 1.2) +
+  geom_vline(xintercept = nCounts_lower,
+             colour = "red",
+             linetype = "dashed",
+             linewidth = 1.2) +
+  geom_hline(yintercept = nFeatures_lower,
+             colour = "red",
+             linetype = "dashed",
+             linewidth = 1.2) +
   facet_wrap(~ seurat_clusters, ncol = 5) +
   labs(title = "Library complexity vs library size — selected clusters",
        x = "log₁₀(nCount_RNA + 1)",
@@ -572,28 +580,29 @@ cat("featcount_dist_upper: ", round(qc_thresholds$featcount_dist_upper, 4), "\n\
 ```{r}
 # Check starting number of cells
 cat("Starting number of cells:", ncol(re_embed_filtered), "\n")
-cat("Cells in cluster 5:", sum(re_embed_filtered$seurat_clusters == 5), "\n")
+cat("Cells in cluster 3:", sum(re_embed_filtered$seurat_clusters == 3), "\n")
 cat("Cells in cluster 8:", sum(re_embed_filtered$seurat_clusters == 8), "\n")
 cat("Cells in cluster 12:", sum(re_embed_filtered$seurat_clusters == 12), "\n")
 cat("Cells in cluster 18:", sum(re_embed_filtered$seurat_clusters == 18), "\n")
-cat("Cells in cluster 20:", sum(re_embed_filtered$seurat_clusters == 20), "\n")
 cat("Cells in cluster 21:", sum(re_embed_filtered$seurat_clusters == 21), "\n")
+cat("Cells in cluster 22:", sum(re_embed_filtered$seurat_clusters == 22), "\n")
 cat("Cells in cluster 24:", sum(re_embed_filtered$seurat_clusters == 24), "\n")
-cat("Total low-quality cells to remove:", sum(re_embed_filtered$seurat_clusters %in% c(5, 8, 12, 18, 20, 21, 24)), "\n\n")
+# cat("Total low-quality cells to remove:", sum(re_embed_filtered$seurat_clusters %in% c(5, 8, 12, 18, 20, 21, 24)), "\n\n") # old clusters
+cat("Total low-quality cells to remove:", sum(re_embed_filtered$seurat_clusters %in% c(3, 8, 12, 18, 21, 22, 24)), "\n\n")
 
 # save the existing seurat cluster assignments in the metadata
 re_embed_filtered$original_clusters_mt_dbl <- re_embed_filtered$seurat_clusters
 
 # Subset to remove low-quality clusters
 re_embed_no_low.qual <- subset(re_embed_filtered, 
-                          subset = seurat_clusters %in% c(5, 8, 12, 18, 20, 21, 24), 
+                          subset = seurat_clusters %in% c(3, 8, 12, 18, 21, 22, 24), 
                           invert = TRUE)
 
 cat("Cells after low-quality removal:", ncol(re_embed_no_low.qual), "\n\n")
 
 ```
 
-# Perform secodary QC per cluster and remove remaining low quality cells
+# Perform secondary QC per cluster and remove remaining low quality cells
 ## Set MADs
 
 ```{r}
@@ -636,7 +645,7 @@ p <- VlnPlot(re_embed_no_low.qual,
   labs(title = "Per Cluster Lower nFeature QC Thresholds",
        y = "nFeature_RNA",
        subtitle = paste("Threshold = median(log10(nFeature)) -", n_mad_3, "× MAD"),
-       caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24) old clusters") +
+       caption = "Filtered: <10% MT, singlets only, no low quality (3, 8, 12, 18, 21, 21, 24) old clusters") +
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 
 # manually set the y-limit
@@ -713,7 +722,7 @@ p <- VlnPlot(re_embed_no_low.qual,
   labs(title = "Per Cluster Lower nCounts QC Thresholds",
        y = "nCount_RNA",
        subtitle = paste("Threshold = median(log10(nCounts)) -", n_mad_3, "× MAD"),
-       caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24) old clusters") +
+       caption = "Filtered: <10% MT, singlets only, no low quality (3, 8, 12, 18, 21, 22, 24) old clusters") +
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 
 # manually set the y-limit
@@ -789,7 +798,7 @@ p <- VlnPlot(re_embed_no_low.qual,
   labs(title = "Per Cluster Lower featcount_dist QC Thresholds",
        y = "featcount_dist",
        subtitle = paste("Threshold = median(log10(featcount_dist)) +", n_mad_3, "× MAD"),
-       caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24) old clusters") +
+       caption = "Filtered: <10% MT, singlets only, no low quality (3, 8, 12, 18, 21, 22, 24) old clusters") +
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 
 # manually set the y-limit
@@ -815,7 +824,7 @@ p + geom_segment(
     aes(
       x = as.numeric(seurat_clusters),
       y = threshold_featcount_dist * 1.05,
-      label = round(threshold_featcount_dist, 0)
+      label = round(threshold_featcount_dist, 2)
     ),
     color = "black",                # text color
     fill = "white",                 # background color (white box)
@@ -1111,7 +1120,7 @@ DimPlot(re_embed_filtered,
         reduction = "umap",
         group.by = "seurat_clusters",
         label = TRUE,
-        label.size = 6
+        label.size = 8
         ) +
   labs(
     title = "UMAP - new embedding (new clusters)",
@@ -1126,12 +1135,14 @@ DimPlot(re_embed_filtered,
         reduction = "umap",
         group.by = "sophie_celltype_clean",
         label = TRUE,
-        label.size = 4
+        label.size = 8
         ) +
   labs(
     title = "UMAP - new embedding (Sophie anno)",
     caption = "Filtered: MT, doublets, low qual clusters & cells (Sophie Anno)"
-  )
+  ) +
+  NoLegend() +
+  scale_color_okabe_ito()
 ggsave(filename = file.path(new_out_dir, "umap.filtered.mt.doublet.nFeature_top.low_quality_clust_cell.sophie_anno.png"),
        width = 8, height = 8)
 
