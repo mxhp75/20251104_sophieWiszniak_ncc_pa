@@ -116,7 +116,7 @@ top10_filtered <- cluster_markers %>%
 DotPlot(re_embed_no_low.qual,
         features = unique(top10_markers$gene)) + 
   NoLegend() +
-  scale_y_discrete(limits = c("0", "1", "2", "11", "4", "3", "8", "25", "15", "9", "12", "18", "23", "21", "7", "17", "5", "16", "19", "14", "20", "22", "24")) 
+  # scale_y_discrete(limits = c("0", "1", "3", "4", "5", "11", "12","2", "10", "14", "6", "15", "18", "19", "22", "9", "17", "7", "8", "16", "13", "20", "21", "23")) +
   RotatedAxis()
 # 
 # # Get average expression per cluster
@@ -133,6 +133,7 @@ DotPlot(re_embed_no_low.qual,
 ```
 
 ## Sophie cell-type level
+
 ```{r}
 # ensure sophie_celltype_clean is the active identity
 Idents(re_embed_no_low.qual) <- "sophie_celltype_clean"
@@ -150,10 +151,27 @@ top10_celltype_markers <- cell_type_markers %>%
   group_by(cluster) %>%
   slice_max(n = 10, order_by = avg_log2FC)
 
-# Visualise (DotPlot is great for annotation)
+# Visualise DotPlot using Sophie's annotation
 DotPlot(re_embed_no_low.qual,
         scale = TRUE,
-        features = unique(top10_celltype_markers$gene))
+        features = unique(top10_celltype_markers$gene),
+        group.by = "sophie_celltype_clean",
+        dot.scale = 8,
+        cols = c("blue", "red"),     # low to high expression
+        col.min = -2, col.max = 2) +      # adjust scale if needed
+    scale_y_discrete(limits = c("Mesenchyme",
+                                "Epicardium",
+                                "VSMC",
+                                "Myocardium",
+                                "Endocardium",
+                                "Immune cells",
+                                "Blood",
+                                "filtered",
+                                "uncertain")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  labs(title = "Top markers: sophie_celltype_clean",
+       subtitle = "Upregulated in cell type") +
+  NoLegend()   # optional
 
 ```
 
