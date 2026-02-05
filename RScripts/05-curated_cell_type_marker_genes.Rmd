@@ -57,7 +57,7 @@ save_if <- function(plot_object, filename, width, height, ...) {
   }
 }
 # change to TRUE to save plots
-save_plots <- FALSE
+save_plots <- TRUE
 
 ```
 
@@ -635,7 +635,7 @@ dotPlot_markers_ordered <- DotPlot(re_embed_no_low.qual,
     caption = "Filtered: <10% MT, singlets only, nFeatures >0.5%, no low quality"
     ) + 
   NoLegend() +
-  scale_y_discrete(limits = c("0", "1", "2", "11", "4", "3", "8", "25", "15", "9", "12", "18", "23", "21", "7", "17", "5", "16", "19", "14", "20", "22", "24"))  # custom order to best align clusters of common cell types
+  scale_y_discrete(limits = c("0", "1", "3", "4", "5", "11", "12","2", "10", "14", "6", "15", "18", "19", "22", "9", "17", "7", "8", "16", "13", "20", "21", "23"))  # custom order to best align clusters of common cell types
 save_if(dotPlot_markers_ordered,
        filename = file.path(out_dir, "05-secondary_QC", "05-dotPlot_markers_ordered.png"),
        width = 16,
