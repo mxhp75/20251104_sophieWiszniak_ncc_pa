@@ -138,20 +138,20 @@ DimPlot(re_embed_no_low.qual,
         )
 ```
 
-# Remove un-interesting cell types (RBCs, platelets, macrophages) and re-embed
+# Remove un-interesting cell types (RBCs, platelets, macrophages)
 
 ```{r}
 # Check starting number of cells
 cat("Starting number of cells:", ncol(re_embed_no_low.qual), "\n")
-cat("Red Blood Cells:", sum(re_embed_no_low.qual$seurat_clusters %in% c(14, 20)), "\n")
-cat("Macrophages:", sum(re_embed_no_low.qual$seurat_clusters == 22), "\n")
-cat("Platelets:", sum(re_embed_no_low.qual$seurat_clusters == 24), "\n")
+cat("Red Blood Cells:", sum(re_embed_no_low.qual$seurat_clusters %in% c(13, 20)), "\n")
+cat("Macrophages:", sum(re_embed_no_low.qual$seurat_clusters == 21), "\n")
+cat("Platelets:", sum(re_embed_no_low.qual$seurat_clusters == 23), "\n")
 
-cat("Total uninteresting cells to remove:", sum(re_embed_no_low.qual$seurat_clusters %in% c(14, 20, 22, 24)), "\n\n")
+cat("Total uninteresting cells to remove:", sum(re_embed_no_low.qual$seurat_clusters %in% c(13, 20, 21, 23)), "\n\n")
 
 # Subset to remove low-quality clusters
 re_embed_interesting_cells <- subset(re_embed_no_low.qual, 
-                          subset = seurat_clusters %in% c(14, 20, 22, 24), 
+                          subset = seurat_clusters %in% c(13, 20, 21, 23), 
                           invert = TRUE)
 
 cat("Number of interesting cells:", ncol(re_embed_interesting_cells), "\n\n")
@@ -432,7 +432,201 @@ re_embed_interesting_cells_0.6 <- FindVariableFeatures(re_embed_interesting_cell
   RunUMAP(dims = 1:n_dims,
           verbose = FALSE)
 
+DimPlot(re_embed_interesting_cells_0.6,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = TRUE,
+        label.size = 6
+        ) +
+  labs(
+    title = "UMAP - new embedding (new clusters)",
+    caption = "Filtered: Interesting cells (new clusters)"
+  ) +
+  NoLegend()
+
+DimPlot(re_embed_interesting_cells_0.6,
+        reduction = "umap",
+        group.by = "sophie_celltype_clean",
+        label = TRUE,
+        label.size = 6
+        ) +
+  labs(
+    title = "UMAP - new embedding (Sophie cell type)",
+    caption = "Filtered: Interesting cells (new clusters)"
+  ) +
+  NoLegend()
+
+# Remap the cell types to the new seurat clusters
+re_embed_interesting_cells_0.6@meta.data <- re_embed_interesting_cells_0.6@meta.data %>%
+  dplyr::mutate(
+    new_celltypes = case_when(
+      seurat_clusters %in% c(4, 9, 12) ~ "Myocardium",
+      seurat_clusters %in% c(1, 13) ~ "VSMC",
+      seurat_clusters %in% c(7, 14) ~ "Epicardium",
+      seurat_clusters %in% c(0, 2, 3, 5, 8, 10) ~ "Mesenchyme",
+      seurat_clusters %in% c(6, 11, 15, 16) ~ "Endocardium",
+      TRUE ~ "Other/Unknown"   # safety catch for any missing clusters
+      )
+    )
+
+# Verify the mapping looks correct
+table(re_embed_interesting_cells_0.6@meta.data$seurat_clusters, 
+      re_embed_interesting_cells_0.6@meta.data$new_celltypes, 
+      useNA = "ifany")
+
+# Or just a simple count
+table(re_embed_interesting_cells_0.6$new_celltypes)
+
+# Visual sanity check
+umap_newSophieCellType <- DimPlot(re_embed_interesting_cells_0.6,
+        group.by = "new_celltypes",
+        label = TRUE,
+        repel = TRUE,
+        label.size = 6) + 
+  scale_color_manual(values = c("Myocardium" = "#E41A1C", "VSMC" = "#377EB8", 
+                                "Epicardium" = "#4DAF4A", "Mesenchyme" = "#984EA3", 
+                                "Endocardium" = "#FF7F00", "Other/Unknown" = "grey70"))
+save_if(umap_newSophieCellType,
+           filename = file.path(out_dir, "06-cluster_marker_genes", "06-umap.re_embed_interesting_cells.umap_newSophieCellType.png"),
+           width = 8,
+           height = 8)
+
 # let's save here and reload in a new session
 write_rds(x = re_embed_interesting_cells_0.6,
-          file = file.path(out_dir, "06-cluster_marker_genes", "re_embed_interesting_cells_0.6.rds"))
+          file = file.path(out_dir, "06-cluster_marker_genes", "final_interesting_cells_0.6.rds"))
 ```
+
+# Stacked barchart
+
+```{r}
+df <- re_embed_interesting_cells_0.6@meta.data %>%
+  dplyr::select(orig.ident, new_celltypes, seurat_clusters) %>%
+  dplyr::mutate(cluster_celltype = paste(seurat_clusters, new_celltypes, sep = "_"))
+
+# quick check
+table(re_embed_interesting_cells_0.6@meta.data$orig.ident,
+      re_embed_interesting_cells_0.6@meta.data$new_celltypes,
+      useNA = "ifany")
+
+table(df$orig.ident,
+      df$cluster_celltype,
+      useNA = "ifany")
+
+# control the stacking order (match the dot plot
+df$new_celltypes <- factor(
+  df$new_celltypes,
+  levels = c("Mesenchyme", "Myocardium", "Endocardium", "Epicardium", "VSMC"))
+
+df$cluster_celltype <- factor(
+  df$cluster_celltype,
+  levels = c("0_Mesenchyme", "2_Mesenchyme", "3_Mesenchyme", "5_Mesenchyme", "8_Mesenchyme", "10_Mesenchyme",
+             "4_Myocardium", "9_Myocardium", "12_Myocardium",
+             "6_Endocardium", "11_Endocardium", "15_Endocardium", "16_Endocardium",
+             "7_Epicardium","14_Epicardium",
+             "1_VSMC", "13_VSMC"))
+
+ggplot(df, aes(x = orig.ident,
+               fill = new_celltypes)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    x = "Sample",
+    y = "Proportion of cells",
+    fill = "Cell type",
+    title = "Relative cell type composition per sample"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+ggplot(df, aes(x = orig.ident,
+               fill = cluster_celltype)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    x = "Sample",
+    y = "Proportion of cells",
+    fill = "Cell type",
+    title = "Relative cell type composition per sample"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+celltype_cols <- c(
+  "Myocardium" = "#E41A1C",
+  "VSMC" = "#377EB8", 
+  "Epicardium" = "#4DAF4A",
+  "Mesenchyme" = "#984EA3", 
+  "Endocardium" = "#FF7F00"
+)
+
+ggplot(df, aes(x = orig.ident, fill = new_celltypes)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = celltype_cols) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_bw()
+
+cluster_celltype_cols <- c(
+  "0_Mesenchyme" = "midnightblue",
+  "2_Mesenchyme" = "darkolivegreen1",
+  "3_Mesenchyme" = "royalblue3",
+  "5_Mesenchyme" = "royalblue4",
+  "8_Mesenchyme" = "turquoise3",
+  "10_Mesenchyme" = "chartreuse1",
+  "4_Myocardium" = "darkorange",
+  "9_Myocardium" = "royalblue1",
+  "12_Myocardium" = "darkgoldenrod1",
+  "6_Endocardium" = "darkblue",
+  "11_Endocardium" = "firebrick3",
+  "15_Endocardium" = "aquamarine",
+  "16_Endocardium" = "lightcoral",
+  "7_Epicardium" = "cyan3",
+  "14_Epicardium" = "mediumspringgreen",
+  "1_VSMC" = "springgreen",
+  "13_VSMC" = "red"
+  )
+
+ggplot(df, aes(x = orig.ident, fill = new_celltypes)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = celltype_cols) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_bw()
+
+ggplot(df, aes(x = orig.ident, fill = cluster_celltype)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = cluster_celltype_cols) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_bw()
+```
+
+```{r}
+# plot the umap with new cluster numbers and colours
+umap_newCluster_time <- DimPlot(re_embed_interesting_cells_0.6,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        split.by = "orig.ident",
+        label = TRUE,
+        label.size = 6
+        ) +
+  labs(
+    title = "UMAP - new embedding (new clusters)",
+    caption = "Filtered: Interesting cells (new clusters)"
+  ) +
+  NoLegend()
+
+FeaturePlot(re_embed_interesting_cells_0.6,
+            features = c("G2M.Score", "S.Score"),
+            reduction = "umap",
+            label = TRUE,
+            label.size = 6) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+    )
+
+```
+
+
