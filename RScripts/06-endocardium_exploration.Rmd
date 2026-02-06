@@ -79,7 +79,7 @@ out_dir <- file.path(project_repo_dir, "outDir", "06-cluster_marker_genes")
 - This object has been filtered for doublets, >10% MT genes and low quality clusters have been removed, uncertain and filtered are renamed
 
 ```{r}
-re_embed_interesting_cells_0.6 <- readRDS(file = file.path(out_dir, "re_embed_interesting_0.6_rename.rds"))
+re_embed_interesting_cells_0.6 <- readRDS(file = file.path(out_dir, "final_interesting_cells_0.6.rds"))
 # Ensure seurat_custers is the active identity
 Idents(re_embed_interesting_cells_0.6) <- "seurat_clusters"
 ```
@@ -103,14 +103,14 @@ DimPlot(re_embed_interesting_cells_0.6,
 
 DimPlot(re_embed_interesting_cells_0.6,
                            reduction = "umap",
-                           group.by = "sophie_celltype_clean",
+                           group.by = "new_celltypes",
                            label = TRUE,
                            label.size = 6,
                            cols = viridis::viridis(22, option = "turbo")
                            ) +
   labs(
     title = "UMAP - new embedding (new clusters)",
-    caption = "Filtered: Interesting cells, cluster resolution 0.6 (sophie celltype)"
+    caption = "Filtered: Interesting cells, cluster resolution 0.6 (enw sophie celltype)"
   ) +
   NoLegend()
 ```
@@ -121,18 +121,18 @@ DimPlot(re_embed_interesting_cells_0.6,
 # Check starting number of cells
 cat("Starting number of cells:", ncol(re_embed_interesting_cells_0.6), "\n")
 cat("Cells in cluster 6:", sum(re_embed_interesting_cells_0.6$seurat_clusters == 6), "\n")
-cat("Cells in cluster 8:", sum(re_embed_interesting_cells_0.6$seurat_clusters == 10), "\n")
+cat("Cells in cluster 11:", sum(re_embed_interesting_cells_0.6$seurat_clusters == 11), "\n")
 cat("Cells in cluster 15:", sum(re_embed_interesting_cells_0.6$seurat_clusters == 15), "\n")
 cat("Cells in cluster 16:", sum(re_embed_interesting_cells_0.6$seurat_clusters == 16), "\n")
 
-cat("Total endocardial cells to subset:", sum(re_embed_interesting_cells_0.6$seurat_clusters %in% c(6, 10, 15, 16)), "\n\n")
+cat("Total endocardial cells to subset:", sum(re_embed_interesting_cells_0.6$seurat_clusters %in% c(6, 11, 15, 16)), "\n\n")
 
 # save the existing seurat cluster assignments in the metadata
 re_embed_interesting_cells_0.6$original_cluster_0.6 <- re_embed_interesting_cells_0.6$seurat_clusters
 
 # Subset to keep only endocardial clusters
 re_embed_interesting_cells_0.6_endocardial <- subset(re_embed_interesting_cells_0.6, 
-                          subset = seurat_clusters %notin% c(6, 10, 15, 16), 
+                          subset = seurat_clusters %notin% c(6, 11, 15, 16), 
                           invert = TRUE)
 
 cat("Cells after endocardial subset:", ncol(re_embed_interesting_cells_0.6_endocardial), "\n\n")
@@ -200,7 +200,7 @@ save_if(umap_new_clusters,
 # plot the umap with cluster numbers and colours
 DimPlot(re_embed_interesting_cells_0.6_endocardial,
         reduction = "umap",
-        group.by = "sophie_celltype_clean",
+        group.by = "new_celltypes",
         label = TRUE,
         label.size = 4
         ) +
@@ -320,6 +320,29 @@ DotPlot(re_embed_interesting_cells_endocardial_0.1,
   labs(title = "Top markers: All Clusters (Res 0.1)",
        y = "Cluster") +
   NoLegend()
+
+umap_newCluster_time <- DimPlot(re_embed_interesting_cells_endocardial_0.1,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        split.by = "orig.ident",
+        label = TRUE,
+        label.size = 6
+        ) +
+  labs(
+    title = "UMAP - new embedding (new clusters)",
+    caption = "Filtered: Interesting cells (new clusters)"
+  ) +
+  NoLegend()
+
+FeaturePlot(re_embed_interesting_cells_endocardial_0.1,
+            features = c("G2M.Score", "S.Score"),
+            reduction = "umap",
+            label = TRUE,
+            label.size = 6) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+    )
 
 ```
 
@@ -599,4 +622,36 @@ DimPlot(re_embed_interesting_cells_endocardial_0.1,
         pt.size = 0.6) +
   NoLegend()
 ```
+
+```{r}
+
+epicardial_genes <- c("Wt1", "Upk3b", "Apela", "Upk1b", "Aldh1a2")
+
+endocardial_genes <- c("Ecscr", "Cdh5", "Tie1", "Rasip1", "Plxnd1")
+
+myocardial_genes <- c("Chchd10", "Sh3bgr", "Ttn", "Pln", "Myh7")
+
+mesenchymal_genes <- c("Postn", "Vcan", "Dbi", "Cthrc1", "Papss2")
+
+vsmc_genes <- c("Cxcl12", "Iigp1", "Eln", "Fbln5", "Rgs5")
+
+dotPlot_markers_ordered <- DotPlot(re_embed_interesting_cells_0.6,
+                                   features = c(mesenchymal_genes,
+                                                myocardial_genes,
+                                                endocardial_genes,
+                                                epicardial_genes,
+                                                vsmc_genes
+                                                ),
+                                   scale = TRUE,
+                                   dot.scale = 6,
+                                   cols = c("blue", "red")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  labs(
+    title = "Level 1 lineage Genes",
+    caption = "Filtered: Interseting cells"
+    ) + 
+  NoLegend() +
+  scale_y_discrete(limits = c("0", "2", "3", "5", "8", "10", "4", "9", "12", "6", "11", "15", "16", "7", "14", "13"))
+```
+
 
