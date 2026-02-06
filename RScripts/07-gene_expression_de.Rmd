@@ -62,83 +62,357 @@ if (!dir.exists(out_dir)) {
 - This object has been filtered for doublets and >10% MT genes
 
 ```{r}
-re_embed_no_rbc_no_hb_yes_qc <- readRDS(file = file.path(filtered_dir, "re_embed_no_rbc_no_hb_yes_qc.rds"))
+re_embed_interesting_cells <- readRDS(file.path("~/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa", "outDir",  "06-cluster_marker_genes", "final_interesting_cells_0.6.rds"))
+# Ensure seurat_custers is the active identity
+Idents(re_embed_interesting_cells) <- "seurat_clusters"
 
 ```
 
+# DE
+
 ```{r}
-# First, ensure orig.ident is a factor (helps with ordering)
-re_embed_no_rbc_no_hb_yes_qc$orig.ident <- factor(
-  re_embed_no_rbc_no_hb_yes_qc$orig.ident,
-  levels = c("e11_control", "e12_control", "e11_ko", "e12_ko")
-)
 
-# Set clusters as active identities
-Idents(re_embed_no_rbc_no_hb_yes_qc) <- "seurat_clusters"
+# for a cell-type, what's the difference between proportions between time points
+re_embed_interesting_cells$celltype.cond <- paste(re_embed_interesting_cells$new_celltypes,
+                                                  re_embed_interesting_cells$orig.ident,
+                                                  sep = "_")
+```
 
-# List to store results
-de_results <- list()
+## Mesenchyme
 
-# Define your contrasts (ident.1 = "test", ident.2 = "control")
-contrasts <- list(
-  time_e11_to_e12_control = c("e12_control", "e11_control"),   # e12 vs e11 in control
-  genotype_e11_ko_vs_control = c("e11_ko", "e11_control"),     # KO vs control at e11
-  genotype_e12_ko_vs_control = c("e12_ko", "e12_control")      # KO vs control at e12
-)
+```{r}
+Idents(re_embed_interesting_cells) <- "celltype.cond"
 
 
-for (clust in levels(Idents(re_embed_no_rbc_no_hb_yes_qc))) {
-  for (contrast_name in names(contrasts)) {
+control.mesenchyme.de <- FindMarkers(re_embed_interesting_cells,
+                             ident.1 = "Mesenchyme_e11_control",
+                             ident.2 = "Mesenchyme_e12_control",
+                             verbose = FALSE)
 
-    ident1 <- contrasts[[contrast_name]][1]
-    ident2 <- contrasts[[contrast_name]][2]
+arrange(control.mesenchyme.de, desc(abs(avg_log2FC))) %>% as_tibble(rownames = "gene")
 
-    meta <- re_embed_no_rbc_no_hb_yes_qc@meta.data
-    n1 <- sum(meta$seurat_clusters == clust & meta$orig.ident == ident1)
-    n2 <- sum(meta$seurat_clusters == clust & meta$orig.ident == ident2)
+mesenchyme_de <- control.mesenchyme.de %>%
+  rownames_to_column("gene") %>%
+  mutate(
+    neg_log10_padj = -log10(p_val_adj),
+    sig = case_when(
+      p_val_adj < 0.05 & avg_log2FC >  0.25 ~ "Up in e11",
+      p_val_adj < 0.05 & avg_log2FC < -0.25 ~ "Up in e12",
+      TRUE ~ "Not significant"
+    )
+  )
 
-    if (n1 < 20 || n2 < 20) next
+ggplot(mesenchyme_de, aes(x = avg_log2FC, y = neg_log10_padj)) +
+  geom_point(aes(color = sig), alpha = 0.6, size = 1) +
+  scale_color_manual(values = c(
+    "Up in e11" = "firebrick",
+    "Up in e12" = "steelblue",
+    "Not significant" = "grey70"
+  )) +
+  geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed", color = "grey50") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey50") +
+  labs(
+    title = "Mesenchyme e11 vs e12 (control)",
+    x = "Average log2 fold change (e11 / e12)",
+    y = "-log10 adjusted p-value",
+    color = NULL
+  ) +
+  theme_classic()
 
-    key <- paste0("cluster", clust, "_", contrast_name)
+top_genes_mesenchyme <- mesenchyme_de %>%
+  filter(p_val_adj < 0.01, abs(avg_log2FC) > 0.5)
 
-    de_results[[key]] <- FindMarkers(
-      object = re_embed_no_rbc_no_hb_yes_qc,
-      ident.1 = ident1,
-      ident.2 = ident2,
-      group.by = "orig.ident",
-      subset.ident = clust,
-      assay = "RNA",
-      slot = "data",
-      logfc.threshold = 0.1,
-      min.pct = 0.1,
-      test.use = "wilcox",
-      verbose = FALSE
-    ) %>%
-      rownames_to_column("gene") %>%
-      mutate(
-        cluster = clust,
-        contrast = contrast_name,
-        ident1 = ident1,
-        ident2 = ident2,
-        n_ident1 = n1,
-        n_ident2 = n2
-      )
-  }
-}
+volcano_mesenchyme_de <- ggplot(mesenchyme_de,
+       aes(avg_log2FC, neg_log10_padj)) +
+  geom_point(aes(color = sig), alpha = 0.5, size = 1) +
+  ggrepel::geom_text_repel(
+    data = top_genes_mesenchyme,
+    aes(label = gene),
+    size = 3,
+    max.overlaps = 20
+  ) +
+  scale_color_manual(values = c(
+    "Up in e11" = "firebrick",
+    "Up in e12" = "steelblue",
+    "Not significant" = "grey80"
+  )) +
+    labs(
+    title = "Mesenchyme e11 vs e12 (control)",
+    x = "Average log2 fold change (e11 / e12)",
+    y = "-log10 adjusted p-value",
+    color = NULL
+  ) +
+  geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  theme_classic()
+ggsave(volcano_mesenchyme_de,
+        filename = file.path(out_dir, "07-mesenchyme_control_de.png"),
+        width = 28,
+        height = 46)
+```
 
+## Myocardium
 
-# Combine all results into one big table
-all_de <- bind_rows(de_results)
+```{r}
+control.myocardium.de <- FindMarkers(re_embed_interesting_cells,
+                             ident.1 = "Myocardium_e11_control",
+                             ident.2 = "Myocardium_e12_control",
+                             verbose = FALSE)
 
-# only sig de
-filter_de <- all_de %>%
-  dplyr::filter(p_val_adj < 0.05)
+arrange(control.myocardium.de, desc(abs(avg_log2FC))) %>% as_tibble(rownames = "gene")
 
-# Save
-write.csv(all_de, file = file.path(out_dir, "differential_expression_per_cluster.csv"), row.names = FALSE)
-write.csv(filter_de, file = file.path(out_dir, "filtered_differential_expression_per_cluster.csv"), row.names = FALSE)
+myocardium_de <- control.myocardium.de %>%
+  rownames_to_column("gene") %>%
+  mutate(
+    neg_log10_padj = -log10(p_val_adj),
+    sig = case_when(
+      p_val_adj < 0.05 & avg_log2FC >  0.25 ~ "Up in e11",
+      p_val_adj < 0.05 & avg_log2FC < -0.25 ~ "Up in e12",
+      TRUE ~ "Not significant"
+    )
+  )
 
-# Example: look at top DE genes in cluster 0 for KO vs control at e11
-head(all_de %>% filter(cluster == 0, contrast == "genotype_e11_ko_vs_control") %>% arrange(p_val_adj))
+ggplot(myocardium_de, aes(x = avg_log2FC, y = neg_log10_padj)) +
+  geom_point(aes(color = sig), alpha = 0.6, size = 1) +
+  scale_color_manual(values = c(
+    "Up in e11" = "firebrick",
+    "Up in e12" = "steelblue",
+    "Not significant" = "grey70"
+  )) +
+  geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed", color = "grey50") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey50") +
+  labs(
+    title = "Myocardium e11 vs e12 (control)",
+    x = "Average log2 fold change (e11 / e12)",
+    y = "-log10 adjusted p-value",
+    color = NULL
+  ) +
+  theme_classic()
+
+top_genes_myocardium <- myocardium_de %>%
+  filter(p_val_adj < 0.01, abs(avg_log2FC) > 0.5)
+
+volcano_myocardium_de <- ggplot(myocardium_de, aes(avg_log2FC, neg_log10_padj)) +
+  geom_point(aes(color = sig), alpha = 0.5, size = 1) +
+  ggrepel::geom_text_repel(
+    data = top_genes_myocardium,
+    aes(label = gene),
+    size = 3,
+    max.overlaps = 20
+  ) +
+  scale_color_manual(values = c(
+    "Up in e11" = "firebrick",
+    "Up in e12" = "steelblue",
+    "Not significant" = "grey80"
+  )) +
+    labs(
+    title = "Myocardium e11 vs e12 (control)",
+    x = "Average log2 fold change (e11 / e12)",
+    y = "-log10 adjusted p-value",
+    color = NULL
+  ) +
+  geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  theme_classic()
+ggsave(volcano_myocardium_de,
+        filename = file.path(out_dir, "07-myocardium_control_de.png"),
+        width = 28,
+        height = 46)
+```
+
+## Endocardium
+
+```{r}
+control.endocardium.de <- FindMarkers(re_embed_interesting_cells,
+                             ident.1 = "Endocardium_e11_control",
+                             ident.2 = "Endocardium_e12_control",
+                             verbose = FALSE)
+
+arrange(control.endocardium.de, desc(abs(avg_log2FC))) %>% as_tibble(rownames = "gene")
+
+endocardium_de <- control.endocardium.de %>%
+  rownames_to_column("gene") %>%
+  mutate(
+    neg_log10_padj = -log10(p_val_adj),
+    sig = case_when(
+      p_val_adj < 0.05 & avg_log2FC >  0.25 ~ "Up in e11",
+      p_val_adj < 0.05 & avg_log2FC < -0.25 ~ "Up in e12",
+      TRUE ~ "Not significant"
+    )
+  )
+
+ggplot(endocardium_de, aes(x = avg_log2FC, y = neg_log10_padj)) +
+  geom_point(aes(color = sig), alpha = 0.6, size = 1) +
+  scale_color_manual(values = c(
+    "Up in e11" = "firebrick",
+    "Up in e12" = "steelblue",
+    "Not significant" = "grey70"
+  )) +
+  geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed", color = "grey50") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey50") +
+  labs(
+    title = "Endocardium e11 vs e12 (control)",
+    x = "Average log2 fold change (e11 / e12)",
+    y = "-log10 adjusted p-value",
+    color = NULL
+  ) +
+  theme_classic()
+
+top_genes_endocardium <- endocardium_de %>%
+  filter(p_val_adj < 0.01, abs(avg_log2FC) > 0.5)
+
+ggplot(endocardium_de, aes(avg_log2FC, neg_log10_padj)) +
+  geom_point(aes(color = sig), alpha = 0.5, size = 1) +
+  ggrepel::geom_text_repel(
+    data = top_genes_endocardium,
+    aes(label = gene),
+    size = 3,
+    max.overlaps = 20
+  ) +
+  scale_color_manual(values = c(
+    "Up in e11" = "firebrick",
+    "Up in e12" = "steelblue",
+    "Not significant" = "grey80"
+  )) +
+    labs(
+    title = "Endocardium e11 vs e12 (control)",
+    x = "Average log2 fold change (e11 / e12)",
+    y = "-log10 adjusted p-value",
+    color = NULL
+  ) +
+  geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  theme_classic()
+```
+
+## Epicardium
+
+```{r}
+control.epicardium.de <- FindMarkers(re_embed_interesting_cells,
+                             ident.1 = "Epicardium_e11_control",
+                             ident.2 = "Epicardium_e12_control",
+                             verbose = FALSE)
+
+arrange(control.epicardium.de, desc(abs(avg_log2FC))) %>% as_tibble(rownames = "gene")
+
+epicardium_de <- control.epicardium.de %>%
+  rownames_to_column("gene") %>%
+  mutate(
+    neg_log10_padj = -log10(p_val_adj),
+    sig = case_when(
+      p_val_adj < 0.05 & avg_log2FC >  0.25 ~ "Up in e11",
+      p_val_adj < 0.05 & avg_log2FC < -0.25 ~ "Up in e12",
+      TRUE ~ "Not significant"
+    )
+  )
+
+ggplot(epicardium_de, aes(x = avg_log2FC, y = neg_log10_padj)) +
+  geom_point(aes(color = sig), alpha = 0.6, size = 1) +
+  scale_color_manual(values = c(
+    "Up in e11" = "firebrick",
+    "Up in e12" = "steelblue",
+    "Not significant" = "grey70"
+  )) +
+  geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed", color = "grey50") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey50") +
+  labs(
+    title = "Epicardium e11 vs e12 (control)",
+    x = "Average log2 fold change (e11 / e12)",
+    y = "-log10 adjusted p-value",
+    color = NULL
+  ) +
+  theme_classic()
+
+top_genes_epicardium <- epicardium_de %>%
+  filter(p_val_adj < 0.01, abs(avg_log2FC) > 0.5)
+
+ggplot(epicardium_de, aes(avg_log2FC, neg_log10_padj)) +
+  geom_point(aes(color = sig), alpha = 0.5, size = 1) +
+  ggrepel::geom_text_repel(
+    data = top_genes_epicardium,
+    aes(label = gene),
+    size = 3,
+    max.overlaps = 20
+  ) +
+  scale_color_manual(values = c(
+    "Up in e11" = "firebrick",
+    "Up in e12" = "steelblue",
+    "Not significant" = "grey80"
+  )) +
+    labs(
+    title = "Epicardium e11 vs e12 (control)",
+    x = "Average log2 fold change (e11 / e12)",
+    y = "-log10 adjusted p-value",
+    color = NULL
+  ) +
+  geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  theme_classic()
+```
+
+## VSMC
+
+```{r}
+control.VSMC.de <- FindMarkers(re_embed_interesting_cells,
+                             ident.1 = "VSMC_e11_control",
+                             ident.2 = "VSMC_e12_control",
+                             verbose = FALSE)
+
+arrange(control.VSMC.de, desc(abs(avg_log2FC))) %>% as_tibble(rownames = "gene")
+
+VSMC_de <- control.VSMC.de %>%
+  rownames_to_column("gene") %>%
+  mutate(
+    neg_log10_padj = -log10(p_val_adj),
+    sig = case_when(
+      p_val_adj < 0.05 & avg_log2FC >  0.25 ~ "Up in e11",
+      p_val_adj < 0.05 & avg_log2FC < -0.25 ~ "Up in e12",
+      TRUE ~ "Not significant"
+    )
+  )
+
+ggplot(VSMC_de, aes(x = avg_log2FC, y = neg_log10_padj)) +
+  geom_point(aes(color = sig), alpha = 0.6, size = 1) +
+  scale_color_manual(values = c(
+    "Up in e11" = "firebrick",
+    "Up in e12" = "steelblue",
+    "Not significant" = "grey70"
+  )) +
+  geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed", color = "grey50") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey50") +
+  labs(
+    title = "VSMC e11 vs e12 (control)",
+    x = "Average log2 fold change (e11 / e12)",
+    y = "-log10 adjusted p-value",
+    color = NULL
+  ) +
+  theme_classic()
+
+top_genes_VSMC <- VSMC_de %>%
+  filter(p_val_adj < 0.01, abs(avg_log2FC) > 0.5)
+
+ggplot(VSMC_de, aes(avg_log2FC, neg_log10_padj)) +
+  geom_point(aes(color = sig), alpha = 0.5, size = 1) +
+  ggrepel::geom_text_repel(
+    data = top_genes_VSMC,
+    aes(label = gene),
+    size = 3,
+    max.overlaps = 20
+  ) +
+  scale_color_manual(values = c(
+    "Up in e11" = "firebrick",
+    "Up in e12" = "steelblue",
+    "Not significant" = "grey80"
+  )) +
+    labs(
+    title = "VSMC e11 vs e12 (control)",
+    x = "Average log2 fold change (e11 / e12)",
+    y = "-log10 adjusted p-value",
+    color = NULL
+  ) +
+  geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  theme_classic()
+
 ```
 
