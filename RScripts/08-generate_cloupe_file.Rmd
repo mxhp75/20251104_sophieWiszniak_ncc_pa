@@ -1,0 +1,88 @@
+---
+title: "LOUPE_BROWSER"
+author: "Melanie Smith"
+date: "2026-02-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(42)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load libraries
+
+```{r}
+library(Seurat)
+library(loupeR)
+```
+
+# Set project directories
+
+```{r}
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+out_dir <- file.path(project_repo_dir, "outDir", "08-cloupe")
+
+# Create directory if it doesn't exist
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir,
+             recursive = TRUE)
+}
+
+```
+
+# Load required Seurat object
+
+```{r}
+re_embed_interesting_cells <- readRDS(
+  file.path(project_repo_dir, "outDir", "06-cluster_marker_genes",
+            "final_interesting_cells_0.6.rds")
+  )
+
+stopifnot(inherits(re_embed_interesting_cells, "Seurat"))
+
+Idents(re_embed_interesting_cells) <- "seurat_clusters"
+Idents(re_embed_interesting_cells) <- factor(Idents(re_embed_interesting_cells))
+DefaultAssay(re_embed_interesting_cells) <- "RNA"
+
+```
+
+# Quick sanity check
+
+```{r}
+print(re_embed_interesting_cells)
+table(Idents(re_embed_interesting_cells))
+stopifnot(!anyDuplicated(colnames(re_embed_interesting_cells)))
+
+```
+
+# Create the cloupe file
+
+```{r}
+loupeR::create_loupe_from_seurat(
+  re_embed_interesting_cells,
+  output_dir = out_dir,
+  output_name = "20260209_Mib1_ko",
+  dedup_clusters = FALSE,
+  force = TRUE
+)
+```
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
+
