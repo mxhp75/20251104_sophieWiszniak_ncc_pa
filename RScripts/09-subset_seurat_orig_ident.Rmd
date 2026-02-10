@@ -223,6 +223,29 @@ save_if(epicardial_markers,
        width = 16,
        height = 8)
 
+gfp_e11_control <- FeaturePlot(
+  object = re_embed_e11_control,
+  features = c("pEGFP-1"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "E11_control pEGFP-1 Reporter",
+    caption = "E11_control"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(gfp_e11_control, 
+       filename = file.path(out_dir, "09-umap.re_embed_gfp_e11_control.png"),
+       width = 8,
+       height = 8)
 # let's save here and reload in a new session
 write_rds(x = re_embed_e11_control,
           file = file.path(out_dir, "re_embed_e11_control.rds"))
@@ -335,6 +358,30 @@ epicardial_markers
 save_if(epicardial_markers, 
        filename = file.path(out_dir, "09-umap.re_embed_e11_ko.epicardial_genes.png"),
        width = 16,
+       height = 8)
+
+gfp_e11_ko <- FeaturePlot(
+  object = re_embed_e11_ko,
+  features = c("pEGFP-1"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "E11_ko pEGFP-1 Reporter",
+    caption = "E11_ko"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(gfp_e11_ko, 
+       filename = file.path(out_dir, "09-umap.re_embed_gfp_e11_ko.png"),
+       width = 8,
        height = 8)
 
 # let's save here and reload in a new session
@@ -450,6 +497,29 @@ save_if(epicardial_markers,
        width = 16,
        height = 8)
 
+gfp_e12_control <- FeaturePlot(
+  object = re_embed_e12_control,
+  features = c("pEGFP-1"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "E12_control pEGFP-1 Reporter",
+    caption = "E12_control"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(gfp_e12_control, 
+       filename = file.path(out_dir, "09-umap.re_embed_gfp_e12_control.png"),
+       width = 8,
+       height = 8)
 # let's save here and reload in a new session
 write_rds(x = re_embed_e12_control,
           file = file.path(out_dir, "re_embed_e12_control.rds"))
@@ -562,6 +632,31 @@ save_if(epicardial_markers,
        filename = file.path(out_dir, "09-umap.re_embed_e12_ko.epicardial_genes.png"),
        width = 16,
        height = 8)
+
+gfp_e12_ko <- FeaturePlot(
+  object = re_embed_e12_ko,
+  features = c("pEGFP-1"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "E12_ko pEGFP-1 Reporter",
+    caption = "E12_ko"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(gfp_e12_ko, 
+       filename = file.path(out_dir, "09-umap.re_embed_gfp_e12_ko.png"),
+       width = 8,
+       height = 8)
+
 
 # let's save here and reload in a new session
 write_rds(x = re_embed_e12_ko,
