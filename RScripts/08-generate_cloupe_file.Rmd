@@ -77,7 +77,7 @@ loupeR::create_loupe_from_seurat(
   output_name = "20260209_Mib1_ko",
   dedup_clusters = FALSE,
   force = TRUE
-)
+  )
 ```
 
 # Session Info
