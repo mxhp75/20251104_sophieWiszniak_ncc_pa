@@ -1,0 +1,423 @@
+---
+title: "Subset Seurat object and re-embed no GFP"
+author: "Melanie Smith"
+date: "2026-02-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+
+# Plotting
+library(patchwork)
+```
+
+# Set project directories
+
+```{r}
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+out_dir <- file.path(project_repo_dir, "outDir", "09-rna_velocity")
+
+# Create directory if it doesn't exist
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir,
+             recursive = TRUE)
+}
+
+```
+# User defined functions
+
+```{r}
+# Helper function (put this at the top of your script)
+save_if <- function(plot_object, filename, width, height, ...) {
+  if (save_plots) {
+    ggsave(plot = plot_object,
+           filename = filename,
+           width = width,
+           height = height,
+           dpi = 300)
+  }
+}
+# change to TRUE to save plots
+save_plots <- TRUE
+```
+
+# Load required Seurat object
+
+```{r}
+re_embed_interesting_cells <- readRDS(
+  file.path(project_repo_dir, "outDir", "06-cluster_marker_genes",
+            "final_interesting_cells_0.6.rds")
+  )
+
+stopifnot(inherits(re_embed_interesting_cells, "Seurat"))
+
+Idents(re_embed_interesting_cells) <- "seurat_clusters"
+Idents(re_embed_interesting_cells) <- factor(Idents(re_embed_interesting_cells))
+DefaultAssay(re_embed_interesting_cells) <- "RNA"
+
+# Save the existing Seurat clusters
+re_embed_interesting_cells$full_dataset_clusters <- re_embed_interesting_cells$seurat_clusters
+
+```
+
+# Split Seurat object
+
+```{r}
+# split the existing Seurat object into a names list
+seurat_list <- SplitObject(re_embed_interesting_cells,
+                           split.by = "orig.ident")
+
+e11_control <- seurat_list[["e11_control"]]
+e12_control <- seurat_list[["e12_control"]]
+e11_ko <- seurat_list[["e11_ko"]]
+e12_ko <- seurat_list[["e12_ko"]]
+
+```
+
+## Set up the cell-type colours
+
+```{r}
+celltype_cols <- c("Myocardium" = "#E41A1C",
+                   "VSMC" = "#377EB8", 
+                   "Epicardium" = "#4DAF4A",
+                   "Mesenchyme" = "#984EA3", 
+                   "Endocardium" = "#FF7F00",
+                   "Other/Unknown" = "grey70")
+
+epicardial_genes <- c("Wt1", "Upk3b", "Apela", "Upk1b", "Aldh1a2")
+endocardial_genes <- c("Ecscr", "Cdh5", "Tie1", "Rasip1", "Plxnd1")
+```
+
+# Re-embed Normalise, find variable features, scale, PCA, UMAP, cluster and visualise
+## E11_control
+
+```{r}
+# quick dimplot using the existing clusters
+DimPlot(e11_control,
+        group.by = "seurat_clusters")
+
+n_dims = 30
+# Re-computation of graph-based clustering and UMAP on the cleaned dataset
+re_embed_e11_control <- FindVariableFeatures(e11_control,
+                                        selection.method = "vst", 
+                                        nfeatures = 3000,
+                                        verbose = FALSE) %>%
+  ScaleData(features = rownames(e11_control),
+            verbose = FALSE)
+
+# Get the current variable features
+var_genes <- VariableFeatures(re_embed_e11_control)
+
+# Remove the GFP reporter (and any other unwanted genes if needed)
+exclude_genes <- c("pEGFP-1")   # or c("pEGFP-1", "another_transgene")
+var_genes_filtered <- setdiff(var_genes, exclude_genes)
+
+# Now run PCA using only the filtered list
+re_embed_e11_control <- RunPCA(
+  re_embed_e11_control,
+  features = var_genes_filtered,   # use only the filtered list -> no GFP reporter
+  verbose  = FALSE
+  ) %>%
+  FindNeighbors(dims = 1:n_dims,
+                verbose = FALSE) %>%
+  RunUMAP(dims = 1:n_dims,
+          verbose = FALSE)
+
+```
+
+## make umaps
+
+```{r}
+
+# plot the umap with new celltypes
+umap_newCelltype <- DimPlot(re_embed_e11_control,
+        reduction = "umap",
+        group.by = "new_celltypes",
+        label = TRUE,
+        label.size = 6
+        ) +
+  labs(
+    title = "E11_control - new embedding (new celltypes) no GFP",
+    caption = "E11_control"
+  ) +
+    scale_color_manual(values = celltype_cols) +
+  NoLegend()
+umap_newCelltype
+save_if(umap_newCelltype,
+           filename = file.path(out_dir, "09-umap.re_embed_e11_control_cells.new_celltypes_noGFP.png"),
+           width = 8,
+           height = 8)
+
+endocardial_markers <- FeaturePlot(
+  object = re_embed_e11_control,
+  features = c("Ecscr", "Cdh5"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "E11_control Endocardial lineage markers _noGFP",
+    caption = "E11_control"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+endocardial_markers
+save_if(endocardial_markers, 
+       filename = file.path(out_dir, "09-umap.re_embed_e11_control.endocardial_genes_noGFP.png"),
+       width = 16,
+       height = 8)
+
+epicardial_markers <- FeaturePlot(
+  object = re_embed_e11_control,
+  features = c("Wt1", "Upk3b"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "E11_control Epicardial lineage markers _noGFP",
+    caption = "E11_control"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+epicardial_markers
+save_if(epicardial_markers, 
+       filename = file.path(out_dir, "09-umap.re_embed_e11_control.epicardial_genes_noGFP.png"),
+       width = 16,
+       height = 8)
+
+gfp_e11_control <- FeaturePlot(
+  object = re_embed_e11_control,
+  features = c("pEGFP-1"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "E11_control pEGFP-1 Reporter _noGFP",
+    caption = "E11_control"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(gfp_e11_control, 
+       filename = file.path(out_dir, "09-umap.re_embed_gfp_e11_control_noGFP.png"),
+       width = 8,
+       height = 8)
+
+
+FeaturePlot(
+  object = re_embed_e11_control,
+  features = c("Rgs5", "Cxcl12"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "E11_control VSMC lineage markers _noGFP",
+    caption = "E11_control"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+## E11_ko
+
+```{r}
+# quick dimplot using the existing clusters
+DimPlot(e11_ko,
+        group.by = "seurat_clusters")
+
+n_dims = 30
+# Re-computation of graph-based clustering and UMAP on the cleaned dataset
+re_embed_e11_ko <- FindVariableFeatures(e11_ko,
+                                        selection.method = "vst", 
+                                        nfeatures = 3000,
+                                        verbose = FALSE) %>%
+  ScaleData(features = rownames(e11_ko),
+            verbose = FALSE)
+
+# Get the current variable features
+var_genes <- VariableFeatures(re_embed_e11_ko)
+
+# Remove the GFP reporter (and any other unwanted genes if needed)
+exclude_genes <- c("pEGFP-1")   # or c("pEGFP-1", "another_transgene")
+var_genes_filtered <- setdiff(var_genes, exclude_genes)
+
+# Now run PCA using only the filtered list
+re_embed_e11_ko <- RunPCA(
+  re_embed_e11_ko,
+  features = var_genes_filtered,   # use only the filtered list -> no GFP reporter
+  verbose  = FALSE
+  ) %>%
+  FindNeighbors(dims = 1:n_dims,
+                verbose = FALSE) %>%
+  RunUMAP(dims = 1:n_dims,
+          verbose = FALSE)
+
+```
+
+## make umaps
+
+```{r}
+# plot the umap with new celltypes
+umap_newCelltype <- DimPlot(re_embed_e11_ko,
+        reduction = "umap",
+        group.by = "new_celltypes",
+        label = TRUE,
+        label.size = 6
+        ) +
+  labs(
+    title = "e11_ko - new embedding (new celltypes) _noGFP",
+    caption = "e11_ko"
+  ) +
+    scale_color_manual(values = celltype_cols) +
+  NoLegend()
+umap_newCelltype
+save_if(umap_newCelltype,
+           filename = file.path(out_dir, "09-umap.re_embed_e11_ko_cells.new_celltypes_noGFP.png"),
+           width = 8,
+           height = 8)
+
+endocardial_markers <- FeaturePlot(
+  object = re_embed_e11_ko,
+  features = c("Ecscr", "Cdh5"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "e11_ko Endocardial lineage markers_noGFP",
+    caption = "e11_ko"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+endocardial_markers
+save_if(endocardial_markers, 
+       filename = file.path(out_dir, "09-umap.re_embed_e11_ko.endocardial_genes_noGFP.png"),
+       width = 16,
+       height = 8)
+
+epicardial_markers <- FeaturePlot(
+  object = re_embed_e11_ko,
+  features = c("Wt1", "Upk3b"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "E11_ko Epicardial lineage markers_noGFP",
+    caption = "E11_ko"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+epicardial_markers
+save_if(epicardial_markers, 
+       filename = file.path(out_dir, "09-umap.re_embed_e11_ko.epicardial_genes_noGFP.png"),
+       width = 16,
+       height = 8)
+
+gfp_e11_ko <- FeaturePlot(
+  object = re_embed_e11_ko,
+  features = c("pEGFP-1"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "E11_ko pEGFP-1 Reporter_noGFP",
+    caption = "E11_ko"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(gfp_e11_ko, 
+       filename = file.path(out_dir, "09-umap.re_embed_gfp_e11_ko_noGFP.png"),
+       width = 8,
+       height = 8)
+
+
+FeaturePlot(
+  object = re_embed_e11_ko,
+  features = c("Rgs5", "Cxcl12"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "E11_ko VSMC lineage markers _noGFP",
+    caption = "E11_ko"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
