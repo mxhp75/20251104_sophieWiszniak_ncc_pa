@@ -151,7 +151,7 @@ umap_newCelltype <- DimPlot(re_embed_e12_control,
   NoLegend()
 umap_newCelltype
 save_if(umap_newCelltype,
-           filename = file.path(out_dir, "09-umap.re_embed_e12_control_cells.new_celltypes.png"),
+           filename = file.path(out_dir, "09-umap.re_embed_e12_control.new_celltypes.png"),
            width = 8,
            height = 8)
 
