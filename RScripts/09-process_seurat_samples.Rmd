@@ -1,0 +1,322 @@
+---
+title: "Sample level embeddings"
+author: "Melanie Smith"
+date: "2026-02-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+
+# Plotting
+library(patchwork)
+```
+
+# Set project directories and parameters
+
+```{r}
+# Set sample ID -> Which sample do you want to run the script for?
+# sample_ID <- "e11_control"
+# sample_ID <- "e11_ko"
+# sample_ID <- "e12_control"
+sample_ID <- "e12_ko"
+
+# Set directories
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+out_dir <- file.path(project_repo_dir, "outDir", "09-rna_velocity", sample_ID)
+
+# Create directory if it doesn't exist
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir,
+             recursive = TRUE)
+}
+```
+
+# User defined functions
+
+```{r}
+# Helper function (put this at the top of your script)
+save_if <- function(plot_object, filename, width, height, ...) {
+  if (save_plots) {
+    ggsave(plot = plot_object,
+           filename = filename,
+           width = width,
+           height = height,
+           dpi = 300)
+  }
+}
+# change to TRUE to save plots
+save_plots <- TRUE
+```
+
+# Load required Seurat object
+
+```{r}
+seurat_obj <- readRDS(file.path(project_repo_dir, "outDir", "09-rna_velocity", paste0(sample_ID, ".rds")))
+
+stopifnot(inherits(seurat_obj, "Seurat"))
+
+Idents(seurat_obj) <- "seurat_clusters"
+Idents(seurat_obj) <- factor(Idents(seurat_obj))
+DefaultAssay(seurat_obj) <- "RNA"
+
+# Save the existing Seurat clusters
+seurat_obj$full_dataset_clusters <- seurat_obj$seurat_clusters
+
+
+```
+
+## Set up the cell-type colours
+
+```{r}
+celltype_cols <- c("Myocardium" = "#E41A1C",
+                   "VSMC" = "#377EB8", 
+                   "Epicardium" = "#4DAF4A",
+                   "Mesenchyme" = "#984EA3", 
+                   "Endocardium" = "#FF7F00",
+                   "Other/Unknown" = "grey70")
+
+epicardial_genes <- c("Wt1", "Upk3b", "Apela", "Upk1b", "Aldh1a2")
+
+endocardial_genes <- c("Ecscr", "Cdh5", "Tie1", "Rasip1", "Plxnd1")
+```
+
+# Re-embed Normalise, find variable features, scale, PCA, UMAP, cluster and visualise
+
+```{r}
+# quick dimplot using the existing clusters
+DimPlot(seurat_obj,
+        group.by = "seurat_clusters")
+
+n_dims = 30
+# Re-computation of graph-based clustering and UMAP on the cleaned dataset
+re_embed_seurat_obj <- FindVariableFeatures(seurat_obj,
+                                        selection.method = "vst", 
+                                        nfeatures = 3000,
+                                        verbose = FALSE) %>%
+  ScaleData(features = rownames(seurat_obj),
+            verbose = FALSE) %>%
+  RunPCA(verbose = FALSE) %>%
+  FindNeighbors(dims = 1:n_dims,
+                verbose = FALSE) %>%
+  RunUMAP(dims = 1:n_dims,
+          verbose = FALSE)
+
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(re_embed_seurat_obj), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(re_embed_seurat_obj)
+plot2 <- LabelPoints(plot = plot1,
+                     points = top10,
+                     repel = TRUE) +
+  labs(
+    title = paste0(sample_ID, "- new embedding"),
+    caption = sample_ID
+    ) +
+  NoLegend()
+plot2
+
+VizDimLoadings(re_embed_seurat_obj,
+               dims = 1:2,
+               reduction = "pca")
+
+DimPlot(re_embed_seurat_obj,
+        reduction = "pca") + 
+  NoLegend()
+
+DimHeatmap(re_embed_seurat_obj,
+           dims = 1:6,
+           cells = 500,
+           balanced = TRUE)
+
+ElbowPlot(re_embed_seurat_obj)
+
+```
+
+```{r}
+# plot the umap with old cluster numbers and colours
+umap_oldCluster <- DimPlot(re_embed_seurat_obj,
+        reduction = "umap",
+        group.by = "full_dataset_clusters",
+        label = TRUE,
+        label.size = 6
+        ) +
+  labs(
+    title = paste0(sample_ID, " - new embedding (old clusters)"),
+    caption = sample_ID
+  ) +
+  NoLegend()
+save_if(umap_oldCluster,
+        filename = file.path(out_dir, paste0("09-umap.re_embed.", sample_ID, ".old_clusters.png")),
+        width = 8,
+        height = 8)
+
+# plot the umap with new celltypes
+umap_newCelltype <- DimPlot(re_embed_seurat_obj,
+        reduction = "umap",
+        group.by = "new_celltypes",
+        label = TRUE,
+        label.size = 6
+        ) +
+  labs(
+    title = paste0(sample_ID, " - new embedding (new celltypes)"),
+    caption = sample_ID
+  ) +
+    scale_color_manual(values = celltype_cols) +
+  NoLegend()
+umap_newCelltype
+save_if(umap_newCelltype,
+           filename = file.path(out_dir, paste0("09-umap.re_embed.", sample_ID,".new_celltypes.png")),
+           width = 8,
+           height = 8)
+
+endocardial_markers <- FeaturePlot(
+  object = re_embed_seurat_obj,
+  features = c("Ecscr", "Cdh5"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = paste0(sample_ID, " Endocardial lineage markers"),
+    caption = sample_ID
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+endocardial_markers
+save_if(endocardial_markers, 
+       filename = file.path(out_dir, paste0("09-umap.re_embed.", sample_ID, ".endocardial_genes.png")),
+       width = 16,
+       height = 8)
+
+epicardial_markers <- FeaturePlot(
+  object = re_embed_seurat_obj,
+  features = c("Wt1", "Upk3b"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = paste0(sample_ID, " Epicardial lineage markers"),
+    caption = sample_ID
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+epicardial_markers
+save_if(epicardial_markers, 
+       filename = file.path(out_dir, paste0("09-umap.re_embed.", sample_ID, ".epicardial_genes.png")),
+       width = 16,
+       height = 8)
+
+gfp_feature <- FeaturePlot(
+  object = re_embed_seurat_obj,
+  features = c("pEGFP-1"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = paste0(sample_ID, " pEGFP-1 Reporter"),
+    caption = sample_ID
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(gfp_feature, 
+       filename = file.path(out_dir, paste0("09-umap.re_embed.", sample_ID, ".gfp.png")),
+       width = 8,
+       height = 8)
+
+
+FeaturePlot(
+  object = re_embed_seurat_obj,
+  features = c("Rgs5", "Cxcl12"),
+  ncol = 1,                      # side-by-side panels
+  order = TRUE
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = paste0(sample_ID, " VSMC lineage markers"),
+    caption = sample_ID
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+
+cellCycle_feature <- FeaturePlot(
+  object = re_embed_seurat_obj,
+  features = c("G2M.Score", "S.Score"),
+  ncol = 1,                      # vertical panels
+  order = TRUE                   # high-expression cells on top
+) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = paste0(sample_ID, " Cell Cycle"),
+    caption = sample_ID
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(cellCycle_feature, 
+       filename = file.path(out_dir, paste0("09-umap.re_embed.cellCycle.", sample_ID, ".png")),
+       width = 8,
+       height = 16)
+
+# let's save here and reload in a new session
+write_rds(x = re_embed_seurat_obj,
+          file = file.path(out_dir, paste0("re_embed.", sample_ID, ".rds")))
+```
+
+
