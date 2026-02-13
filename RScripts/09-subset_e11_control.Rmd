@@ -119,6 +119,40 @@ re_embed_e11_control <- FindVariableFeatures(e11_control,
   RunUMAP(dims = 1:n_dims,
           verbose = FALSE)
 
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(e11_control), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(e11_control)
+plot2 <- LabelPoints(plot = plot1,
+                     points = top10,
+                     repel = TRUE) +
+  labs(
+    title = "e11_control (3000 variable genes)",
+    caption = "e11_control"
+    ) +
+  NoLegend()
+plot2
+
+VizDimLoadings(e11_control,
+               dims = 1:2,
+               reduction = "pca")
+
+DimPlot(e11_control,
+        reduction = "pca") + 
+  NoLegend()
+
+DimHeatmap(e11_control,
+           dims = 1:6,
+           cells = 500,
+           balanced = TRUE)
+
+ElbowPlot(e11_control)
+
+```
+
+```{r}
 # plot the umap with old cluster numbers and colours
 umap_oldCluster <- DimPlot(re_embed_e11_control,
         reduction = "umap",
