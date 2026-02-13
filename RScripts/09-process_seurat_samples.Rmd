@@ -39,10 +39,10 @@ library(patchwork)
 
 ```{r}
 # Set sample ID -> Which sample do you want to run the script for?
-# sample_ID <- "e11_control"
+sample_ID <- "e11_control"
 # sample_ID <- "e11_ko"
 # sample_ID <- "e12_control"
-sample_ID <- "e12_ko"
+# sample_ID <- "e12_ko"
 
 # Set directories
 project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
