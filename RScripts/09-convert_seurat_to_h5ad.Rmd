@@ -1,0 +1,92 @@
+---
+title: "export the Seurat object to h5ad"
+author: "Melanie Smith"
+date: "2026-02-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+
+# remotes::install_github("cellgeni/sceasy")
+library(sceasy)
+library(reticulate)
+# reticulate::py_install("anndata", pip = TRUE)
+
+```
+
+# Set project directories and parameters
+
+```{r}
+# Set sample ID -> Which sample do you want to run the script for?
+sample_ID <- "e11_control"
+# sample_ID <- "e11_ko"
+# sample_ID <- "e12_control"
+# sample_ID <- "e12_ko"
+
+# Set directories
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+out_dir <- file.path(project_repo_dir, "outDir", "09-rna_velocity", sample_ID)
+
+# Create directory if it doesn't exist
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir,
+             recursive = TRUE)
+}
+```
+
+# Load required Seurat object
+
+```{r}
+seurat_obj <- readRDS(file.path(project_repo_dir, "outDir", "09-rna_velocity", sample_ID, paste0("re_embed.", sample_ID, ".rds")))
+
+stopifnot(inherits(seurat_obj, "Seurat"))
+
+Idents(seurat_obj) <- "seurat_clusters"
+Idents(seurat_obj) <- factor(Idents(seurat_obj))
+DefaultAssay(seurat_obj) <- "RNA"
+```
+
+# Convert
+
+```{r}
+
+# Full path for output
+h5ad_file <- file.path(out_dir, paste0(sample_ID, ".h5ad"))
+
+# Convert Assay5 → Assay3 (legacy) so sceasy can handle it
+seurat_obj[["RNA"]] <- as(seurat_obj[["RNA"]], "Assay")
+
+# Confirm class is now legacy
+cat("Assay class:", class(seurat_obj[["RNA"]]), "\n")  # should print "Assay"
+
+# Now retry
+sceasy::convertFormat(seurat_obj,
+                      from = "seurat",
+                      to = "anndata",
+                      outFile = h5ad_file,
+                      assay = "RNA",
+                      main_layer = "counts",
+                      transfer_layers = "data")
+```
+
