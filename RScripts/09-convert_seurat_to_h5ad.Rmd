@@ -32,6 +32,8 @@ library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
 library(sceasy)
 library(reticulate)
 # reticulate::py_install("anndata", pip = TRUE)
+library(anndata)
+library(scCustomize)
 
 ```
 
@@ -72,7 +74,7 @@ DefaultAssay(seurat_obj) <- "RNA"
 ```{r}
 
 # Full path for output
-h5ad_file <- file.path(out_dir, paste0(sample_ID, ".h5ad"))
+# h5ad_file <- file.path(out_dir, paste0(sample_ID, ".h5ad"))
 
 # Convert Assay5 → Assay3 (legacy) so sceasy can handle it
 seurat_obj[["RNA"]] <- as(seurat_obj[["RNA"]], "Assay")
@@ -80,13 +82,18 @@ seurat_obj[["RNA"]] <- as(seurat_obj[["RNA"]], "Assay")
 # Confirm class is now legacy
 cat("Assay class:", class(seurat_obj[["RNA"]]), "\n")  # should print "Assay"
 
-# Now retry
-sceasy::convertFormat(seurat_obj,
-                      from = "seurat",
-                      to = "anndata",
-                      outFile = h5ad_file,
-                      assay = "RNA",
-                      main_layer = "counts",
-                      transfer_layers = "data")
+# Now convert to h5ad - moving to the ann.data option as it converts more layers and the resulting map looks more like what I expected
+# sceasy::convertFormat(seurat_obj,
+#                       from = "seurat",
+#                       to = "anndata",
+#                       outFile = h5ad_file,
+#                       assay = "RNA",
+#                       main_layer = "counts",
+#                       transfer_layers = "data")
+
+
+
+obj_adata <- as.anndata(seurat_obj, file_path = out_dir, file_name = paste0(sample_ID, ".h5ad"))
+
 ```
 
