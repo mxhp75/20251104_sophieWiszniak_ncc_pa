@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-SCVELO
+
 =================
 
-This script takes a filtered and normalised Seurat object and generates the intron/exon count files required for RNA-Velocity
+This script takes a filtered and normalised Seurat object, converted previously to a .5had file, and generates the paga graph (coarse-grained connectivity map between cell type clusters) and uses this information generate the FDG projections
 
 Author: Melanie Smith
 Email:  melanie.smith@adelaide.edu.au
@@ -32,11 +32,9 @@ from operator import index
 #-----------------------------------------------------------------------------------
 
 import pandas as pd
-#import pandas_stubs
 import scanpy as sc # single-cell analysis toolkit
 import matplotlib.pyplot as plt
 import os
-
 
 #-----------------------------------------------------------------------------------
 #   Params
