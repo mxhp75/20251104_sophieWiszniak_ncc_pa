@@ -105,3 +105,9 @@ df_fa = pd.DataFrame(
 ).reset_index().rename(columns={"index": "barcode"})
 
 df_fa.to_csv(os.path.join(save_dir, f"forceatlas2_embedding.csv"), index=False)
+
+# write out the adata object for use in the RNA Velocity workflow
+adata.write_h5ad(
+    os.path.join(base_dir, sample_id, f"{sample_id}_fdg.h5ad"),
+    compression="gzip"           # or None for faster write / larger file
+)
