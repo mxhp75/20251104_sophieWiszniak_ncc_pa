@@ -19,7 +19,6 @@ Notes:
     - Main libraries used: ...
     - Python version: >= 3.9 recommended
 """
-from operator import index
 
 #-----------------------------------------------------------------------------------
 #   Global configs
@@ -39,8 +38,7 @@ import os
 #-----------------------------------------------------------------------------------
 #   Params
 #-----------------------------------------------------------------------------------
-fPCA=50 # set no. of pcs input
-fNEIGHBOUR=50 # set no. of neighbours input
+fPCA=50 # set no. of pcs - this is used to populate the adata.obsm['X_pca'] field (run once)
 
 # set the sample ID
 sample_id = "e11_control"
@@ -59,24 +57,20 @@ print(adata)
 print(adata.layers.keys())       # at least 'counts', possibly others
 print(adata.obsm.keys())         # X_pca, X_umap, etc.
 
-# run pca
+# Compute PCA once with enough components (50) to cover all tested n_pcs values
 sc.tl.pca(adata, svd_solver='arpack', n_comps=fPCA)
-# compute neighbourhood graph (constructs a k-nearest neighbour graph using PCA space)
-sc.pp.neighbors(adata, n_neighbors=fNEIGHBOUR, n_pcs=fPCA)
-# run paga new cell types (computes a coarse-grained connectivity graph between clusters)
-sc.tl.paga(adata, groups='new_celltypes')
-# Plot PAGA Graph
-sc.pl.paga(adata, color=['new_celltypes'], node_size_scale=4, fontsize= 5) # plot paga graph
 
-# create the PAGA informed FDG
-sc.tl.draw_graph(adata, layout="fa", init_pos='paga')
-sc.pl.draw_graph(adata, color="new_celltypes", legend_loc="right margin", legend_fontsize=8, size=18) # plot the FDG
+#-----------------------------------------------------------------------------------
+# Explore the nPC and nNeighbours range
+# PAGA informed Force Directed Graph
+# Save output for all permutations
+#-----------------------------------------------------------------------------------
 
-pc_range = [10, 15, 20, 30]
+pc_range = [10, 15, 20, 30] # this is how many PCs will be considered -> does not create a new adata.obsm['X_pca']
 neighbour_range = [15, 25, 30, 50]
 
 # Create output directory if it doesn't exist
-save_dir = os.path.join(out_dir, sample_id)
+save_dir = os.path.join(out_dir, sample_id, f"scanpy_output/celltypes")
 os.makedirs(save_dir, exist_ok=True)
 
 for n_pcs in pc_range:
@@ -84,30 +78,49 @@ for n_pcs in pc_range:
         adata_test = adata.copy()
 
         sc.pp.neighbors(adata_test, n_pcs=n_pcs, n_neighbors=n_neighbours)
-        sc.tl.paga(adata_test, groups="new_celltypes")
-        sc.pl.paga(adata_test, threshold=0.03, show=False)
-        sc.tl.draw_graph(adata_test, init_pos="paga")
-        sc.pl.draw_graph(adata_test,
-                         color="new_celltypes",
-                         title=f"pcs={n_pcs}, neighbours={n_neighbours}",
-                         show=False)
 
-        plt.savefig(os.path.join(save_dir, f"fdg_pcs{n_pcs}_neighbours{n_neighbours}.png"),
-                    bbox_inches="tight", dpi=150)
+        # Compute PAGA
+        sc.tl.paga(adata_test, groups="new_celltypes")
+
+        # Plot & SAVE PAGA
+        sc.pl.paga(
+            adata_test,
+            threshold=0.03,
+            color="new_celltypes",
+            node_size_scale=4,
+            fontsize=5,
+            title=f"PAGA – pcs={n_pcs}, neighbours={n_neighbours}",
+            show=False
+        )
+
+        plt.savefig(
+            os.path.join(save_dir, f"paga_pcs{n_pcs}_neighbours{n_neighbours}.png"),
+            bbox_inches="tight",
+            dpi=150
+        )
+        plt.close()  # Clean up this figure immediately
+
+        # Compute and plot FDG
+        sc.tl.draw_graph(adata_test, init_pos="paga")
+        sc.pl.draw_graph(
+            adata_test,
+            color="new_celltypes",
+            title=f"FDG – pcs={n_pcs}, neighbours={n_neighbours}",
+            legend_loc="right margin",
+            legend_fontsize=8,
+            size=18,
+            show=False
+        )
+
+        plt.savefig(
+            os.path.join(save_dir, f"fdg_pcs{n_pcs}_neighbours{n_neighbours}.png"),
+            bbox_inches="tight",
+            dpi=150
+        )
         plt.close()
 
-
-# Save new paga informed FDG embedding and cell barcodes as a data frame
-df_fa = pd.DataFrame(
-    adata.obsm["X_draw_graph_fa"],
-    columns=["FA_1", "FA_2"],
-    index=adata.obs_names
-).reset_index().rename(columns={"index": "barcode"})
-
-df_fa.to_csv(os.path.join(save_dir, f"forceatlas2_embedding.csv"), index=False)
-
-# write out the adata object for use in the RNA Velocity workflow
-adata.write_h5ad(
-    os.path.join(base_dir, sample_id, f"{sample_id}_fdg.h5ad"),
-    compression="gzip"           # or None for faster write / larger file
-)
+        # write out the adata object for use in the RNA Velocity workflow
+        adata_test.write_h5ad(
+            os.path.join(save_dir, f"{sample_id}_fdg_pcs{n_pcs}_neighbours{n_neighbours}_celltypes.h5ad"),
+            compression="gzip"
+        )
