@@ -43,12 +43,12 @@ sample_id = "e11_control"
 #sample_id = "e12_ko"
 
 # set the number of PCs
-pcs="pcs20"
-#pcs="pcs30"
+#pcs="pcs20"
+pcs="pcs30"
 
 # set the number of neighbours
-neighbours="neighbours15"
-#neighbours="neighbours25"
+#neighbours="neighbours15"
+neighbours="neighbours25"
 #neighbours="neighbours50"
 
 # set the main project directory
@@ -128,14 +128,18 @@ print("common:", len(common))
 # subset the .loom file to match the adata object
 vlm = (vlm[common].copy())
 
-# safety check after merging
-print(adata.layers.keys())
-
 #-----------------------------------------------------------------------------------
 # merge the adata and ldata (vlm) objects
 #-----------------------------------------------------------------------------------
 
+# ensure cell order matches before merging
+vlm = vlm[adata.obs_names].copy()
+
+# merge the data
 adata = scv.utils.merge(adata, vlm)
+
+# safety check after merging
+print(adata.layers.keys())
 
 #-----------------------------------------------------------------------------------
 # let's take a look at the proportion of spliced and unspliced reads
@@ -143,8 +147,15 @@ adata = scv.utils.merge(adata, vlm)
 scv.pl.proportions(adata)
 
 #-----------------------------------------------------------------------------------
-# now we need to normalise the spliced data (Seurat object is already normalised - should detect this but need to check)
+# now we need to normalise the spliced data
 #-----------------------------------------------------------------------------------
+
+# ensure previous moments are removed (I don't plan to re-run but just in case)
+adata.layers.pop("Ms", None)
+adata.layers.pop("Mu", None)
+adata.uns.pop("neighbors", None)
+
+# filter and normalise
 scv.pp.filter_and_normalize(adata)
 
 #-----------------------------------------------------------------------------------
@@ -155,6 +166,10 @@ scv.pp.moments(adata)
 #-----------------------------------------------------------------------------------
 # compute the dynamical model and velocities
 #-----------------------------------------------------------------------------------
+
+# find the top genes, quicker and less noisy than using all genes
+scv.pp.filter_genes(adata, min_shared_counts=20)
+scv.pp.filter_genes_dispersion(adata, n_top_genes=2000)
 
 scv.tl.recover_dynamics(adata, n_jobs=1, show_progress_bar=False)          # this can take time
 scv.tl.velocity(adata, mode='dynamical')
@@ -186,7 +201,7 @@ plt.close()
 
 scv.pl.velocity_embedding(
     adata,
-    title=f"fdg projection ({paga_group}) - dynamical - {sample_id}",
+    title=f"PCs= {pcs}, Neighbours= {neighbours} - ({paga_group}) - dynamical - {sample_id}",
     basis='draw_graph_fa',
     color='new_celltypes',
     arrow_length=3,

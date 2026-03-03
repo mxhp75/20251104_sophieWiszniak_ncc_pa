@@ -33,8 +33,8 @@ import os
 #-----------------------------------------------------------------------------------
 
 # set PAGA group
-paga_group = "celltypes"
-# paga_group = "clusters"
+# paga_group = "celltypes"
+paga_group = "clusters"
 
 # set the sample ID
 sample_id = "e11_control"
@@ -43,12 +43,12 @@ sample_id = "e11_control"
 #sample_id = "e12_ko"
 
 # set the number of PCs
-pcs="pcs20"
-#pcs="pcs30"
+#pcs="pcs20"
+pcs="pcs30"
 
 # set the number of neighbours
-neighbours="neighbours15"
-#neighbours="neighbours25"
+#neighbours="neighbours15"
+neighbours="neighbours25"
 #neighbours="neighbours50"
 
 # set the main project directory
@@ -128,14 +128,18 @@ print("common:", len(common))
 # subset the .loom file to match the adata object
 vlm = (vlm[common].copy())
 
-# safety check after merging
-print(adata.layers.keys())
-
 #-----------------------------------------------------------------------------------
 # merge the adata and ldata (vlm) objects
 #-----------------------------------------------------------------------------------
 
+# ensure cell order matches before merging
+vlm = vlm[adata.obs_names].copy()
+
+# merge the data
 adata = scv.utils.merge(adata, vlm)
+
+# safety check after merging
+print(adata.layers.keys())
 
 #-----------------------------------------------------------------------------------
 # let's take a look at the proportion of spliced and unspliced reads
@@ -145,6 +149,13 @@ scv.pl.proportions(adata)
 #-----------------------------------------------------------------------------------
 # now we need to normalise the spliced data (Seurat object is already normalised - should detect this but need to check)
 #-----------------------------------------------------------------------------------
+
+# ensure previous moments are removed (I don't plan to re-run but just in case)
+adata.layers.pop("Ms", None)
+adata.layers.pop("Mu", None)
+adata.uns.pop("neighbors", None)
+
+# filter and normalise
 scv.pp.filter_and_normalize(adata)
 
 #-----------------------------------------------------------------------------------
@@ -166,29 +177,14 @@ scv.tl.velocity(adata, mode='dynamical')
 scv.tl.velocity_graph(adata)
 
 #-----------------------------------------------------------------------------------
-# plot each individual cell as one velocity arrow using the umap projections
+# plot each individual cell as one velocity arrow using the FDG projections
 #-----------------------------------------------------------------------------------
-scv.pl.velocity_embedding(
-    adata,
-    title=f"umap projection - dynamical - {sample_id}",
-    basis='umap',
-    color='new_celltypes',
-    arrow_length=3,
-    arrow_size=2,
-    dpi=120,
-    show=False,
-    legend_loc="bottom right"
-)
-plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_umap_{pcs}_{neighbours}_{paga_group}.png"),
-            dpi=300,
-            bbox_inches="tight")
-plt.close()
 
 scv.pl.velocity_embedding(
     adata,
-    title=f"fdg projection ({paga_group}) - dynamical - {sample_id}",
+    title=f"PCs= {pcs}, Neighbours= {neighbours} - ({paga_group}) - dynamical - {sample_id}",
     basis='draw_graph_fa',
-    color='new_celltypes',
+    color='full_dataset_clusters',
     arrow_length=3,
     arrow_size=2,
     dpi=120,
