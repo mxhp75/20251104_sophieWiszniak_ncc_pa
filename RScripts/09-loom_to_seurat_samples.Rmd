@@ -64,7 +64,6 @@ if (!dir.exists(out_dir)) {
 spliced_obj_file <- file.path(out_dir, "velocyto_output", "spliced_counts.tsv.gz")
 unspliced_obj_file <- file.path(out_dir, "velocyto_output", "unspliced_counts.tsv.gz")
 
-
 ```
 
 # Import files
@@ -192,8 +191,9 @@ identical(
 # Create a new Seurat object from the count matrix
 new_seurat <- CreateSeuratObject(counts = combined_counts)
 
-# Add the genotype metadata from the existing Seurat object
-new_seurat <- AddMetaData(new_seurat, metadata = seurat_obj@meta.data[, c("orig.ident", "genotype", "stage", "predicted_sex", "new_celltypes", "full_dataset_clusters", "G2M.Score", "S.Score")])
+# Add the metadata from the existing Seurat object
+new_seurat <- AddMetaData(new_seurat,
+                          metadata = seurat_obj@meta.data[, c("orig.ident", "genotype", "stage", "predicted_sex", "new_celltypes", "full_dataset_clusters", "G2M.Score", "S.Score")])
 
 # Verify the new object
 print(new_seurat)
@@ -201,7 +201,7 @@ head(new_seurat@meta.data)
 
 ```
 
-# Normalise, find variable features, scale, PCA, UMAP, cluster
+# Normalise, find variable features, scale, PCA, UMAP
 
 ```{r}
 n_dims = 30
