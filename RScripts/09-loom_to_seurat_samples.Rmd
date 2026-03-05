@@ -1,0 +1,318 @@
+---
+title: "Import Velocyto Loom spliced and unspliced counts and Create Seurat Object"
+author: "Melanie Smith"
+date: "2026-03-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+
+# Single cell
+library(Seurat)
+# library(SeuratDisk)
+library(Matrix)
+library(data.table)
+
+# plotting
+library(ggokabeito)
+
+library(sceasy)
+library(reticulate)
+library(anndata)
+# library(scCustomize)
+
+```
+
+# Set project directories and parameters
+
+```{r}
+# Set sample ID -> Which sample do you want to run the script for?
+sample_ID <- "e11_control"
+# sample_ID <- "e11_ko"
+# sample_ID <- "e12_control"
+# sample_ID <- "e12_ko"
+
+# Set directories
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+out_dir <- file.path(project_repo_dir, "outDir", "09-rna_velocity", sample_ID)
+
+# Create directory if it doesn't exist
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir,
+             recursive = TRUE)
+}
+
+# Set input files
+spliced_obj_file <- file.path(out_dir, "velocyto_output", "spliced_counts.tsv.gz")
+unspliced_obj_file <- file.path(out_dir, "velocyto_output", "unspliced_counts.tsv.gz")
+
+
+```
+
+# Import files
+
+# Load the final Seurat object (1 sample only)
+- Contains the final set of cells and genes in a per sample object  
+- All counts are filtered and normalised  
+- The only reason to read this object in is to use the cell and gene (feature) IDs to subset the .loom data
+
+```{r}
+seurat_obj <- readRDS(file.path(project_repo_dir, "outDir", "09-rna_velocity", sample_ID, paste0("re_embed.", sample_ID, ".rds")))
+
+stopifnot(inherits(seurat_obj, "Seurat"))
+
+Idents(seurat_obj) <- "seurat_clusters"
+Idents(seurat_obj) <- factor(Idents(seurat_obj))
+DefaultAssay(seurat_obj) <- "RNA"
+
+dim(seurat_obj)
+# [1] 24767 (features)  5709 (cells)
+
+# lets check out the cell barcode IDs as reported in the seurat object
+head(rownames(seurat_obj@meta.data))
+# [1] "AAACCCACAGACTCTA-1_1_1" "AAACCCAGTCAGGTAG-1_1_1"
+# [3] "AAACCCAGTCTAATCG-1_1_1" "AAACCCAGTGAGTTTC-1_1_1"
+# [5] "AAACGAAAGTTACGGG-1_1_1" "AAACGAAGTATCAGGG-1_1_1"
+```
+
+# Load the loom data (intron/exon counts)
+- we will need to subset this object such that it only contains the high quality cells found in the final seurat object  
+- first we import the spliced coutns as .tsv.gz files, then unpack and filter
+
+```{r}
+# import the spliced counts
+dt_spliced <- fread(spliced_obj_file)
+# save the cell barcodes
+barcodes <- dt_spliced[[1]]
+# clean up the cell barcodes
+clean_barcodes <- gsub("^possorted_genome_bam_5Q1UF:", "", barcodes)
+clean_barcodes <- gsub("x$", "", clean_barcodes)
+# drop the barcodes from column 1
+spliced_mat <- as.matrix(dt_spliced[, -1])
+# ensure the counts are double -> not character
+storage.mode(spliced_mat) <- "double"
+# add the cell barcodes into the rownames
+rownames(spliced_mat) <- clean_barcodes
+# transform the matrix (seurat expects rows=genes and columns=cells)
+spliced_mat <- t(spliced_mat)
+# ensure our object is a matrix
+spliced_mat <- Matrix(spliced_mat, sparse = TRUE)
+# create the assay object
+spliced_assay <- CreateAssayObject(counts = spliced_mat)
+# quick sanity check of the row and column names
+rownames(spliced_assay) %>% head()
+colnames(spliced_assay) %>% head()
+
+```
+
+- then we import the unspliced counts
+```{r}
+# import the spliced counts
+dt_unspliced <- fread(unspliced_obj_file)
+# save the cell barcodes
+barcodes <- dt_unspliced[[1]]
+# clean up the cell barcodes
+clean_barcodes <- gsub("^possorted_genome_bam_5Q1UF:", "", barcodes)
+clean_barcodes <- gsub("x", "", clean_barcodes)
+# drop the barcodes from column 1
+unspliced_mat <- as.matrix(dt_unspliced[, -1])
+# ensure the counts are double -> not character
+storage.mode(unspliced_mat) <- "double"
+# add the cell barcodes into the rownames
+rownames(unspliced_mat) <- clean_barcodes
+# transform the matrix (seurat expects rows=genes and columns=cells)
+unspliced_mat <- t(unspliced_mat)
+# ensure our object is a matrix
+unspliced_mat <- Matrix(unspliced_mat, sparse = TRUE)
+# create the assay object
+unspliced_assay <- CreateAssayObject(counts = unspliced_mat)
+# quick sanity check of the row and column names
+rownames(unspliced_assay) %>% head()
+colnames(unspliced_assay) %>% head()
+
+```
+
+# Subset the new objects to retain only high quality cells and non-filtered genes
+
+```{r}
+
+# add the expected suffix back onto the cell barcodes
+# add suffix to spliced
+colnames(spliced_assay) <- paste0(colnames(spliced_assay), "-1_1_1")
+# add suffix to unspliced
+colnames(unspliced_assay) <- paste0(colnames(unspliced_assay), "-1_1_1")
+
+target_genes <- rownames(seurat_obj)
+target_cells <- colnames(seurat_obj)
+
+# pull counts
+spliced_counts <- spliced_assay@counts
+unspliced_counts <- unspliced_assay@counts
+
+# clean up objects no longer needed
+rm(dt_spliced, spliced_mat, spliced_assay,
+   dt_unspliced, unspliced_mat, unspliced_assay)
+gc()
+
+# NOW subset strictly and reorder
+spliced_counts <- spliced_counts[target_genes, target_cells]
+unspliced_counts <- unspliced_counts[target_genes, target_cells]
+
+# add suffix to the gene names so I can rbind the matrices
+rownames(spliced_counts) <- paste0(rownames(spliced_counts), "-spliced")
+rownames(unspliced_counts) <- paste0(rownames(unspliced_counts), "-unspliced")
+
+combined_counts <- rbind(spliced_counts, unspliced_counts)
+
+# double check the cell barcodes are in the same order before adding metadata
+identical(
+  colnames(combined_counts),
+  colnames(seurat_obj)
+)
+# [1] TRUE
+
+# Create a new Seurat object from the count matrix
+new_seurat <- CreateSeuratObject(counts = combined_counts)
+
+# Add the genotype metadata from the existing Seurat object
+new_seurat <- AddMetaData(new_seurat, metadata = seurat_obj@meta.data[, c("orig.ident", "genotype", "stage", "predicted_sex", "new_celltypes", "full_dataset_clusters", "G2M.Score", "S.Score")])
+
+# Verify the new object
+print(new_seurat)
+head(new_seurat@meta.data)
+
+```
+
+# Normalise, find variable features, scale, PCA, UMAP, cluster
+
+```{r}
+n_dims = 30
+
+re_embed_new_seurat <- new_seurat %>%
+  NormalizeData(
+    assay = "RNA",
+    normalization.method = "LogNormalize",
+    scale.factor = 10000,
+    verbose = FALSE
+  ) %>%
+  FindVariableFeatures(
+    assay = "RNA",
+    selection.method = "vst",
+    nfeatures = 3000,
+    verbose = FALSE
+  ) %>%
+  ScaleData(
+    assay = "RNA",
+    verbose = FALSE
+  ) %>% 
+  RunPCA(
+    assay = "RNA",
+    verbose = FALSE
+  ) %>% 
+  FindNeighbors(
+    reduction = "pca",
+    dims = 1:n_dims,
+    verbose = FALSE
+  ) %>%
+  RunUMAP(
+    reduction = "pca",
+    dims = 1:n_dims,
+    verbose = FALSE
+  )
+
+clustering_resolutions <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6)
+
+for (res in clustering_resolutions) {
+  clustered <- FindClusters(re_embed_new_seurat,
+                            resolution = res,
+                            verbose = FALSE)
+  
+  p1 <- DimPlot(clustered,
+               group.by = paste0("RNA_snn_res.", res),
+               label = TRUE,
+               label.size = 6) +
+    # # ggtitle(paste("Resolution:", res)) +
+    # scale_color_okabe_ito() +
+    labs(
+      title = paste("Resolution:", res),
+      caption = "Combined spliced/unspliced"
+    )
+  
+  print(p1)
+  
+p2 <- FeaturePlot(clustered,
+              features = c("G2M.Score", "S.Score"),
+              reduction = "umap",
+              blend = FALSE,
+              label = TRUE,
+              label.size = 6) &
+    scale_colour_gradientn(
+      colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+      name = "Expression"
+    )
+
+print(p2)
+}
+
+DimPlot(re_embed_new_seurat,
+        group.by = "full_dataset_clusters",
+        label = TRUE,
+        label.size = 6)
+```
+
+
+# Save the Seurat object for scVelo
+
+```{r}
+Idents(re_embed_new_seurat) <- "full_dataset_clusters"
+Idents(re_embed_new_seurat) <- factor(Idents(re_embed_new_seurat))
+DefaultAssay(re_embed_new_seurat) <- "RNA"
+
+
+# Full path for output
+# h5ad_file <- file.path(out_dir, paste0(sample_ID, ".h5ad"))
+
+# Convert Assay5 → Assay3 (legacy) so sceasy can handle it
+re_embed_new_seurat[["RNA"]] <- as(re_embed_new_seurat[["RNA"]], "Assay")
+
+# Confirm class is now legacy
+cat("Assay class:", class(re_embed_new_seurat[["RNA"]]), "\n")  # should print "Assay", not "Assay5"
+
+obj_adata <- as.anndata(re_embed_new_seurat,
+                        file_path = out_dir,
+                        file_name = paste0(sample_ID, "_spliced_unspliced.h5ad"))
+```
+
+
+# Add the new assays to the existing Seurat object
+
+```{r}
+# add the new assays
+# seurat_obj[["spliced"]] <- spliced_assay_subset
+# seurat_obj[["unspliced"]] <- unspliced_assay_subset
+# 
+# # sanity check
+# class(seurat_obj[["spliced"]]@counts)
+# class(seurat_obj[["unspliced"]]@counts)
+```
+
+
+
