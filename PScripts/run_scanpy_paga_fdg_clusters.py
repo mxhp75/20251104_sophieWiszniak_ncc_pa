@@ -46,14 +46,17 @@ sample_id = "e11_control"
 base_dir = "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa/outDir/09-rna_velocity"
 # set the sample id and output directory
 out_dir = "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa/outDir/09-rna_velocity"
-
+# set the count level (ie gene or spliced/unspliced)
+#count_level = "gene"
+count_level = "spliced_unspliced"
 #-----------------------------------------------------------------------------------
 # create embeddings for dynamic velocity modelling
 # PAGA informed Force Directed Graph
 #-----------------------------------------------------------------------------------
 
 # add the adata file - this is the processed and filtered RNA count matrix from Seurat converted to .h5ad
-adata = sc.read_h5ad(os.path.join(base_dir, sample_id, f"{sample_id}.h5ad"))
+#adata = sc.read_h5ad(os.path.join(base_dir, sample_id, f"{sample_id}.h5ad"))
+adata = sc.read_h5ad(os.path.join(base_dir, sample_id, f"{sample_id}_{count_level}.h5ad"))
 print(adata)
 print(adata.layers.keys())       # at least 'counts', possibly others
 print(adata.obsm.keys())         # X_pca, X_umap, etc.
@@ -90,12 +93,12 @@ for n_pcs in pc_range:
             color="full_dataset_clusters",
             node_size_scale=4,
             fontsize=5,
-            title=f"PAGA – pcs={n_pcs}, neighbours={n_neighbours}",
+            title=f"PAGA – pcs={n_pcs}, neighbours={n_neighbours}, counts={count_level}",
             show=False)
 
         # Save the PAGA figure
         plt.savefig(
-            os.path.join(save_dir, f"paga_pcs{n_pcs}_neighbours{n_neighbours}_clusters.png"),
+            os.path.join(save_dir, f"paga_pcs{n_pcs}_neighbours{n_neighbours}_counts_{count_level}_clusters.png"),
             bbox_inches="tight",
             dpi=150
         )
@@ -106,7 +109,7 @@ for n_pcs in pc_range:
         sc.pl.draw_graph(
             adata_test,
             color="full_dataset_clusters",
-            title=f"pcs={n_pcs}, neighbours={n_neighbours}",
+            title=f"pcs={n_pcs}, neighbours={n_neighbours}, counts={count_level}",
             legend_loc="right margin",
             legend_fontsize=8,
             size=18,
@@ -114,7 +117,7 @@ for n_pcs in pc_range:
         )
 
         plt.savefig(
-            os.path.join(save_dir, f"fdg_pcs{n_pcs}_neighbours{n_neighbours}_clusters.png"),
+            os.path.join(save_dir, f"fdg_pcs{n_pcs}_neighbours{n_neighbours}_counts_{count_level}_clusters.png"),
             bbox_inches="tight",
             dpi=150
         )
@@ -122,6 +125,6 @@ for n_pcs in pc_range:
 
         # write out the adata object for use in the RNA Velocity workflow
         adata_test.write_h5ad(
-            os.path.join(save_dir, f"{sample_id}_fdg_pcs{n_pcs}_neighbours{n_neighbours}_clusters.h5ad"),
+            os.path.join(save_dir, f"{sample_id}_fdg_pcs{n_pcs}_neighbours{n_neighbours}_counts_{count_level}_clusters.h5ad"),
             compression="gzip"
         )
