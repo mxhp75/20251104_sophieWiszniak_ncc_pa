@@ -37,7 +37,7 @@ library(ggokabeito)
 library(sceasy)
 library(reticulate)
 library(anndata)
-# library(scCustomize)
+library(scCustomize)
 
 ```
 
@@ -278,41 +278,41 @@ DimPlot(re_embed_new_seurat,
         label.size = 6)
 ```
 
+# Add the spliced/unspliced umap embeddings to the existing Seurat object
+
+```{r}
+# Extract the UMAP embeddings from the source object
+umap_embed <- Embeddings(re_embed_new_seurat, reduction = "umap")
+
+# Reorder if necessary
+umap_embed <- umap_embed[colnames(seurat_obj), ]
+
+# Create a new DimReduc object
+new_umap <- CreateDimReducObject(
+  embeddings = umap_embed,
+  key = "UMAPspliced_",
+  assay = DefaultAssay(seurat_obj)
+)
+
+# Add it to the Seurat object under a new reduction name
+seurat_obj[["umap_spliced"]] <- new_umap
+
+```
 
 # Save the Seurat object for scVelo
 
 ```{r}
-Idents(re_embed_new_seurat) <- "full_dataset_clusters"
-Idents(re_embed_new_seurat) <- factor(Idents(re_embed_new_seurat))
-DefaultAssay(re_embed_new_seurat) <- "RNA"
-
-
-# Full path for output
-# h5ad_file <- file.path(out_dir, paste0(sample_ID, ".h5ad"))
+Idents(seurat_obj) <- "full_dataset_clusters"
+Idents(seurat_obj) <- factor(Idents(seurat_obj))
+DefaultAssay(seurat_obj) <- "RNA"
 
 # Convert Assay5 → Assay3 (legacy) so sceasy can handle it
-re_embed_new_seurat[["RNA"]] <- as(re_embed_new_seurat[["RNA"]], "Assay")
+seurat_obj[["RNA"]] <- as(seurat_obj[["RNA"]], "Assay")
 
 # Confirm class is now legacy
-cat("Assay class:", class(re_embed_new_seurat[["RNA"]]), "\n")  # should print "Assay", not "Assay5"
+cat("Assay class:", class(seurat_obj[["RNA"]]), "\n")  # should print "Assay", not "Assay5"
 
-obj_adata <- as.anndata(re_embed_new_seurat,
+obj_adata <- as.anndata(seurat_obj,
                         file_path = out_dir,
                         file_name = paste0(sample_ID, "_spliced_unspliced.h5ad"))
 ```
-
-
-# Add the new assays to the existing Seurat object
-
-```{r}
-# add the new assays
-# seurat_obj[["spliced"]] <- spliced_assay_subset
-# seurat_obj[["unspliced"]] <- unspliced_assay_subset
-# 
-# # sanity check
-# class(seurat_obj[["spliced"]]@counts)
-# class(seurat_obj[["unspliced"]]@counts)
-```
-
-
-
