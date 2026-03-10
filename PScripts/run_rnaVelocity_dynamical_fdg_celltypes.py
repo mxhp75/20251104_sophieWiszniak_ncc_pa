@@ -34,7 +34,7 @@ import os
 
 # set PAGA group
 paga_group = "celltypes"
-# paga_group = "clusters"
+#paga_group = "clusters"
 
 # set the sample ID
 sample_id = "e11_control"
@@ -50,6 +50,10 @@ pcs="pcs30"
 #neighbours="neighbours15"
 neighbours="neighbours25"
 #neighbours="neighbours50"
+
+# set the count level (ie gene or spliced/unspliced)
+#count_level = "gene"
+count_level = "spliced_unspliced"
 
 # set the main project directory
 project_dir = f"/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
@@ -72,7 +76,7 @@ h5ad_file_input = os.path.join(
     sample_id,
     "scanpy_output",
     paga_group,
-    f"{sample_id}_fdg_{pcs}_{neighbours}_{paga_group}.h5ad")
+    f"{sample_id}_fdg_{pcs}_{neighbours}_counts_{count_level}_{paga_group}.h5ad")
 
 # set the output directory
 out_dir = os.path.join(
@@ -181,11 +185,11 @@ scv.tl.velocity(adata, mode='dynamical')
 scv.tl.velocity_graph(adata)
 
 #-----------------------------------------------------------------------------------
-# plot each individual cell as one velocity arrow using the umap projections
+# plot each individual cell as one velocity arrow using the umap/umap_spliced/fdg projections
 #-----------------------------------------------------------------------------------
 scv.pl.velocity_embedding(
     adata,
-    title=f"umap projection - dynamical - {sample_id}",
+    title=f"umap projection - dynamical - gene - {sample_id}",
     basis='umap',
     color='new_celltypes',
     arrow_length=3,
@@ -194,14 +198,30 @@ scv.pl.velocity_embedding(
     show=False,
     legend_loc="bottom right"
 )
-plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_umap_{pcs}_{neighbours}_{paga_group}.png"),
+plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_umap_{paga_group}.png"),
             dpi=300,
             bbox_inches="tight")
 plt.close()
 
 scv.pl.velocity_embedding(
     adata,
-    title=f"PCs= {pcs}, Neighbours= {neighbours} - ({paga_group}) - dynamical - {sample_id}",
+    title=f"umap projection - dynamical - spliced - {sample_id}",
+    basis='umap_spliced',
+    color='new_celltypes',
+    arrow_length=3,
+    arrow_size=2,
+    dpi=120,
+    show=False,
+    legend_loc="bottom right"
+)
+plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_umap_{count_level}_{paga_group}.png"),
+            dpi=300,
+            bbox_inches="tight")
+plt.close()
+
+scv.pl.velocity_embedding(
+    adata,
+    title=f"PCs= {pcs}, Neighbours= {neighbours} - ({paga_group}) - {count_level} - dynamical - {sample_id}",
     basis='draw_graph_fa',
     color='new_celltypes',
     arrow_length=3,
@@ -210,7 +230,7 @@ scv.pl.velocity_embedding(
     show=False,
     legend_loc="bottom right"
 )
-plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_fdg_{pcs}_{neighbours}_{paga_group}.png"),
+plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_fdg_{pcs}_{neighbours}_{count_level}_{paga_group}.png"),
             dpi=300,
             bbox_inches="tight")
 plt.close()

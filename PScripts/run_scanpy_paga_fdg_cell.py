@@ -47,8 +47,8 @@ base_dir = "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_n
 out_dir = "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa/outDir/09-rna_velocity"
 
 # set the count level (ie gene or spliced/unspliced)
-count_level = "gene"
-#count_level = "spliced_unspliced"
+#count_level = "gene"
+count_level = "spliced_unspliced"
 
 #-----------------------------------------------------------------------------------
 # create embeddings for dynamic velocity modelling
@@ -56,10 +56,10 @@ count_level = "gene"
 #-----------------------------------------------------------------------------------
 
 # add the adata file - this is the processed and filtered RNA count matrix from Seurat converted to .h5ad
-adata = sc.read_h5ad(os.path.join(base_dir, sample_id, f"{sample_id}.h5ad"))
+adata = sc.read_h5ad(os.path.join(base_dir, sample_id, f"{sample_id}_{count_level}.h5ad"))
 print(adata)
 print(adata.layers.keys())       # at least 'counts', possibly others
-print(adata.obsm.keys())         # X_pca, X_umap, etc.
+print(adata.obsm.keys())         # X_pca, X_umap, X_umap_spliced
 
 # Compute PCA once with enough components (50) to cover all tested n_pcs values
 sc.tl.pca(adata, svd_solver='arpack', n_comps=fPCA)
@@ -108,6 +108,7 @@ for n_pcs in pc_range:
         sc.tl.draw_graph(adata_test, init_pos="paga")
         sc.pl.draw_graph(
             adata_test,
+            basis='draw_graph_fa',
             color="new_celltypes",
             title=f"FDG – pcs={n_pcs}, neighbours={n_neighbours}, counts={count_level}",
             legend_loc="right margin",
