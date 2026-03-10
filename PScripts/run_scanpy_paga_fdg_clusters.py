@@ -94,7 +94,8 @@ for n_pcs in pc_range:
             node_size_scale=4,
             fontsize=5,
             title=f"PAGA – pcs={n_pcs}, neighbours={n_neighbours}, counts={count_level}",
-            show=False)
+            show=False
+        )
 
         # Save the PAGA figure
         plt.savefig(
@@ -106,13 +107,15 @@ for n_pcs in pc_range:
 
         # Compute and plot FDG
         sc.tl.draw_graph(adata_test, init_pos="paga")
-        sc.pl.draw_graph(
+        sc.pl.embedding(
             adata_test,
+            basis='draw_graph_fa',  # ← explicit basis (no X_ prefix needed)
             color="full_dataset_clusters",
-            title=f"pcs={n_pcs}, neighbours={n_neighbours}, counts={count_level}",
+            title=f"FDG – pcs={n_pcs}, neighbours={n_neighbours}, counts={count_level}",
             legend_loc="right margin",
             legend_fontsize=8,
             size=18,
+            frameon=False,  # optional but often nicer
             show=False
         )
 

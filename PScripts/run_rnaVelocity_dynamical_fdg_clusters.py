@@ -51,6 +51,10 @@ pcs="pcs30"
 neighbours="neighbours25"
 #neighbours="neighbours50"
 
+# set the count level (ie gene or spliced/unspliced)
+#count_level = "gene"
+count_level = "spliced_unspliced"
+
 # set the main project directory
 project_dir = f"/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
 
@@ -72,7 +76,7 @@ h5ad_file_input = os.path.join(
     sample_id,
     "scanpy_output",
     paga_group,
-    f"{sample_id}_fdg_{pcs}_{neighbours}_{paga_group}.h5ad")
+    f"{sample_id}_fdg_{pcs}_{neighbours}_counts_{count_level}_{paga_group}.h5ad")
 
 # set the output directory
 out_dir = os.path.join(
@@ -125,6 +129,10 @@ print("adata:", len(adata))
 print("loom:", len(vlm))
 print("common:", len(common))
 
+print("h5ad after cleaning:", adata.obs_names[:5])
+print("loom after cleaning:", vlm.obs_names[:5])
+print("common cells:", len(adata.obs_names.intersection(vlm.obs_names)))
+
 # subset the .loom file to match the adata object
 vlm = (vlm[common].copy())
 
@@ -137,6 +145,11 @@ vlm = vlm[adata.obs_names].copy()
 
 # merge the data
 adata = scv.utils.merge(adata, vlm)
+
+# Check layers exist and have content
+print("Layers:", list(adata.layers.keys()))
+print("spliced shape:", adata.layers['spliced'].shape if 'spliced' in adata.layers else "MISSING")
+print("unspliced shape:", adata.layers['unspliced'].shape if 'unspliced' in adata.layers else "MISSING")
 
 # safety check after merging
 print(adata.layers.keys())
@@ -167,6 +180,10 @@ scv.pp.moments(adata)
 # compute the dynamical model and velocities
 #-----------------------------------------------------------------------------------
 
+# find the top genes, quicker and less noisy than using all genes
+scv.pp.filter_genes(adata, min_shared_counts=20)
+scv.pp.filter_genes_dispersion(adata, n_top_genes=2000)
+
 scv.tl.recover_dynamics(adata, n_jobs=1, show_progress_bar=False)          # this can take time
 scv.tl.velocity(adata, mode='dynamical')
 
@@ -182,7 +199,7 @@ scv.tl.velocity_graph(adata)
 
 scv.pl.velocity_embedding(
     adata,
-    title=f"PCs= {pcs}, Neighbours= {neighbours} - ({paga_group}) - dynamical - {sample_id}",
+    title=f"PCs= {pcs}, Neighbours= {neighbours} - ({paga_group}) - {count_level} - dynamical - {sample_id}",
     basis='draw_graph_fa',
     color='full_dataset_clusters',
     arrow_length=3,
@@ -191,7 +208,7 @@ scv.pl.velocity_embedding(
     show=False,
     legend_loc="bottom right"
 )
-plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_fdg_{pcs}_{neighbours}_{paga_group}.png"),
+plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_fdg_{pcs}_{neighbours}_{count_level}_{paga_group}.png"),
             dpi=300,
             bbox_inches="tight")
 plt.close()
