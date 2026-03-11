@@ -45,9 +45,10 @@ library(scCustomize)
 
 ```{r}
 # Set sample ID -> Which sample do you want to run the script for?
-sample_ID <- "e11_control"
+# sample_ID <- "e11_control"
 # sample_ID <- "e11_ko"
-# sample_ID <- "e12_control"
+sample_ID <- "e12_control"
+loom_colname <- "possorted_genome_bam_YIL7N:"
 # sample_ID <- "e12_ko"
 
 # Set directories
@@ -102,7 +103,7 @@ dt_spliced <- fread(spliced_obj_file)
 # save the cell barcodes
 barcodes <- dt_spliced[[1]]
 # clean up the cell barcodes
-clean_barcodes <- gsub("^possorted_genome_bam_5Q1UF:", "", barcodes)
+clean_barcodes <- gsub(loom_colname, "", barcodes)
 clean_barcodes <- gsub("x$", "", clean_barcodes)
 # drop the barcodes from column 1
 spliced_mat <- as.matrix(dt_spliced[, -1])
@@ -129,7 +130,7 @@ dt_unspliced <- fread(unspliced_obj_file)
 # save the cell barcodes
 barcodes <- dt_unspliced[[1]]
 # clean up the cell barcodes
-clean_barcodes <- gsub("^possorted_genome_bam_5Q1UF:", "", barcodes)
+clean_barcodes <- gsub(loom_colname, "", barcodes)
 clean_barcodes <- gsub("x", "", clean_barcodes)
 # drop the barcodes from column 1
 unspliced_mat <- as.matrix(dt_unspliced[, -1])
@@ -155,9 +156,9 @@ colnames(unspliced_assay) %>% head()
 
 # add the expected suffix back onto the cell barcodes
 # add suffix to spliced
-colnames(spliced_assay) <- paste0(colnames(spliced_assay), "-1_1_1")
+colnames(spliced_assay) <- paste0(colnames(spliced_assay), "-1_1")
 # add suffix to unspliced
-colnames(unspliced_assay) <- paste0(colnames(unspliced_assay), "-1_1_1")
+colnames(unspliced_assay) <- paste0(colnames(unspliced_assay), "-1_1")
 
 target_genes <- rownames(seurat_obj)
 target_cells <- colnames(seurat_obj)
@@ -302,8 +303,8 @@ seurat_obj[["umap_spliced"]] <- new_umap
 # Make some umaps
 
 ```{r}
-# group_by <- "new_celltypes"
-group_by <- "full_dataset_clusters"
+group_by <- "new_celltypes"
+# group_by <- "full_dataset_clusters"
 
 # plot the original umap embeddings
 plot_1 <- DimPlot(seurat_obj,
