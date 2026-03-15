@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
 gc() # free up memory and report the memory usage
 options(max.print = .Machine$integer.max,
         scipen = 999,
