@@ -37,9 +37,9 @@ paga_group = "celltypes"
 #paga_group = "clusters"
 
 # set the sample ID
-sample_id = "e11_control"
+#sample_id = "e11_control"
 #sample_id = "e11_ko"
-#sample_id = "e12_control"
+sample_id = "e12_control"
 #sample_id = "e12_ko"
 
 # set the number of PCs
@@ -65,7 +65,8 @@ loom_file = os.path.join(
     "09-rna_velocity",
     sample_id,
     "velocyto_output",
-    "possorted_genome_bam_5Q1UF.loom"
+#    "possorted_genome_bam_5Q1UF.loom"
+    "possorted_genome_bam_YIL7N.loom"
 )
 
 # set the .h5ad data input file address
@@ -234,3 +235,8 @@ plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_fdg_{pcs}_{neighbours}_
             dpi=300,
             bbox_inches="tight")
 plt.close()
+
+# QC plots
+scv.pl.scatter(adata, color='new_celltypes', basis='draw_graph_fa', title='Celltypes on FDG')
+scv.pl.scatter(adata, color='full_dataset_clusters', basis='draw_graph_fa', title='Clusters on FDG')
+scv.pl.scatter(adata, color='latent_time', basis='draw_graph_fa', cmap='gnuplot', title='Latent time on FDG')

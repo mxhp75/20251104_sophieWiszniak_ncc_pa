@@ -43,13 +43,13 @@ sample_id = "e11_control"
 #sample_id = "e12_ko"
 
 # set the number of PCs
-#pcs="pcs20"
-pcs="pcs30"
+pcs="pcs20"
+#pcs="pcs30"
 
 # set the number of neighbours
 #neighbours="neighbours15"
-neighbours="neighbours25"
-#neighbours="neighbours50"
+#neighbours="neighbours25"
+neighbours="neighbours50"
 
 # set the count level (ie gene or spliced/unspliced)
 #count_level = "gene"
@@ -65,7 +65,8 @@ loom_file = os.path.join(
     "09-rna_velocity",
     sample_id,
     "velocyto_output",
-    "possorted_genome_bam_5Q1UF.loom"
+    "possorted_genome_bam_5Q1UF.loom" #e11
+    #"possorted_genome_bam_YIL7N.loom" #e12
 )
 
 # set the .h5ad data input file address
@@ -208,6 +209,49 @@ scv.pl.velocity_embedding(
     show=False,
     legend_loc="bottom right"
 )
+plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_fdg_{pcs}_{neighbours}_{count_level}_{paga_group}.png"),
+            dpi=300,
+            bbox_inches="tight")
+plt.close()
+
+# Run latent time
+scv.tl.latent_time(adata)
+
+# QC plots
+scv.pl.scatter(adata,
+               color='new_celltypes',
+               basis='draw_graph_fa',
+               title='Celltypes on FDG')
+scv.pl.scatter(adata,
+               color='full_dataset_clusters',
+               basis='draw_graph_fa',
+               title='Clusters on FDG')
+scv.pl.scatter(adata,
+               color='latent_time',
+               basis='draw_graph_fa',
+               cmap='gnuplot',
+               title='Latent time on FDG')
+
+# Heatmap top 10
+top_genes = adata.var['fit_likelihood'].sort_values(ascending=False).index[:300]
+scv.pl.heatmap(adata,
+               var_names=top_genes,
+               sortby='latent_time',
+               col_color='full_dataset_clusters',
+               n_convolve=100)
+
+# Top likelihood genes
+#Driver genes display pronounced dynamic behavior and are systematically detected via their characterization by high likelihoods in the dynamic model.
+top_genes = adata.var['fit_likelihood'].sort_values(ascending=False).index
+scv.pl.scatter(adata,
+               basis=top_genes[:15],
+               ncols=5,
+               frameon=False,
+               color='full_dataset_clusters',
+               dpi=120,
+               show=False,
+               legend_loc="bottom right"
+               )
 plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_fdg_{pcs}_{neighbours}_{count_level}_{paga_group}.png"),
             dpi=300,
             bbox_inches="tight")

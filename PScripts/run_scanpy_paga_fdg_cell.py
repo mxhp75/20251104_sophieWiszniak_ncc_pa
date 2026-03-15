@@ -41,7 +41,8 @@ import os
 fPCA=50 # set no. of pcs - this is used to populate the adata.obsm['X_pca'] field (run once)
 
 # set the sample ID
-sample_id = "e11_control"
+#sample_id = "e11_control"
+sample_id = "e12_control"
 base_dir = "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa/outDir/09-rna_velocity"
 # set the sample id and output directory
 out_dir = "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa/outDir/09-rna_velocity"
@@ -106,14 +107,15 @@ for n_pcs in pc_range:
 
         # Compute and plot FDG
         sc.tl.draw_graph(adata_test, init_pos="paga")
-        sc.pl.draw_graph(
+        sc.pl.embedding(
             adata_test,
-            basis='draw_graph_fa',
+            basis='draw_graph_fa',  # ← explicit basis (no X_ prefix needed)
             color="new_celltypes",
             title=f"FDG – pcs={n_pcs}, neighbours={n_neighbours}, counts={count_level}",
             legend_loc="right margin",
             legend_fontsize=8,
             size=18,
+            frameon=False,  # optional but often nicer
             show=False
         )
 

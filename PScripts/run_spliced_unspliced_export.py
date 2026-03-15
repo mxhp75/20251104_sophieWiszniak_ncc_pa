@@ -20,16 +20,21 @@ import scanpy as sc # single-cell analysis toolkit
 import os
 import pandas as pd  # For DataFrame creation and CSV/TSV writing
 
+#from run_scanpy_paga_fdg_clusters import sample_id
+
 #-----------------------------------------------------------------------------------
 #   Params
 #-----------------------------------------------------------------------------------
 
 # set PAGA group
-paga_group = "celltypes"
+# paga_group = "celltypes"
 # paga_group = "clusters"
 
 # set the sample ID
-sample_id = "e11_control"
+#sample_id = "e11_control"
+#sample_id = "e11_ko"
+sample_id = "e12_control"
+#sample_id = e12_ko
 
 # set the main project directory
 project_dir = f"/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
@@ -41,7 +46,8 @@ loom_file = os.path.join(
     "09-rna_velocity",
     sample_id,
     "velocyto_output",
-    "possorted_genome_bam_5Q1UF.loom"
+#    "possorted_genome_bam_5Q1UF.loom" # e11_control
+    "possorted_genome_bam_YIL7N.loom" # e12_control
 )
 
 # set the output directory
@@ -56,10 +62,10 @@ out_dir = os.path.join(
 os.makedirs(out_dir, exist_ok=True)
 
 #-----------------------------------------------------------------------------------
-# Import the .loom file (spliced/unspliced counts
+# Import the .loom file (spliced/unspliced counts)
 #-----------------------------------------------------------------------------------
 
-# import the data from the 10x velocyto run (counts are spliced, unspliced and ambiduous)
+# import the data from the 10x velocyto run (counts are spliced, unspliced and ambiguous)
 vlm = sc.read_loom(loom_file)
 
 
@@ -97,7 +103,7 @@ spliced_df.to_csv(
 )
 
 # Step 6: Repeat the process for the unspliced layer.
-unspliced_matrix = vlm.layers["unspliced']
+unspliced_matrix = vlm.layers["unspliced"]
 unspliced_dense = unspliced_matrix.toarray()
 unspliced_df = pd.DataFrame(
     unspliced_dense,
@@ -113,7 +119,7 @@ unspliced_df.to_csv(
     float_format='%.0f'
 )
 
-# Optional: Print confirmation messages
+# Print confirmation messages
 print("Exported spliced counts to 'spliced_counts.tsv.gz'")
 print("Exported unspliced counts to 'unspliced_counts.tsv.gz'")
 

@@ -42,7 +42,8 @@ import os
 fPCA=30 # set no. of pcs input
 
 # set the sample ID
-sample_id = "e11_control"
+# sample_id = "e11_control"
+sample_id = "e12_control"
 base_dir = "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa/outDir/09-rna_velocity"
 # set the sample id and output directory
 out_dir = "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa/outDir/09-rna_velocity"
