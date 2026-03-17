@@ -33,8 +33,8 @@ import pandas as pd  # For DataFrame creation and CSV/TSV writing
 # set the sample ID
 #sample_id = "e11_control"
 #sample_id = "e11_ko"
-sample_id = "e12_control"
-#sample_id = e12_ko
+#sample_id = "e12_control"
+sample_id = "e12_ko"
 
 # set the main project directory
 project_dir = f"/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
@@ -47,7 +47,9 @@ loom_file = os.path.join(
     sample_id,
     "velocyto_output",
 #    "possorted_genome_bam_5Q1UF.loom" # e11_control
-    "possorted_genome_bam_YIL7N.loom" # e12_control
+#    "possorted_genome_bam_YIL7N.loom" # e12_control
+#    "possorted_genome_bam_LZRTJ.loom" # e11_ko
+    "possorted_genome_bam_0YX73.loom" # e12_ko
 )
 
 # set the output directory
