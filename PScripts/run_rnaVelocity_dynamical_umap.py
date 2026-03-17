@@ -3,7 +3,7 @@
 SCVELO
 =================
 
-This script runs RNA-Velocity in dynamical mode
+This script runs RNA-Velocity in dynamical mode and then projects the velocities onto the gene based and spliced/unspliced based umaps.
 
 Author: Melanie Smith
 Email:  melanie.smith@adelaide.edu.au
@@ -32,27 +32,15 @@ import os
 #   Params
 #-----------------------------------------------------------------------------------
 
-# set PAGA group
-paga_group = "celltypes"
-# paga_group = "clusters"
-
 # set the sample ID
-sample_id = "e11_control"
-#sample_id = "e11_ko"
+#sample_id = "e11_control"
+sample_id = "e11_ko"
 #sample_id = "e12_control"
 #sample_id = "e12_ko"
 
-# set the number of PCs
-pcs="pcs20"
-#pcs="pcs30"
-
-# set the number of neighbours
-neighbours="neighbours15"
-#neighbours="neighbours25"
-#neighbours="neighbours50"
-
 # set the main project directory
 project_dir = f"/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+base_dir = os.path.join(project_dir, "outDir/09-rna_velocity")
 
 # set the loom file address
 loom_file = os.path.join(
@@ -61,18 +49,9 @@ loom_file = os.path.join(
     "09-rna_velocity",
     sample_id,
     "velocyto_output",
-    "possorted_genome_bam_5Q1UF.loom"
+#    "possorted_genome_bam_5Q1UF.loom"
+    "possorted_genome_bam_LZRTJ.loom"
 )
-
-# set the .h5ad data input file address
-h5ad_file_input = os.path.join(
-    project_dir,
-    "outDir",
-    "09-rna_velocity",
-    sample_id,
-    "scanpy_output",
-    paga_group,
-    f"{sample_id}_fdg_{pcs}_{neighbours}_{paga_group}.h5ad")
 
 # set the output directory
 out_dir = os.path.join(
@@ -81,7 +60,7 @@ out_dir = os.path.join(
     "09-rna_velocity",
     sample_id,
     "velocity_output_dynamical",
-    paga_group
+    "celltypes"
 )
 os.makedirs(out_dir, exist_ok=True)
 
@@ -89,8 +68,11 @@ os.makedirs(out_dir, exist_ok=True)
 # Import the scv matrix and the intron/exon .loom file
 #-----------------------------------------------------------------------------------
 
-# import the normalised counts matrix from the scanpy_paga_fdg run (old Seurat object with fdg added)
-adata = sc.read_h5ad(h5ad_file_input)
+# add the adata file - this is the processed and filtered RNA count matrix from Seurat converted to .h5ad
+adata = sc.read_h5ad(os.path.join(base_dir, sample_id, f"{sample_id}_spliced_unspliced.h5ad"))
+print(adata)
+print(adata.layers.keys())       # at least 'counts', possibly others
+print(adata.obsm.keys())         # X_pca, X_umap, X_umap_spliced
 
 # import the data from the 10x velocyto run (introns and exons)
 vlm = sc.read_loom(loom_file)
@@ -170,7 +152,7 @@ scv.tl.velocity_graph(adata)
 #-----------------------------------------------------------------------------------
 scv.pl.velocity_embedding(
     adata,
-    title=f"umap projection - dynamical - {sample_id}",
+    title=f"umap projection - dynamical - gene level - {sample_id}",
     basis='umap',
     color='new_celltypes',
     arrow_length=3,
@@ -179,15 +161,15 @@ scv.pl.velocity_embedding(
     show=False,
     legend_loc="bottom right"
 )
-plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_umap_{pcs}_{neighbours}_{paga_group}.png"),
+plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_umap_gene.png"),
             dpi=300,
             bbox_inches="tight")
 plt.close()
 
 scv.pl.velocity_embedding(
     adata,
-    title=f"fdg projection ({paga_group}) - dynamical - {sample_id}",
-    basis='draw_graph_fa',
+    title=f"umap projection - dynamical - spliced/unspliced level - {sample_id}",
+    basis='umap_spliced',
     color='new_celltypes',
     arrow_length=3,
     arrow_size=2,
@@ -195,7 +177,7 @@ scv.pl.velocity_embedding(
     show=False,
     legend_loc="bottom right"
 )
-plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_fdg_{pcs}_{neighbours}_{paga_group}.png"),
+plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_umap_spliced_unspliced.png"),
             dpi=300,
             bbox_inches="tight")
 plt.close()
