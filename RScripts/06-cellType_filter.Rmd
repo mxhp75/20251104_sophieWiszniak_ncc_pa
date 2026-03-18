@@ -506,6 +506,16 @@ df <- re_embed_interesting_cells_0.6@meta.data %>%
   dplyr::select(orig.ident, new_celltypes, seurat_clusters) %>%
   dplyr::mutate(cluster_celltype = paste(seurat_clusters, new_celltypes, sep = "_"))
 
+# write out the .csv file for Sophie
+write_csv(tibble::rownames_to_column(df, "barcode"),
+          file = file.path(out_dir, "06-cluster_marker_genes/cell_types_per_cluster.csv"))
+
+# summary
+summary <- with(df, (table(cluster_celltype, orig.ident))) %>% as.data.frame()
+# write out the .csv file for Sophie
+write_csv(summary,
+          file = file.path(out_dir, "06-cluster_marker_genes/cell_types_summary.csv"))
+
 # control the stacking order (match the dot plot
 df$new_celltypes <- factor(
   df$new_celltypes,
