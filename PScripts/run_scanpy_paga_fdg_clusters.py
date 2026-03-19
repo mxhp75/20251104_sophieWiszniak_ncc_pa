@@ -43,7 +43,10 @@ fPCA=30 # set no. of pcs input
 
 # set the sample ID
 # sample_id = "e11_control"
-sample_id = "e12_control"
+# sample_id = "e12_control"
+# sample_id = "e11_ko"
+sample_id = "e12_ko"
+
 base_dir = "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa/outDir/09-rna_velocity"
 # set the sample id and output directory
 out_dir = "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa/outDir/09-rna_velocity"
@@ -56,7 +59,6 @@ count_level = "spliced_unspliced"
 #-----------------------------------------------------------------------------------
 
 # add the adata file - this is the processed and filtered RNA count matrix from Seurat converted to .h5ad
-#adata = sc.read_h5ad(os.path.join(base_dir, sample_id, f"{sample_id}.h5ad"))
 adata = sc.read_h5ad(os.path.join(base_dir, sample_id, f"{sample_id}_{count_level}.h5ad"))
 print(adata)
 print(adata.layers.keys())       # at least 'counts', possibly others

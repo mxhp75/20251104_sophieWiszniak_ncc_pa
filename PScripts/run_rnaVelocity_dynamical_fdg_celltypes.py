@@ -39,10 +39,11 @@ paga_group = "celltypes"
 # set the sample ID
 #sample_id = "e11_control"
 #sample_id = "e11_ko"
-sample_id = "e12_control"
-#sample_id = "e12_ko"
+#sample_id = "e12_control"
+sample_id = "e12_ko"
 
 # set the number of PCs
+#pcs="pcs15"
 #pcs="pcs20"
 pcs="pcs30"
 
@@ -65,8 +66,10 @@ loom_file = os.path.join(
     "09-rna_velocity",
     sample_id,
     "velocyto_output",
-#    "possorted_genome_bam_5Q1UF.loom"
-    "possorted_genome_bam_YIL7N.loom"
+#    "possorted_genome_bam_5Q1UF.loom" # e11_control
+#    "possorted_genome_bam_YIL7N.loom" # e12_control
+#    "possorted_genome_bam_LZRTJ.loom" # e11_ko
+    "possorted_genome_bam_0YX73.loom"  # e12_ko
 )
 
 # set the .h5ad data input file address

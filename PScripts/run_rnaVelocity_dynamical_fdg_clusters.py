@@ -39,18 +39,18 @@ paga_group = "clusters"
 # set the sample ID
 #sample_id = "e11_control"
 #sample_id = "e11_ko"
-#sample_id = "e12_control"
-sample_id = "e12_ko"
+sample_id = "e12_control"
+#sample_id = "e12_ko"
 
 # set the number of PCs
 #pcs="pcs15"
-pcs="pcs20"
-#pcs="pcs30"
+#pcs="pcs20"
+pcs="pcs30"
 
 # set the number of neighbours
-#neighbours="neighbours15"
+neighbours="neighbours15"
 #neighbours="neighbours25"
-neighbours="neighbours50"
+#neighbours="neighbours50"
 
 # set the count level (ie gene or spliced/unspliced)
 #count_level = "gene"
@@ -67,9 +67,9 @@ loom_file = os.path.join(
     sample_id,
     "velocyto_output",
     #    "possorted_genome_bam_5Q1UF.loom" # e11_control
-    #    "possorted_genome_bam_YIL7N.loom" # e12_control
+    "possorted_genome_bam_YIL7N.loom" # e12_control
     #    "possorted_genome_bam_LZRTJ.loom" # e11_ko
-    "possorted_genome_bam_0YX73.loom"  # e12_ko
+    #    "possorted_genome_bam_0YX73.loom"  # e12_ko
 )
 
 # set the .h5ad data input file address

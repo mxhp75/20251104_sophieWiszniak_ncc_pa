@@ -3,7 +3,7 @@
 
 =================
 
-This script takes a filtered and normalised Seurat object, converted previously to a .5had file, and generates the paga graph (coarse-grained connectivity map between cell type clusters) and uses this information generate the FDG projections
+This script takes a filtered and normalised Seurat object, converted previously to a .h5ad file, and generates the paga graph (coarse-grained connectivity map between cell type clusters) and uses this information generate the FDG projections
 
 Author: Melanie Smith
 Email:  melanie.smith@adelaide.edu.au
@@ -41,8 +41,11 @@ import os
 fPCA=50 # set no. of pcs - this is used to populate the adata.obsm['X_pca'] field (run once)
 
 # set the sample ID
-#sample_id = "e11_control"
-sample_id = "e12_control"
+# sample_id = "e11_control"
+# sample_id = "e12_control"
+# sample_id = "e11_ko"
+sample_id = "e12_ko"
+
 base_dir = "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa/outDir/09-rna_velocity"
 # set the sample id and output directory
 out_dir = "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa/outDir/09-rna_velocity"
