@@ -37,12 +37,13 @@ import os
 paga_group = "clusters"
 
 # set the sample ID
-sample_id = "e11_control"
+#sample_id = "e11_control"
 #sample_id = "e11_ko"
 #sample_id = "e12_control"
-#sample_id = "e12_ko"
+sample_id = "e12_ko"
 
 # set the number of PCs
+#pcs="pcs15"
 pcs="pcs20"
 #pcs="pcs30"
 
@@ -65,8 +66,10 @@ loom_file = os.path.join(
     "09-rna_velocity",
     sample_id,
     "velocyto_output",
-    "possorted_genome_bam_5Q1UF.loom" #e11
-    #"possorted_genome_bam_YIL7N.loom" #e12
+    #    "possorted_genome_bam_5Q1UF.loom" # e11_control
+    #    "possorted_genome_bam_YIL7N.loom" # e12_control
+    #    "possorted_genome_bam_LZRTJ.loom" # e11_ko
+    "possorted_genome_bam_0YX73.loom"  # e12_ko
 )
 
 # set the .h5ad data input file address
@@ -217,20 +220,54 @@ plt.close()
 # Run latent time
 scv.tl.latent_time(adata)
 
+# write out the adata object
+adata.write_h5ad(
+    os.path.join(
+        out_dir, f"{sample_id}_velocity_fdg_{pcs}_{neighbours}_{count_level}_{paga_group}.h5ad"
+    ),
+    compression='gzip'
+)
+
 # QC plots
 scv.pl.scatter(adata,
                color='new_celltypes',
                basis='draw_graph_fa',
-               title='Celltypes on FDG')
+               title=f"{sample_id} Cell Types on fdg ({pcs}; {neighbours}; paga seed = {paga_group})",
+               dpi=300,
+               show=False,
+               legend_loc="bottom right"
+               )
+plt.savefig(os.path.join(out_dir, f"{sample_id}_cellTypes_fdg_{pcs}_{neighbours}_{count_level}_{paga_group}.png"),
+            dpi=300,
+            bbox_inches="tight")
+plt.close()
+
 scv.pl.scatter(adata,
                color='full_dataset_clusters',
                basis='draw_graph_fa',
-               title='Clusters on FDG')
+               title=f"{sample_id} Seurat Clusters on fdg ({pcs}; {neighbours}; paga seed = {paga_group})",
+               dpi=300,
+               show=False,
+               legend_loc="bottom right"
+               )
+plt.savefig(os.path.join(out_dir, f"{sample_id}_clusters_fdg_{pcs}_{neighbours}_{count_level}_{paga_group}.png"),
+            dpi=300,
+            bbox_inches="tight")
+plt.close()
+
 scv.pl.scatter(adata,
                color='latent_time',
                basis='draw_graph_fa',
                cmap='gnuplot',
-               title='Latent time on FDG')
+               title=f"{sample_id} Latent time on fdg ({pcs}; {neighbours}; paga seed = {paga_group})",
+               dpi=300,
+               show=False,
+               legend_loc="bottom right"
+               )
+plt.savefig(os.path.join(out_dir, f"{sample_id}_latentTime_fdg_{pcs}_{neighbours}_{count_level}_{paga_group}.png"),
+            dpi=300,
+            bbox_inches="tight")
+plt.close()
 
 # Heatmap top 10
 top_genes = adata.var['fit_likelihood'].sort_values(ascending=False).index[:300]
@@ -252,7 +289,7 @@ scv.pl.scatter(adata,
                show=False,
                legend_loc="bottom right"
                )
-plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_fdg_{pcs}_{neighbours}_{count_level}_{paga_group}.png"),
+plt.savefig(os.path.join(out_dir, f"{sample_id}_velocity_fdg_gene_QC_{pcs}_{neighbours}_{count_level}_{paga_group}.png"),
             dpi=300,
             bbox_inches="tight")
 plt.close()
