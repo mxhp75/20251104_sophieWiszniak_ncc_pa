@@ -1,0 +1,559 @@
+---
+title: "regress_cell_cycle"
+author: "Melanie Smith"
+date: "2026-03-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(42)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Core single cell
+library(Seurat)
+library(loupeR)
+
+# additional plotting functions
+library(patchwork)
+library(pheatmap)
+
+```
+
+The aim of this script is to mitigate the effects of cell cycle (CC) heterogeneity in our scRNA-seq data. To accomplish this we first write in the complete Seurat object containing all 4 samples, followed by using the Seurat function `ScaleData()` with `vars.to.regress = c("CC.Difference")` to regress together the "S.Score" and the "G2M.Score". This milder alternative (compared to fully regressing out all CC information) is regressing only the difference (S.Score - G2M.Score). This keeps the broad “cycling vs. quiescent” signal while removing phase-specific noise among proliferating cells.  
+
+# Set project directories
+
+```{r}
+# set directories
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+out_dir <- file.path(project_repo_dir, "outDir", "08-regress-cell-cycle")
+
+# Create directory if it doesn't exist
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir,
+             recursive = TRUE)
+}
+
+```
+
+# Load required Seurat object
+- Load the final Seurat object as created in `06-cellType_filter.Rmd`. This object is post-QC, post-filtering and has layers for PCA, UMAP etc.  
+- This object contains all 4 samples and has all layers merged.  
+
+```{r}
+# read in the complete Seurat object
+re_embed_interesting_cells <- readRDS(file.path(project_repo_dir, "outDir", "06-cluster_marker_genes", "final_interesting_cells_0.6.rds"))
+# sanity check to ensure this is a Seurat object
+stopifnot(inherits(re_embed_interesting_cells, "Seurat"))
+
+# ensure "seurat_cluster" is the current identity
+Idents(re_embed_interesting_cells) <- "seurat_clusters"
+Idents(re_embed_interesting_cells) <- factor(Idents(re_embed_interesting_cells))
+
+# ensure "RNA" is the default assay
+DefaultAssay(re_embed_interesting_cells) <- "RNA"
+
+```
+
+## Set up the cell-type colours
+
+```{r}
+celltype_cols <- c("Myocardium" = "#E41A1C",
+                   "VSMC" = "#377EB8", 
+                   "Epicardium" = "#4DAF4A",
+                   "Mesenchyme" = "#984EA3", 
+                   "Endocardium" = "#FF7F00",
+                   "Other/Unknown" = "grey70")
+```
+
+# Quick sanity check
+
+```{r}
+print(re_embed_interesting_cells)
+table(Idents(re_embed_interesting_cells))
+stopifnot(!anyDuplicated(colnames(re_embed_interesting_cells)))
+```
+
+# Sanity plots
+## cell cycle genes -> ridge plots
+
+```{r}
+# set active identity to cell cycle
+Idents(re_embed_interesting_cells) <- "Phase"
+
+# Visualize the distribution of cell cycle markers across
+RidgePlot(re_embed_interesting_cells,
+          features = c("Pcna", "Top2a", "Mcm6", "Mki67"),
+          ncol = 2)
+```
+
+# Heatmap of highly variable genes (nFeaures=200, downsample to 5000 cells)
+
+```{r}
+# 1. Get the top highly variable genes (usually 50–100 is readable)
+top_hvg <- VariableFeatures(re_embed_interesting_cells)[1:200]   # or 50, 200 — adjust as needed
+
+# Downsample cells if you have > ~5,000–10,000 cells total
+#    This makes the heatmap much faster and less crowded
+set.seed(123)  # for reproducibility
+cells_to_plot <- subset(re_embed_interesting_cells, downsample = 5000)
+
+# 3. Plot the heatmap — group by your current clusters (or "Phase", "orig.ident", etc.)
+DoHeatmap(cells_to_plot,
+          features = top_hvg,
+          group.by = "seurat_clusters",     # change to "Phase" or "orig.ident" if you prefer
+          size = 3,                         # font size for gene labels
+          angle = 90) +                     # rotate column labels if needed
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red") +   # nice diverging scale
+  NoLegend() +
+  plot_annotation(
+    title = "Heatmap of Top 200 Highly Variable Genes",
+    subtitle = "Scaled expression (scale.data)",
+    caption = "Pre cell-cycle regression | Grouped by current clusters"
+  )
+
+# 3. Plot the heatmap — group by your current clusters (or "Phase", "orig.ident", etc.)
+DoHeatmap(cells_to_plot,
+          features = top_hvg,
+          group.by = "orig.ident",     # change to "Phase" or "orig.ident" if you prefer
+          size = 3,                         # font size for gene labels
+          angle = 90) +                     # rotate column labels if needed
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red") +   # nice diverging scale
+  NoLegend() +
+  plot_annotation(
+    title = "Heatmap of Top 200 Highly Variable Genes",
+    subtitle = "Scaled expression (scale.data)",
+    caption = "Pre cell-cycle regression | Grouped by sample"
+  )
+
+```
+
+
+## cell cycle classification on PCA
+
+```{r}
+# Get loadings for PC1:4
+pc_loadings <- Loadings(re_embed_interesting_cells)
+
+# Create a nice sorted data frame
+top_loadings_pc1 <- as.data.frame(pc_loadings) %>%
+  tibble::rownames_to_column("gene") %>%
+  dplyr::select(gene, loading = PC_1) %>%
+  mutate(abs_loading = abs(loading)) %>%
+  mutate(rank_positive = rank(-loading),      # lower number = more positive
+         rank_negative = rank(loading)) %>%   # lower number = more negative
+  filter(rank_positive <= 20 | rank_negative <= 20) %>%
+  arrange(desc(loading))
+
+top_loadings_pc2 <- as.data.frame(pc_loadings) %>%
+  tibble::rownames_to_column("gene") %>%
+  dplyr::select(gene, loading = PC_2) %>%
+  mutate(abs_loading = abs(loading)) %>%
+  mutate(rank_positive = rank(-loading),      # lower number = more positive
+         rank_negative = rank(loading)) %>%   # lower number = more negative
+  filter(rank_positive <= 20 | rank_negative <= 20) %>%
+  arrange(desc(loading))
+
+top_loadings_pc3 <- as.data.frame(pc_loadings) %>%
+  tibble::rownames_to_column("gene") %>%
+  dplyr::select(gene, loading = PC_3) %>%
+  mutate(abs_loading = abs(loading)) %>%
+  mutate(rank_positive = rank(-loading),      # lower number = more positive
+         rank_negative = rank(loading)) %>%   # lower number = more negative
+  filter(rank_positive <= 20 | rank_negative <= 20) %>%
+  arrange(desc(loading))
+
+top_loadings_pc4 <- as.data.frame(pc_loadings) %>%
+  tibble::rownames_to_column("gene") %>%
+  dplyr::select(gene, loading = PC_4) %>%
+  mutate(abs_loading = abs(loading)) %>%
+  mutate(rank_positive = rank(-loading),      # lower number = more positive
+         rank_negative = rank(loading)) %>%   # lower number = more negative
+  filter(rank_positive <= 20 | rank_negative <= 20) %>%
+  arrange(desc(loading))
+```
+
+## Visualisation
+
+```{r}
+# Function to create and save heatmap for one PC
+create_pc_heatmap <- function(pc_number, object = re_embed_interesting_cells) {
+  
+  # Dynamically get the loadings table (assumes you have top_loadings_pc1, pc2, etc.)
+  loadings_table <- get(paste0("top_loadings_pc", pc_number))
+  
+  # Extract genes
+  genes_of_interest <- loadings_table$gene
+  genes_of_interest <- genes_of_interest[genes_of_interest %in% rownames(object)]
+  
+  if (length(genes_of_interest) == 0) {
+    message("No genes found for PC", pc_number)
+    return(NULL)
+  }
+  
+  # Get scaled data
+  scaled_data <- GetAssayData(object, 
+                              assay = "RNA",
+                              slot = "scale.data")[genes_of_interest, ]
+  
+  # Cell annotation
+  cell_annotation <- data.frame(
+    CellType = object$new_celltypes,
+    Phase    = object$Phase,
+    row.names = colnames(object)
+  )
+  
+  # Plot title
+  plot_title <- paste0("Expression of Top Loading Genes - PC", pc_number)
+  
+  # Generate pheatmap
+  p <- pheatmap(scaled_data,
+                cluster_rows = TRUE,
+                cluster_cols = TRUE,
+                treeheight_row = 0,
+                treeheight_col = 0,
+                show_colnames = FALSE,
+                annotation_col = cell_annotation,
+                annotation_colors = list(CellType = celltype_cols),
+                scale = "none",
+                color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+                main = plot_title,
+                fontsize_row = 10,
+                fontsize = 12,
+                silent = TRUE)   # prevents printing in loop
+  
+  # Save as PDF (recommended for high quality)
+  pdf_filename <- file.path(out_dir, paste0("08-PC", pc_number, "_top_loadings_heatmap.pdf"))
+  ggsave(filename = pdf_filename, 
+         plot = p$gtable, 
+         width = 12, 
+         height = 10, 
+         dpi = 300)
+  
+  # Optional: also save as PNG
+  png_filename <- file.path(out_dir, paste0("08-PC", pc_number, "_top_loadings_heatmap.png"))
+  ggsave(filename = png_filename, 
+         plot = p$gtable, 
+         width = 12, 
+         height = 10, 
+         dpi = 300)
+  
+  message("✓ Saved PC", pc_number, " heatmap: ", pdf_filename)
+  
+  return(p)
+}
+
+# Run the loop for PC1 to PC4
+for (pc in 1:4) {
+  create_pc_heatmap(pc)
+}
+```
+
+
+```{r}
+
+# Variance explained by top PCs
+ElbowPlot(re_embed_interesting_cells, ndims = 50)
+
+# Heatmap of top PCA genes
+pca_heatmap_pre_cc_regress <- DimHeatmap(re_embed_interesting_cells,
+                                          dims = c(1:4),
+                                          ncol = 2,
+                                         fast = FALSE) +
+  plot_annotation(
+    title = "Heatmap top genes - PC 1:4 - all samples - pre cc regress",
+    caption = "Final dataset"
+    )
+ggsave(pca_heatmap_pre_cc_regress,
+        filename = file.path(out_dir, "08-pca_heatmap_pre_cc_regress.png"),
+        width = 12,
+        height = 12)
+
+# Running a PCA on cell cycle genes reveals, unsurprisingly, that cells separate entirely by
+# phase (dims 1&2)
+pca_1_2_pre_cc_regress <- DimPlot(re_embed_interesting_cells,
+                              dims = c(1,2),
+                              group.by = "Phase",
+                              split.by = "orig.ident",
+                              combine = TRUE,
+                              reduction = "pca",    
+                              label = TRUE,
+                              repel = TRUE,
+                              label.size = 5) +
+  plot_annotation(
+    title = "PCA 1&2 - all samples - pre cc regress",
+    caption = "Final dataset"
+    )
+ggsave(pca_1_2_pre_cc_regress,
+        filename = file.path(out_dir, "08-pca_1_2_pre_cc_regress.png"),
+        width = 12,
+        height = 8)
+
+# phase (dims 3&4)
+pca_3_4_pre_cc_regress <- DimPlot(re_embed_interesting_cells,
+                                  dims = c(3,4),
+                                  group.by = "Phase",
+                                  split.by = "orig.ident",
+                                  reduction = "pca",
+                                  label = TRUE,
+                                  repel = TRUE,
+                                  label.size = 5) +
+  plot_annotation(
+    title = "PCA 3&4 - all samples - pre cc regress",
+    caption = "Final dataset"
+    )
+ggsave(pca_3_4_pre_cc_regress,
+        filename = file.path(out_dir, "08-pca_3_4_pre_cc_regress.png"),
+        width = 12,
+        height = 8)
+
+# Cell types
+pca_1_2_pre_cc_regress_celltype <- DimPlot(re_embed_interesting_cells,
+                                           dims = c(1,2),
+                                           group.by = "new_celltypes",
+                                           split.by = "orig.ident",
+                                           reduction = "pca",
+                                           label = TRUE,
+                                           repel = TRUE,
+                                           label.size = 5) +
+  plot_annotation(
+    title = "PCA 1&2 - all samples - pre cc regress",
+    caption = "Final dataset"
+    ) +
+  scale_color_manual(values = celltype_cols)
+ggsave(pca_1_2_pre_cc_regress_celltype,
+        filename = file.path(out_dir, "08-pca_1_2_pre_cc_regress_celltype.png"),
+        width = 12,
+        height = 8)
+```
+
+# UMAP - colour thing of interest
+
+```{r}
+umap_1_2_pre_cc_regress <- DimPlot(re_embed_interesting_cells,
+        group.by = "Phase",
+        split.by = "orig.ident",
+        reduction = "umap",
+        label = FALSE,
+        repel = TRUE,
+        label.size = 3) +
+  plot_annotation(
+    title = "UMAP 1&2 - all samples - pre cc regress",
+    caption = "Final dataset"
+    )
+ggsave(umap_1_2_pre_cc_regress,
+        filename = file.path(out_dir, "08-umap_1_2_pre_cc_regress.png"),
+        width = 12,
+        height = 8)
+
+# feature plot of the cell cycle scores
+umap_s_g2m_pre_cc_regress <- FeaturePlot(re_embed_interesting_cells,
+            features = c("S.Score", "G2M.Score"), 
+            reduction = "umap") &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Score") &
+  plot_annotation(
+    title = "UMAP 1&2 - all samples - pre cc regress",
+    caption = "Final dataset"
+    )
+ggsave(umap_s_g2m_pre_cc_regress,
+        filename = file.path(out_dir, "08-umap_s_g2m_pre_cc_regress.png"),
+        width = 12,
+        height = 8)
+
+DimPlot(re_embed_interesting_cells,
+        group.by = "seurat_clusters",
+        split.by = "orig.ident",
+        reduction = "umap",
+        label = FALSE,
+        repel = TRUE,
+        label.size = 3) +
+  plot_annotation(
+    title = "Cell Cycle Phase",
+    caption = "Final dataset"
+  )
+DimPlot(re_embed_interesting_cells,
+        group.by = "seurat_clusters",
+        split.by = "orig.ident",
+        reduction = "umap",
+        label = FALSE,
+        repel = TRUE,
+        label.size = 3) +
+  plot_annotation(
+    title = "Cell Cycle Phase",
+    caption = "Final dataset"
+  )
+
+DimPlot(re_embed_interesting_cells,
+        group.by = "new_celltypes",
+        split.by = "orig.ident",
+        reduction = "umap",
+        label = FALSE,
+        repel = TRUE,
+        label.size = 3) +
+  plot_annotation(
+    title = "Cell Types",
+    caption = "Final dataset"
+  )
+```
+
+# Cell cycle gene enrichment mudule gene sets
+- The cell cycle genes aren't stored in the Seurat object according to the original workflow so I will reproduce them here for use in visualisation. Going forward it might be a good idea to store them in `object@misc$s.features <- s.genes` and `object@misc$g2m.features <- g2m.genes` so we have a reporoducible record should the list from Seurat change.  
+
+```{r}
+# this is the function Nick wrote in the initial pre-processing
+# Seurat comes with a set of cell cycle genes but these are human genes derived from the Tirosh et al. 2015 paper (the melanoma single-cell study). We need to convert them to mouse gene symbols before we can use them.
+human_genes_to_mouse <- function(human_genes){
+  hom_data <- homologene::homologene(human_genes, inTax = 9606, outTax = 10090)
+  result <- setNames(hom_data$`10090`, hom_data$`9606`)
+  return(result)
+}
+
+# convert S.Score genes from human to mouse, starting with the 2019 updated gene list
+s.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$s.genes)
+# convert G2M scores from human to mouse, starting with the 2019 updated gene list
+g2m.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$g2m.genes)
+```
+
+# Distribution of cell cycle scores
+
+```{r}
+# Violin plots for S.Score and G2M.Score split by orig.ident
+VlnPlot(re_embed_interesting_cells,
+        features = c("S.Score", "G2M.Score"),
+        group.by = "orig.ident",        # one violin per sample
+        split.by = "Phase",             # color by cell cycle phase (very useful!)
+        pt.size = 1,                    # remove individual points for cleaner look
+        ncol = 1,                       # stack them vertically
+        cols = c("G1" = "#1f77b4", "S" = "#ff7f0e", "G2M" = "#2ca02c")) +  # nice colors
+  plot_annotation(
+    title = "Distribution of Cell Cycle Scores by Sample",
+    subtitle = "S.Score and G2M.Score across orig.ident",
+    caption = "Pre cell-cycle regression"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+# stacked barchart of cycling cells per cell type
+
+```{r}
+
+```
+
+
+# Store existing data before over-writing
+```{r}
+# 1. Store a copy of the current reductions
+re_embed_interesting_cells[["umap_original"]] <- re_embed_interesting_cells[["umap"]]
+re_embed_interesting_cells[["pca_original"]]   <- re_embed_interesting_cells[["pca"]]
+
+# 2. Store current clusters and Phase in case I want to access later
+re_embed_interesting_cells$seurat_clusters_original <- re_embed_interesting_cells$seurat_clusters
+re_embed_interesting_cells$Phase_original <- re_embed_interesting_cells$Phase
+```
+
+# Regress cell cycle difference
+
+```{r}
+# Create the difference score (milder regression)
+re_embed_interesting_cells$CC.Difference <- re_embed_interesting_cells$S.Score - re_embed_interesting_cells$G2M.Score
+
+# Scale with regression
+DefaultAssay(re_embed_interesting_cells) <- "RNA"  # make sure RNA is the default assay
+
+re_embed_interesting_cells <- ScaleData(re_embed_interesting_cells,
+                                        vars.to.regress = c("CC.Difference"),  # onlu regressing for cell cycle difference
+                                        features = VariableFeatures(re_embed_interesting_cells))
+
+# Re-run downstream (use same dims/resolution as before, or tune slightly)
+re_embed_interesting_cells <- RunPCA(re_embed_interesting_cells, npcs = 50)
+re_embed_interesting_cells <- FindNeighbors(re_embed_interesting_cells, dims = 1:30)
+re_embed_interesting_cells <- FindClusters(re_embed_interesting_cells, resolution = 0.6)  # your previous choice
+re_embed_interesting_cells <- RunUMAP(re_embed_interesting_cells, dims = 1:30)
+```
+
+# UMAP - colour thing of interest
+
+```{r}
+DimPlot(re_embed_interesting_cells,
+        group.by = "Phase",
+        split.by = "orig.ident",
+        reduction = "umap",
+        label = FALSE,
+        repel = TRUE,
+        label.size = 3) +
+  plot_annotation(
+    title = "Cell Cycle Phase",
+    caption = "Final dataset"
+  )
+
+# feature plot of the cell cycle scores
+FeaturePlot(re_embed_interesting_cells,
+            features = c("S.Score", "G2M.Score"), 
+            reduction = "umap") &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Score")
+
+DimPlot(re_embed_interesting_cells,
+        group.by = "seurat_clusters",
+        split.by = "orig.ident",
+        reduction = "umap",
+        label = FALSE,
+        repel = TRUE,
+        label.size = 3) +
+  plot_annotation(
+    title = "Cell Cycle Phase",
+    caption = "Final dataset"
+  )
+DimPlot(re_embed_interesting_cells,
+        group.by = "seurat_clusters",
+        split.by = "orig.ident",
+        reduction = "umap",
+        label = FALSE,
+        repel = TRUE,
+        label.size = 3) +
+  plot_annotation(
+    title = "Cell Cycle Phase",
+    caption = "Final dataset"
+  )
+
+DimPlot(re_embed_interesting_cells,
+        group.by = "new_celltypes",
+        # split.by = "orig.ident",
+        reduction = "umap",
+        label = FALSE,
+        repel = TRUE,
+        label.size = 3) +
+  plot_annotation(
+    title = "Cell Types",
+    caption = "Final dataset"
+  )
+```
+
+
+

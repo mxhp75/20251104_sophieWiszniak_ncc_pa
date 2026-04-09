@@ -51,9 +51,11 @@ library(scCustomize)
 # Set sample ID -> Which sample do you want to run the script for?
 # sample_ID <- "e11_control"
 # sample_ID <- "e11_ko"
-sample_ID <- "e12_control"
-loom_colname <- "possorted_genome_bam_YIL7N:"
-# sample_ID <- "e12_ko"
+# loom_colname <- "possorted_genome_bam_LZRTJ:"
+# sample_ID <- "e12_control"
+# loom_colname <- "possorted_genome_bam_YIL7N:"
+sample_ID <- "e12_ko"
+loom_colname <- "possorted_genome_bam_0YX73:"
 
 # Set directories
 project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
@@ -160,9 +162,9 @@ colnames(unspliced_assay) %>% head()
 
 # add the expected suffix back onto the cell barcodes
 # add suffix to spliced
-colnames(spliced_assay) <- paste0(colnames(spliced_assay), "-1_1")
+colnames(spliced_assay) <- paste0(colnames(spliced_assay), "-1_2")
 # add suffix to unspliced
-colnames(unspliced_assay) <- paste0(colnames(unspliced_assay), "-1_1")
+colnames(unspliced_assay) <- paste0(colnames(unspliced_assay), "-1_2")
 
 target_genes <- rownames(seurat_obj)
 target_cells <- colnames(seurat_obj)
