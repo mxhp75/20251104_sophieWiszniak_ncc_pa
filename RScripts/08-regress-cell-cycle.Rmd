@@ -38,6 +38,7 @@ library(loupeR)
 # additional plotting functions
 library(patchwork)
 library(pheatmap)
+library(ggExtra)
 
 ```
 
@@ -441,31 +442,541 @@ g2m.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$g2m.genes)
 # Distribution of cell cycle scores
 
 ```{r}
-# Violin plots for S.Score and G2M.Score split by orig.ident
-VlnPlot(re_embed_interesting_cells,
-        features = c("S.Score", "G2M.Score"),
-        group.by = "orig.ident",        # one violin per sample
-        split.by = "Phase",             # color by cell cycle phase (very useful!)
-        pt.size = 1,                    # remove individual points for cleaner look
-        ncol = 1,                       # stack them vertically
-        cols = c("G1" = "#1f77b4", "S" = "#ff7f0e", "G2M" = "#2ca02c")) +  # nice colors
+############################################
+## 1. Calculate % of cells in each phase per sample
+############################################
+
+phase_prop <- prop.table(
+  table(re_embed_interesting_cells$orig.ident,
+        re_embed_interesting_cells$Phase),
+  margin = 1
+) * 100
+
+prop_df <- as.data.frame(phase_prop)
+colnames(prop_df) <- c("orig.ident", "Phase", "Percent")
+
+prop_df <- prop_df %>%
+  mutate(
+    Percent = round(Percent, 1),
+    label = paste0(Percent, "%")
+  )
+
+############################################
+## 2. Duplicate for both features (CRITICAL FIX)
+############################################
+
+prop_df_all <- bind_rows(
+  prop_df %>% mutate(feature = "S.Score"),
+  prop_df %>% mutate(feature = "G2M.Score")
+)
+
+############################################
+## 3. Define y-position for labels
+############################################
+
+y_pos <- max(
+  c(re_embed_interesting_cells$S.Score,
+    re_embed_interesting_cells$G2M.Score),
+  na.rm = TRUE
+) * 1.05
+
+prop_df_all$y <- y_pos
+
+############################################
+## 4. Define colours (used consistently)
+############################################
+
+phase_cols <- c(
+  "G1" = "#1f77b4",
+  "G2M" = "#2ca02c",
+  "S" = "#ff7f0e")
+
+re_embed_interesting_cells$Phase <- factor(
+  re_embed_interesting_cells$Phase,
+  levels = c("G1", "G2M", "S")  # match the order in phase_cols exactly
+)
+
+############################################
+## 5. Make the plot
+############################################
+
+vln_prop_cycle <- VlnPlot(
+  re_embed_interesting_cells,
+  features = c("S.Score", "G2M.Score"),
+  group.by = "orig.ident",
+  split.by = "Phase",
+  ncol = 1,
+  pt.size = 1,
+  alpha = 0.3,
+  cols = phase_cols,
+  split.plot = FALSE
+  ) +
   plot_annotation(
     title = "Distribution of Cell Cycle Scores by Sample",
     subtitle = "S.Score and G2M.Score across orig.ident",
     caption = "Pre cell-cycle regression"
   ) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  guides(fill = guide_legend(title = "Cell Cycle Phase")) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  geom_text(
+    data = prop_df_all,
+    aes(
+      x = orig.ident,
+      y = y,
+      label = label,
+      group = Phase,
+      color = Phase
+    ),
+    position = position_dodge(width = 0.9),
+    vjust = -0.6,
+    size = 4,
+    # fontface = "bold",
+    inherit.aes = FALSE,
+    show.legend = FALSE   # ✅ removes extra legend
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.20))) +
+  scale_color_manual(values = phase_cols) +  # ✅ matches violin colours
+
+  guides(
+    fill = guide_legend(
+      title = "Cell Cycle Phase",
+      override.aes = list(alpha = 1)
+    )
+  ) +
+  
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom")
+# save the plot
+ggsave(vln_prop_cycle,
+        filename = file.path(out_dir, "08-vln_prop_cycle.png"),
+        width = 24,
+        height = 12)
+
+# Geom half eye version
+## S.Score
+half_eye_s.score <- re_embed_interesting_cells@meta.data %>%
+   tibble::as_tibble(rownames = "barcode") %>%
+   dplyr::select(barcode, orig.ident, S.Score, G2M.Score, Phase, cycling) %>%
+   ggplot2::ggplot(aes(x = Phase, y = S.Score)) +
+  
+  # Right half: density + median line
+  ggdist::stat_halfeye(
+    side = "right",
+    aes(fill = Phase),
+    # alpha = 0.5,
+    .width = 0.5,           # median line
+    justification = -0.2,
+    scale = 0.9,
+    linewidth = 0.4,
+    color = "black"
+  ) +
+  scale_fill_manual(values = phase_cols) +
+  
+  # Left half: dots
+  ggdist::stat_dots(
+    side = "left",
+    alpha = 0.3,
+    justification = 1.25,
+    quantiles = NULL,       # prevents binwidth error
+    dotsize = 0.7
+  ) +
+  
+  facet_wrap(~ orig.ident) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major.x = element_blank()
+  ) +
+   labs(title = "S.Score",
+        caption = "Pre cell-cycle regression")
+
+# save the plot
+ggsave(half_eye_s.score,
+        filename = file.path(out_dir, "08-half_eye_s.score.png"),
+        width = 24,
+        height = 12)
+ 
+ ## G2M.Score
+ half_eye_g2m.score <- re_embed_interesting_cells@meta.data %>%
+   tibble::as_tibble(rownames = "barcode") %>%
+   dplyr::select(barcode, orig.ident, S.Score, G2M.Score, Phase, cycling) %>%
+   ggplot2::ggplot(aes(x = Phase, y = G2M.Score)) +
+  
+  # Right half: density + median line
+  ggdist::stat_halfeye(
+    side = "right",
+    aes(fill = Phase),
+    # alpha = 0.5,
+    .width = 0.5,           # median line
+    justification = -0.2,
+    scale = 0.9,
+    linewidth = 0.4,
+    color = "black"
+  ) +
+  scale_fill_manual(values = phase_cols) +
+  
+  # Left half: dots
+  ggdist::stat_dots(
+    side = "left",
+    alpha = 0.3,
+    justification = 1.25,
+    quantiles = NULL,       # prevents binwidth error
+    dotsize = 0.7
+  ) +
+  
+  facet_wrap(~ orig.ident) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major.x = element_blank()
+  ) +
+   labs(title = "G2M.Score",
+        caption = "Pre cell-cycle regression")
+# save the plot
+ggsave(half_eye_g2m.score,
+        filename = file.path(out_dir, "08-half_eye_g2m.score.png"),
+        width = 24,
+        height = 12)
+
+ 
+ ## Scatter plot of S.Score versus G2M.Score
+# Calculate symmetric limits
+score_range <- range(c(re_embed_interesting_cells@meta.data$S.Score,
+                       re_embed_interesting_cells@meta.data$G2M.Score), 
+                     na.rm = TRUE)
+padding <- diff(score_range) * 0.06
+xylim <- c(score_range[1] - padding, score_range[2] + padding)
+
+scatter_cycle_score <- ggplot(re_embed_interesting_cells@meta.data,
+                              aes(x = S.Score, y = G2M.Score, colour = Phase)) +
+  geom_point(alpha = 0.65, size = 0.8) +
+  scale_color_manual(values = phase_cols) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+  xlim(xylim[1], xylim[2]) +
+  ylim(xylim[1], xylim[2]) +
+  coord_fixed(ratio = 1) +
+  labs(title = "S.Score vs G2M.Score",
+       x = "S.Score", 
+       y = "G2M.Score",
+       caption = "Pre cell-cycle regression") +
+  theme_bw()
+
+# Add marginals
+scatter_cycle_score_dist <- ggExtra::ggMarginal(scatter_cycle_score,
+                                                type = "density",
+                                                groupFill = TRUE,
+                                                alpha = 0.7)
+# save the plot
+ggsave(scatter_cycle_score_dist,
+       filename = file.path(out_dir, "08-scatter_cycle_score_dist.png"),
+       width = 12,
+       height = 12,
+       dpi = 300,
+       bg = "white")
+
 ```
 
+# collapse cell cycle phase
+
+```{r}
+## collapse the S and G2M phase allocations
+re_embed_interesting_cells[[]] <- re_embed_interesting_cells[[]] %>%
+  dplyr::mutate(
+    cycling = dplyr::if_else(
+      Phase %in% c("S", "G2M"),
+      "cycling",
+      "not_cycling"
+    )
+  )
+
+# quick sanity check
+table(re_embed_interesting_cells$Phase,
+      re_embed_interesting_cells$cycling)
+  #     cycling not_cycling
+  # G1        0       12436
+  # G2M    5796           0
+  # S      6095           0
+
+# lets make these a factor so they always plot in the same order
+re_embed_interesting_cells$cycling <- factor(
+  re_embed_interesting_cells$cycling,
+  levels = c("not_cycling", "cycling")
+)
+
+DimPlot(re_embed_interesting_cells,
+        group.by = "cycling",
+        # split.by = "orig.ident",
+        reduction = "umap",
+        label = FALSE,
+        repel = TRUE,
+        label.size = 3) +
+  plot_annotation(
+    title = "Cell Cycle Phase",
+    caption = "Final dataset"
+  )
+
+```
 
 # stacked barchart of cycling cells per cell type
 
 ```{r}
 
+# 1. Calculate percentages
+phase_prop_full <- re_embed_interesting_cells@meta.data %>%
+  count(new_celltypes, Phase) %>%
+  group_by(new_celltypes) %>%
+  mutate(Percent = n / sum(n) * 100) %>%
+  ungroup()
+
+# 2. Plot - 100% stacked bar chart
+phase_prop_full_bar <- ggplot(phase_prop_full, aes(x = new_celltypes, y = Percent, fill = Phase)) +
+  geom_col(position = "fill",
+           width = 0.85) +          # "fill" makes each bar sum to 100%
+  scale_fill_manual(values = phase_cols) + 
+  scale_y_continuous(labels = scales::percent_format()) +   # show as 0% - 100%
+  
+  labs(title = "Cell Cycle Phase Distribution by Cell Type (full dataset)",
+       subtitle = "Percentage of cells in G1, S, and G2M",
+       x = "Cell Type",
+       y = "Percentage of Cells",
+       fill = "Cell Cycle Phase") +
+  
+  theme_bw(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major.x = element_blank(),
+    legend.position = "right"
+  ) +
+  
+  geom_text(aes(label = paste0(round(Percent, 1), "%")), 
+            position = position_fill(vjust = 0.5), 
+            size = 3.5,
+            color = "white",
+            fontface = "bold")
+# save the plot
+ggsave(phase_prop_full_bar,
+       filename = file.path(out_dir, "08-phase_prop_full_bar.png"),
+       width = 12,
+       height = 8,
+       dpi = 300,
+       bg = "white")
+
+
+# 1. Calculate percentages PER SAMPLE (orig.ident)
+phase_prop <- re_embed_interesting_cells@meta.data %>%
+  count(orig.ident, new_celltypes, Phase) %>%
+  group_by(orig.ident, new_celltypes) %>%
+  mutate(Percent = n / sum(n) * 100) %>%
+  ungroup()
+
+# 2. Plot - 100% stacked bars with facet_wrap
+phase_prop_bar <- ggplot(phase_prop,
+                         aes(x = new_celltypes, y = Percent, fill = Phase)) +
+  geom_col(position = "fill", width = 0.85) +           # makes each bar sum to 100%
+  
+  scale_fill_manual(values = phase_cols) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  
+  facet_wrap(~ orig.ident, ncol = 2, scales = "free_x") +   # adjust ncol as needed
+  
+  labs(title = "Cell Cycle Phase Distribution by Cell Type and Sample",
+       subtitle = "Percentage of cells in each phase (G1, S, G2M)",
+       x = "Cell Type",
+       y = "Percentage of Cells",
+       fill = "Cell Cycle Phase") +
+  
+  theme_bw(base_size = 11) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+    strip.background = element_rect(fill = "grey95"),
+    strip.text = element_text(face = "bold"),
+    panel.grid.major.x = element_blank(),
+    legend.position = "right"
+  ) +
+  
+  geom_text(aes(label = paste0(round(Percent, 1), "%")), 
+            position = position_fill(vjust = 0.5), 
+            size = 3.5,
+            color = "white",
+            fontface = "bold")
+# save the plot
+ggsave(phase_prop_bar,
+       filename = file.path(out_dir, "08-phase_prop_bar.png"),
+       width = 12,
+       height = 8,
+       dpi = 300,
+       bg = "white")
+
+phase_prop %>%
+  filter(Phase == "G1") %>%
+  select(orig.ident, new_celltypes, Phase, Percent_not_cycling = Percent, -Phase) %>%
+  arrange(orig.ident, new_celltypes) %>%
+  dplyr::mutate(., Percent_cycling = 100-Percent_not_cycling)
+
+
 ```
 
+# Test cell cycle proportions
+## Combined cell types
+- pool time points or genotypes to create pseudo biological replicates and test differences in cell type proportions.  
+
+```{r}
+# Q1. Are there differences in the proportion of cells in each cycle phase (G1, S, and G2M)) between the different genotypes?
+propeller_phase_genotype_results <- speckle::propeller(
+  clusters = re_embed_interesting_cells$Phase,           # what you want to test proportions of
+  sample   = re_embed_interesting_cells$orig.ident,      # biological replicates
+  group    = re_embed_interesting_cells$genotype,       # condition of interest
+  transform = "asin")   
+
+# Q2. Are there differences in the proportion of cycling cells (cycling or not-cycling) between the different genotypes?
+propeller_cycling_genotype_results <- speckle::propeller(
+  clusters = re_embed_interesting_cells$cycling,           # what you want to test proportions of
+  sample   = re_embed_interesting_cells$orig.ident,      # biological replicates
+  group    = re_embed_interesting_cells$genotype,       # condition of interest
+  transform = "asin")  
+
+# Q3. Does the developmental stage affect the proportion cell cycle phase (G1, S, and G2M) between timepoints?
+propeller_phase_stage_results <- speckle::propeller(
+  clusters = re_embed_interesting_cells$Phase,           # what you want to test proportions of
+  sample   = re_embed_interesting_cells$orig.ident,      # biological replicates
+  group    = re_embed_interesting_cells$stage,       # condition of interest
+  transform = "asin")   
+
+# Q4. Does the developmental stage affect the proportion of cycling cells (cycling or not-cycling) between timepoints?
+propeller_cycling_stage_results <- speckle::propeller(
+  clusters = re_embed_interesting_cells$cycling,           # what you want to test proportions of
+  sample   = re_embed_interesting_cells$orig.ident,      # biological replicates
+  group    = re_embed_interesting_cells$stage,       # condition of intrest
+  transform = "asin")
+
+
+props_cycling <- speckle::getTransformedProps(
+  re_embed_interesting_cells$cycling, re_embed_interesting_cells$orig.ident,
+  transform="asin")
+barplot(props_cycling$Proportions,
+        col = c("orange","purple"),
+        legend=TRUE, 
+        ylab="Proportions")
+
+props_phase <- speckle::getTransformedProps(
+  re_embed_interesting_cells$Phase, re_embed_interesting_cells$orig.ident,
+  transform="asin")
+barplot(props_phase$Proportions,
+        col = c("G1" = "#1f77b4", "G2M" = "#2ca02c", "S" = "#ff7f0e"),
+        legend=TRUE, 
+        ylab="Proportions")
+
+# par(mfrow=c(1,1))
+# speckle::plotCellTypeMeanVar(props_cycling$Counts)
+# speckle::plotCellTypePropsMeanVar(props_cycling$Counts)
+
+
+```
+
+## Individual cell types
+- Subset each of the cell types and ask the proportion question again for each.  
+- The hope is that this retains cell type specific behaviour that might be masked at the higher level.  
+- Keep in mind that we still can't interpret the p-values because we don't have true biological replicates.  
+
+```{r}
+# make a subset object for each of the cell types
+# collect the cell type names
+cell_types <- unique(re_embed_interesting_cells@meta.data$new_celltypes)
+# create the subset objects
+for (ct in cell_types) {
+  obj_name <- paste0("subset_", ct)
+  
+  assign(
+    obj_name,
+    subset(re_embed_interesting_cells, subset = new_celltypes == ct)
+  )
+}
+
+# testing cell cycle phase % differences between genotypes
+propeller_phase_genotype_results <- lapply(cell_types, function(ct) {
+  
+  sub_obj <- subset(re_embed_interesting_cells, subset = new_celltypes == ct)
+  
+  res <- speckle::propeller(
+    clusters = sub_obj$Phase,
+    sample   = sub_obj$orig.ident,
+    group    = sub_obj$genotype,
+    transform = "asin"
+  )
+  
+  res$cell_type <- ct  # keep track of origin
+  
+  return(res)
+})
+
+names(propeller_phase_genotype_results) <- cell_types
+
+# testing cycling vs not-cycling % differences between time genotypes
+propeller_cycling_genotype_results <- lapply(cell_types, function(ct) {
+  
+  sub_obj <- subset(re_embed_interesting_cells, subset = new_celltypes == ct)
+  
+  res <- speckle::propeller(
+    clusters = sub_obj$cycling,
+    sample   = sub_obj$orig.ident,
+    group    = sub_obj$genotype,
+    transform = "asin"
+  )
+  
+  res$cell_type <- ct  # keep track of origin
+  
+  return(res)
+})
+
+names(propeller_cycling_genotype_results) <- cell_types
+
+# testing cell cycle phase % differences between time points
+propeller_phase_stage_results <- lapply(cell_types, function(ct) {
+  
+  sub_obj <- subset(re_embed_interesting_cells, subset = new_celltypes == ct)
+  
+  res <- speckle::propeller(
+    clusters = sub_obj$Phase,
+    sample   = sub_obj$orig.ident,
+    group    = sub_obj$stage,
+    transform = "asin"
+  )
+  
+  res$cell_type <- ct  # keep track of origin
+  
+  return(res)
+})
+
+names(propeller_phase_stage_results) <- cell_types
+
+# testing cycling vs not-cycling % differences between time points
+propeller_cycling_stage_results <- lapply(cell_types, function(ct) {
+  
+  sub_obj <- subset(re_embed_interesting_cells, subset = new_celltypes == ct)
+  
+  res <- speckle::propeller(
+    clusters = sub_obj$cycling,
+    sample   = sub_obj$orig.ident,
+    group    = sub_obj$stage,
+    transform = "asin"
+  )
+  
+  res$cell_type <- ct  # keep track of origin
+  
+  return(res)
+})
+
+names(propeller_cycling_stage_results) <- cell_types
+
+combined_results <- bind_rows(propeller_cycling_stage_results, .id = "cell_type")
+
+```
 
 # Store existing data before over-writing
+
 ```{r}
 # 1. Store a copy of the current reductions
 re_embed_interesting_cells[["umap_original"]] <- re_embed_interesting_cells[["umap"]]
