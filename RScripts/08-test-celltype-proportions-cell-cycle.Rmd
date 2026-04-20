@@ -1,0 +1,580 @@
+---
+title: "Test cell type proportions"
+author: "Melanie Smith"
+date: "2026-04-17"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(42)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Core single cell
+library(Seurat)
+library(loupeR)
+
+# additional plotting functions
+library(patchwork)
+library(pheatmap)
+library(ggExtra)
+
+```
+
+The aim of this script is to mitigate the effects of cell cycle (CC) heterogeneity in our scRNA-seq data. To accomplish this we first write in the complete Seurat object containing all 4 samples, followed by using the Seurat function `ScaleData()` with `vars.to.regress = c("CC.Difference")` to regress together the "S.Score" and the "G2M.Score". This milder alternative (compared to fully regressing out all CC information) is regressing only the difference (S.Score - G2M.Score). This keeps the broad “cycling vs. quiescent” signal while removing phase-specific noise among proliferating cells.  
+
+# Set project directories
+
+```{r}
+# set directories
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+out_dir <- file.path(project_repo_dir, "outDir", "08-regress-cell-cycle")
+
+# Create directory if it doesn't exist
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir,
+             recursive = TRUE)
+}
+
+```
+
+# Load required Seurat object
+- Load the final Seurat object as created in `06-cellType_filter.Rmd`. This object is post-QC, post-filtering and has layers for PCA, UMAP etc.  
+- This object contains all 4 samples and has all layers merged.  
+
+```{r}
+# read in the complete Seurat object
+re_embed_interesting_cells <- readRDS(file.path(project_repo_dir, "outDir", "06-cluster_marker_genes", "final_interesting_cells_0.6.rds"))
+# sanity check to ensure this is a Seurat object
+stopifnot(inherits(re_embed_interesting_cells, "Seurat"))
+
+# ensure "seurat_cluster" is the current identity
+Idents(re_embed_interesting_cells) <- "seurat_clusters"
+Idents(re_embed_interesting_cells) <- factor(Idents(re_embed_interesting_cells))
+
+# ensure "RNA" is the default assay
+DefaultAssay(re_embed_interesting_cells) <- "RNA"
+
+```
+
+# create the slim object
+- I've found this analyses difficult to get through without accumulating enough RAM to crash RStudio.  
+- Here I will create a slim version of my Seurat object so that it and all subsequent objects are taking up less space.  
+
+```{r}
+# Slim down while keeping exactly what FindMarkers needs
+slim_re_embed_interesting_cells <- DietSeurat(
+  object = re_embed_interesting_cells,
+  
+  # Keep only the normalized data layer (this is what FindMarkers uses)
+  layers = "data",                    # ← most important line
+  
+  # Keep only the main assay
+  assays = "RNA",                     # or "SCT" if that's your main one
+  
+  # Keep only the reductions you actually use
+  dimreducs = c("pca", "umap"),
+  
+  # Drop everything else
+  graphs = FALSE
+)
+
+# remove the large object
+rm(re_embed_interesting_cells)
+# clean up
+gc()
+```
+
+
+## Set up the cell-type and phase colours for consistenc
+- setting the colours here to make sure they are consistent across all scripts.  
+
+```{r}
+celltype_cols <- c(
+  "Myocardium" = "#E41A1C",
+  "VSMC" = "#377EB8", 
+  "Epicardium" = "#4DAF4A",
+  "Mesenchyme" = "#984EA3", 
+  "Endocardium" = "#FF7F00",
+  "Other/Unknown" = "grey70"
+  )
+
+phase_cols <- c(
+  "G1" = "#1f77b4",
+  "G2M" = "#2ca02c",
+  "S" = "#ff7f0e"
+  )
+```
+
+# Quick sanity check
+
+```{r}
+print(slim_re_embed_interesting_cells)
+# which ident is currently active
+table(Idents(slim_re_embed_interesting_cells))
+stopifnot(!anyDuplicated(colnames(slim_re_embed_interesting_cells)))
+```
+
+# Collaps cell cycle phase into cycling vs not-cycling
+
+```{r}
+# set the cell cycle phase as a factor to ensure plots are always in the same order
+slim_re_embed_interesting_cells$Phase <- factor(
+  slim_re_embed_interesting_cells$Phase,
+  levels = c("G1", "G2M", "S")  # match the order in phase_cols exactly
+)
+
+## collapse the S and G2M phase allocations
+slim_re_embed_interesting_cells[[]] <- slim_re_embed_interesting_cells[[]] %>%
+  dplyr::mutate(
+    cycling = dplyr::if_else(
+      Phase %in% c("S", "G2M"),
+      "cycling",
+      "not_cycling"
+    )
+  )
+
+# lets make these a factor so they always plot in the same order
+slim_re_embed_interesting_cells$cycling <- factor(
+  slim_re_embed_interesting_cells$cycling,
+  levels = c("not_cycling", "cycling")
+)
+
+# quick sanity check
+table(slim_re_embed_interesting_cells$Phase,
+      slim_re_embed_interesting_cells$cycling)
+  #     cycling not_cycling
+  # G1        0       12436
+  # G2M    5796           0
+  # S      6095           0
+```
+
+# plot collapse cell cycle phase
+
+```{r}
+
+DimPlot(slim_re_embed_interesting_cells,
+        group.by = "cycling",
+        # split.by = "orig.ident",
+        reduction = "umap",
+        label = FALSE,
+        repel = TRUE,
+        label.size = 3) +
+  plot_annotation(
+    title = "Cell Cycle Phase",
+    caption = "Final dataset"
+  )
+
+```
+
+# Test cell cycle proportions
+## Combined cell types
+- pool time points or genotypes to create pseudo biological replicates and test differences in cell type proportions.  
+- important caveat here -> we don't "really" have biological replicates so we need to always keep in mind the complexity introduces by timepoint and genotype.  
+
+```{r}
+# Q1. Are there differences in the proportion of cells in each cycle phase (G1, S, and G2M)) between the different genotypes?
+propeller_phase_genotype_results <- speckle::propeller(
+  clusters = slim_re_embed_interesting_cells$Phase,           # what you want to test proportions of
+  sample   = slim_re_embed_interesting_cells$orig.ident,      # biological replicates
+  group    = slim_re_embed_interesting_cells$genotype,       # condition of interest
+  transform = "asin")   
+
+# Q2. Are there differences in the proportion of cycling cells (cycling or not-cycling) between the different genotypes?
+propeller_cycling_genotype_results <- speckle::propeller(
+  clusters = slim_re_embed_interesting_cells$cycling,           # what you want to test proportions of
+  sample   = slim_re_embed_interesting_cells$orig.ident,      # biological replicates
+  group    = slim_re_embed_interesting_cells$genotype,       # condition of interest
+  transform = "asin")  
+
+# Q3. Does the developmental stage affect the proportion cell cycle phase (G1, S, and G2M) between timepoints?
+propeller_phase_stage_results <- speckle::propeller(
+  clusters = slim_re_embed_interesting_cells$Phase,           # what you want to test proportions of
+  sample   = slim_re_embed_interesting_cells$orig.ident,      # biological replicates
+  group    = slim_re_embed_interesting_cells$stage,       # condition of interest
+  transform = "asin")   
+
+# Q4. Does the developmental stage affect the proportion of cycling cells (cycling or not-cycling) between timepoints?
+propeller_cycling_stage_results <- speckle::propeller(
+  clusters = slim_re_embed_interesting_cells$cycling,           # what you want to test proportions of
+  sample   = slim_re_embed_interesting_cells$orig.ident,      # biological replicates
+  group    = slim_re_embed_interesting_cells$stage,       # condition of intrest
+  transform = "asin")
+
+# speckle style bar plots (per cycling/not-cycling)
+props_cycling <- speckle::getTransformedProps(
+  slim_re_embed_interesting_cells$cycling, slim_re_embed_interesting_cells$orig.ident,
+  transform="asin")
+barplot(props_cycling$Proportions,
+        col = c("orange","purple"),
+        legend=TRUE, 
+        ylab="Proportions")
+
+# speckle style bar plots (per cell cycle phase)
+props_phase <- speckle::getTransformedProps(
+  slim_re_embed_interesting_cells$Phase, slim_re_embed_interesting_cells$orig.ident,
+  transform="asin")
+barplot(props_phase$Proportions,
+        col = phase_cols,
+        legend=TRUE, 
+        ylab="Proportions")
+
+```
+
+## Individual cell types
+- Subset each of the cell types and ask the proportion question again for each.  
+- The hope is that this retains cell type specific behaviour that might be masked at the higher level.  
+- Keep in mind that we still can't interpret the p-values because we don't have true biological replicates. 
+
+### Quick visualisation
+- Stat half-eye plots showing the distribution of S.Score and G2M.Score for each of the cell types.  
+- Keep in mind each cell type contains different time points and different genotypes.  
+
+```{r}
+# stat halfeye plots of S.Score for the full data set, facet wrap by cell type
+slim_re_embed_interesting_cells@meta.data %>%
+  tibble::as_tibble(rownames = "barcode") %>%
+  dplyr::select(barcode, orig.ident, S.Score, G2M.Score, Phase, cycling, new_celltypes) %>%
+  ggplot2::ggplot(aes(x = Phase, y = S.Score)) +
+  
+  # Right half: density + median line
+  ggdist::stat_halfeye(
+    side = "right",
+    aes(fill = Phase),
+    # alpha = 0.5,
+    .width = 0.5,           # median line
+    justification = -0.2,
+    scale = 0.9,
+    linewidth = 0.4,
+    color = "black"
+  ) +
+  scale_fill_manual(values = phase_cols) +
+  
+  # Left half: dots
+  ggdist::stat_dots(
+    side = "left",
+    alpha = 0.3,
+    justification = 1.25,
+    quantiles = NULL,       # prevents binwidth error
+    dotsize = 0.7
+  ) +
+  
+  facet_wrap(~ new_celltypes,
+             nrow = 1) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major.x = element_blank()
+  ) +
+  labs(title = "S.Score",
+       caption = "Pre cell-cycle regression")
+
+# stat halfeye plots of G2M.Score for the full data set, facet wrap by cell type
+slim_re_embed_interesting_cells@meta.data %>%
+  tibble::as_tibble(rownames = "barcode") %>%
+  dplyr::select(barcode, orig.ident, S.Score, G2M.Score, Phase, cycling, new_celltypes) %>%
+  ggplot2::ggplot(aes(x = Phase, y = G2M.Score)) +
+  
+  # Right half: density + median line
+  ggdist::stat_halfeye(
+    side = "right",
+    aes(fill = Phase),
+    # alpha = 0.5,
+    .width = 0.5,           # median line
+    justification = -0.2,
+    scale = 0.9,
+    linewidth = 0.4,
+    color = "black"
+  ) +
+  scale_fill_manual(values = phase_cols) +
+  
+  # Left half: dots
+  ggdist::stat_dots(
+    side = "left",
+    alpha = 0.3,
+    justification = 1.25,
+    quantiles = NULL,       # prevents binwidth error
+    dotsize = 0.7
+  ) +
+  
+  facet_wrap(~ new_celltypes,
+             nrow = 1) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major.x = element_blank()
+  ) +
+  labs(title = "G2M.Score",
+       caption = "Pre cell-cycle regression")
+
+```
+
+### perform the tests  
+
+```{r}
+# make a subset object for each of the cell types
+# collect the cell type names
+cell_types <- unique(slim_re_embed_interesting_cells@meta.data$new_celltypes)
+
+# make the subset objects
+# for (ct in cell_types) {
+#   obj_name <- paste0("subset_", ct)
+#   
+#   assign(
+#     obj_name,
+#     subset(slim_re_embed_interesting_cells, subset = new_celltypes == ct)
+#   )
+# }
+
+# testing cell cycle phase % differences between genotypes on individual cell types
+propeller_phase_genotype_celltype_results <- lapply(cell_types, function(ct) {
+  
+  sub_obj <- subset(slim_re_embed_interesting_cells, subset = new_celltypes == ct)
+  
+  res <- speckle::propeller(
+    clusters = sub_obj$Phase,
+    sample   = sub_obj$orig.ident,
+    group    = sub_obj$genotype,
+    transform = "asin"
+  )
+  
+  res$cell_type <- ct  # keep track of origin
+  
+  return(res)
+})
+
+names(propeller_phase_genotype_celltype_results) <- cell_types
+
+# testing cycling vs not-cycling % differences between time genotypes
+propeller_cycling_genotype_celltype_results <- lapply(cell_types, function(ct) {
+  
+  sub_obj <- subset(slim_re_embed_interesting_cells, subset = new_celltypes == ct)
+  
+  res <- speckle::propeller(
+    clusters = sub_obj$cycling,
+    sample   = sub_obj$orig.ident,
+    group    = sub_obj$genotype,
+    transform = "asin"
+  )
+  
+  res$cell_type <- ct  # keep track of origin
+  
+  return(res)
+})
+
+names(propeller_cycling_genotype_celltype_results) <- cell_types
+
+# testing cell cycle phase % differences between time points
+propeller_phase_stage_celltype_results <- lapply(cell_types, function(ct) {
+  
+  sub_obj <- subset(slim_re_embed_interesting_cells, subset = new_celltypes == ct)
+  
+  res <- speckle::propeller(
+    clusters = sub_obj$Phase,
+    sample   = sub_obj$orig.ident,
+    group    = sub_obj$stage,
+    transform = "asin"
+  )
+  
+  res$cell_type <- ct  # keep track of origin
+  
+  return(res)
+})
+
+names(propeller_phase_stage_celltype_results) <- cell_types
+
+# testing cycling vs not-cycling % differences between time points
+propeller_cycling_stage_celltype_results <- lapply(cell_types, function(ct) {
+  
+  sub_obj <- subset(slim_re_embed_interesting_cells, subset = new_celltypes == ct)
+  
+  res <- speckle::propeller(
+    clusters = sub_obj$cycling,
+    sample   = sub_obj$orig.ident,
+    group    = sub_obj$stage,
+    transform = "asin"
+  )
+  
+  res$cell_type <- ct  # keep track of origin
+  
+  return(res)
+  })
+
+names(propeller_cycling_stage_celltype_results) <- cell_types
+
+combined_cycling_stage_celltype_results <- bind_rows(propeller_cycling_stage_celltype_results, .id = "cell_type") %>%
+  as.tibble()
+
+```
+
+# Find markers
+- For each cell type, find markers between cycling and not-cycling cells.  
+- do these markers make sense biologically?  
+
+```{r}
+
+# using lapply, run FindMarkers() for all cell types
+# this test doesn not take genotype or time point into consideration
+marker_results <- lapply(cell_types, function(ct) {
+  
+  # I know we already made these subset objects, but this makes the function stand alone
+  sub_obj <- subset(slim_re_embed_interesting_cells, subset = new_celltypes == ct)
+  # make sure "cycling" is the active ident
+  Idents(sub_obj) <- "cycling"
+  
+  res <- FindMarkers(
+    sub_obj,
+    ident.1 = "cycling",
+    ident.2 = "not_cycling",
+    logfc.threshold = 0.25,
+    min.pct = 0.1
+  )
+  
+  res <- res %>%
+    rownames_to_column("gene") %>%   # move rownames to column becaude we need to keep them
+    as_tibble() %>%                 # drop rownames completely, messes with bind_rows 
+    mutate(cell_type = ct)
+  
+  return(res)
+})
+
+combined_markers <- bind_rows(marker_results)
+
+# top 10 markers by effect size (positive logFC) for each cell type
+# positive log2FC means higher in ident.1 -> cycling
+top10_markers_up_cycling <- combined_markers %>%
+  group_by(cell_type) %>%
+  slice_max(avg_log2FC, n = 10)
+
+# top 10 markers by effect size (negative logFC) for each cell type
+# positive log2FC means higher in ident.2 -> not-cycling
+top10_markers_up_not_cycling <- combined_markers %>%
+  group_by(cell_type) %>%
+  slice_min(avg_log2FC, n = 10)
+```
+
+## Find markers between genotypes for cycling and not-cycling cells for each cell type subset for each time point
+
+```{r}
+# ── Configuration ─────────────────────────────────────────────────────────────
+MIN_CELLS      <- 3          # minimum cells per genotype to attempt comparison
+LOGFC_THRESH   <- 0.25
+PADJ_THRESH    <- 0.05
+IDENT_1        <- "control"
+IDENT_2        <- "Mib1_KO"
+
+
+# ── Get all combinations ───────────────────────────────────────────────────────
+cell_types <- unique(slim_re_embed_interesting_cells@meta.data$new_celltypes)
+stages     <- unique(slim_re_embed_interesting_cells@meta.data$stage)
+cyclings   <- unique(slim_re_embed_interesting_cells@meta.data$cycling)
+
+combos <- expand.grid(
+  cell_type = cell_types,
+  stage     = stages,
+  cycling   = cyclings,
+  stringsAsFactors = FALSE
+)
+
+# ── Run FindMarkers across all combinations ────────────────────────────────────
+results_list <- list()
+
+for (i in seq_len(nrow(combos))) {
+  
+  ct  <- combos$cell_type[i]
+  st  <- combos$stage[i]
+  cy  <- combos$cycling[i]
+  key <- paste(ct, st, cy, sep = "__")
+  
+  # --- Subset cells matching this combination ---------------------------------
+  meta <- slim_re_embed_interesting_cells@meta.data
+  
+  cells_group <- rownames(meta)[
+    meta$new_celltypes == ct &
+      meta$stage         == st &
+      meta$cycling       == cy
+  ]
+  
+  if (length(cells_group) == 0) next
+  
+  sub_obj <- subset(slim_re_embed_interesting_cells, cells = cells_group)
+  
+  # --- Check each genotype has enough cells ----------------------------------
+  genotype_counts <- table(sub_obj@meta.data$genotype)
+  
+  n_ident1 <- as.integer(genotype_counts[IDENT_1])
+  n_ident2 <- as.integer(genotype_counts[IDENT_2])
+  
+  if (is.na(n_ident1) || is.na(n_ident2)) next
+  if (n_ident1 < MIN_CELLS || n_ident2 < MIN_CELLS) next
+  
+  # --- Set genotype as active identity and run FindMarkers -------------------
+  Idents(sub_obj) <- "genotype"
+  
+  markers <- tryCatch(
+    FindMarkers(
+      sub_obj,
+      ident.1        = IDENT_1,
+      ident.2        = IDENT_2,
+      logfc.threshold = LOGFC_THRESH,
+      min.pct        = 0.1,
+      test.use       = "wilcox"   # default; swap for "MAST", "DESeq2", etc.
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(markers) || nrow(markers) == 0) next
+  
+  # --- Annotate and filter ---------------------------------------------------
+  markers$gene      <- rownames(markers)
+  markers$cell_type <- ct
+  markers$stage     <- st
+  markers$cycling   <- cy
+  markers$comparison <- paste0(IDENT_1, "_vs_", IDENT_2)
+  
+  # Keep only significant hits
+  markers <- markers[markers$p_val_adj < PADJ_THRESH, ]
+  
+  if (nrow(markers) == 0) next
+  
+  results_list[[key]] <- markers
+}
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+cat("Comparisons with significant DEGs:", length(results_list), "\n")
+cat("Groups tested:", nrow(combos), "\n")
+
+# Quick peek at which groups yielded results
+if (length(results_list) > 0) {
+  cat("\nGroups with hits:\n")
+  print(names(results_list))
+}
+
+# Optional: collapse everything into one data frame for easy export
+all_results_df <- do.call(rbind, results_list)
+rownames(all_results_df) <- NULL
+
+```
+
