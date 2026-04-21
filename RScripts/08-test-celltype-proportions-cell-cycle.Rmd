@@ -36,10 +36,16 @@ library(tidyr)
 library(Seurat)
 library(loupeR)
 
+# gene set enrichment
+library(fgsea)
+
 # additional plotting functions
 library(patchwork)
 library(pheatmap)
 library(ggExtra)
+library(ComplexHeatmap)
+library(circlize)
+library(UpSetR)
 
 ```
 
@@ -112,20 +118,36 @@ gc()
 - setting the colours here to make sure they are consistent across all scripts.  
 
 ```{r}
-celltype_cols <- c(
-  "Myocardium" = "#E41A1C",
-  "VSMC" = "#377EB8", 
-  "Epicardium" = "#4DAF4A",
-  "Mesenchyme" = "#984EA3", 
-  "Endocardium" = "#FF7F00",
-  "Other/Unknown" = "grey70"
-  )
+celltype_cols <- c("Myocardium"    = "#E41A1C",
+                   "VSMC"          = "#984EA3",  
+                   "Epicardium"    =  "#FF7F00",
+                   "Mesenchyme"    =  "#4DAF4A", 
+                   "Endocardium"   = "#377EB8",
+                   "Other/Unknown" = "grey70")
 
 phase_cols <- c(
   "G1" = "#1f77b4",
   "G2M" = "#2ca02c",
   "S" = "#ff7f0e"
   )
+```
+
+# Cell cycle gene enrichment mudule gene sets
+- The cell cycle genes aren't stored in the Seurat object according to the original workflow so I will reproduce them here for use in visualisation. Going forward it might be a good idea to store them in `object@misc$s.features <- s.genes` and `object@misc$g2m.features <- g2m.genes` so we have a reporoducible record should the list from Seurat change.  
+
+```{r}
+# this is the function Nick wrote in the initial pre-processing
+# Seurat comes with a set of cell cycle genes but these are human genes derived from the Tirosh et al. 2015 paper (the melanoma single-cell study). We need to convert them to mouse gene symbols before we can use them.
+human_genes_to_mouse <- function(human_genes){
+  hom_data <- homologene::homologene(human_genes, inTax = 9606, outTax = 10090)
+  result <- setNames(hom_data$`10090`, hom_data$`9606`)
+  return(result)
+}
+
+# convert S.Score genes from human to mouse, starting with the 2019 updated gene list
+s.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$s.genes)
+# convert G2M scores from human to mouse, starting with the 2019 updated gene list
+g2m.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$g2m.genes)
 ```
 
 # Quick sanity check
@@ -478,15 +500,14 @@ top10_markers_up_not_cycling <- combined_markers %>%
 ## Find markers between genotypes for cycling and not-cycling cells for each cell type subset for each time point
 
 ```{r}
-# ── Configuration ─────────────────────────────────────────────────────────────
-MIN_CELLS      <- 3          # minimum cells per genotype to attempt comparison
+# Configuration
+MIN_CELLS      <- 3
 LOGFC_THRESH   <- 0.25
 PADJ_THRESH    <- 0.05
 IDENT_1        <- "control"
 IDENT_2        <- "Mib1_KO"
 
-
-# ── Get all combinations ───────────────────────────────────────────────────────
+# Get all combinations
 cell_types <- unique(slim_re_embed_interesting_cells@meta.data$new_celltypes)
 stages     <- unique(slim_re_embed_interesting_cells@meta.data$stage)
 cyclings   <- unique(slim_re_embed_interesting_cells@meta.data$cycling)
@@ -498,8 +519,9 @@ combos <- expand.grid(
   stringsAsFactors = FALSE
 )
 
-# ── Run FindMarkers across all combinations ────────────────────────────────────
-results_list <- list()
+# Run FindMarkers() across all combinations
+results_list      <- list()   # significant only  → heatmap, UpSet
+results_list_full <- list()   # all genes         → fgsea
 
 for (i in seq_len(nrow(combos))) {
   
@@ -508,7 +530,6 @@ for (i in seq_len(nrow(combos))) {
   cy  <- combos$cycling[i]
   key <- paste(ct, st, cy, sep = "__")
   
-  # --- Subset cells matching this combination ---------------------------------
   meta <- slim_re_embed_interesting_cells@meta.data
   
   cells_group <- rownames(meta)[
@@ -521,60 +542,329 @@ for (i in seq_len(nrow(combos))) {
   
   sub_obj <- subset(slim_re_embed_interesting_cells, cells = cells_group)
   
-  # --- Check each genotype has enough cells ----------------------------------
   genotype_counts <- table(sub_obj@meta.data$genotype)
-  
   n_ident1 <- as.integer(genotype_counts[IDENT_1])
   n_ident2 <- as.integer(genotype_counts[IDENT_2])
   
   if (is.na(n_ident1) || is.na(n_ident2)) next
   if (n_ident1 < MIN_CELLS || n_ident2 < MIN_CELLS) next
   
-  # --- Set genotype as active identity and run FindMarkers -------------------
   Idents(sub_obj) <- "genotype"
   
   markers <- tryCatch(
     FindMarkers(
       sub_obj,
-      ident.1        = IDENT_1,
-      ident.2        = IDENT_2,
+      ident.1         = IDENT_1,
+      ident.2         = IDENT_2,
       logfc.threshold = LOGFC_THRESH,
-      min.pct        = 0.1,
-      test.use       = "wilcox"   # default; swap for "MAST", "DESeq2", etc.
+      min.pct         = 0.1,
+      test.use        = "wilcox"
     ),
     error = function(e) NULL
   )
   
   if (is.null(markers) || nrow(markers) == 0) next
   
-  # --- Annotate and filter ---------------------------------------------------
-  markers$gene      <- rownames(markers)
-  markers$cell_type <- ct
-  markers$stage     <- st
-  markers$cycling   <- cy
+  # Annotate before splitting
+  markers$gene       <- rownames(markers)
+  markers$cell_type  <- ct
+  markers$stage      <- st
+  markers$cycling    <- cy
   markers$comparison <- paste0(IDENT_1, "_vs_", IDENT_2)
   
-  # Keep only significant hits
-  markers <- markers[markers$p_val_adj < PADJ_THRESH, ]
+  # Save full results for fgsea
+  results_list_full[[key]] <- markers
   
-  if (nrow(markers) == 0) next
-  
-  results_list[[key]] <- markers
+  # Save significant only for heatmap / UpSet
+  markers_sig <- markers[markers$p_val_adj < PADJ_THRESH, ]
+  if (nrow(markers_sig) == 0) next
+  results_list[[key]] <- markers_sig
 }
 
-# ── Summary ───────────────────────────────────────────────────────────────────
-cat("Comparisons with significant DEGs:", length(results_list), "\n")
-cat("Groups tested:", nrow(combos), "\n")
-
-# Quick peek at which groups yielded results
-if (length(results_list) > 0) {
-  cat("\nGroups with hits:\n")
-  print(names(results_list))
-}
-
-# Optional: collapse everything into one data frame for easy export
-all_results_df <- do.call(rbind, results_list)
-rownames(all_results_df) <- NULL
+cat("Groups with any DEGs tested:      ", length(results_list_full), "\n")
+cat("Groups with significant DEGs:     ", length(results_list), "\n")
 
 ```
+
+# Heatmap visualisation
+
+```{r}
+summary_df <- do.call(rbind, lapply(names(results_list), function(key) {
+  df    <- results_list[[key]]
+  parts <- strsplit(key, "__")[[1]]
+  data.frame(
+    cell_type = parts[1],
+    stage     = parts[2],
+    cycling   = parts[3],
+    n_up      =  sum(df$avg_log2FC > 0), # higher in control
+    n_down    = -sum(df$avg_log2FC < 0), # higher in Mib1_KO
+    n_total   =  nrow(df),
+    key       = key,
+    stringsAsFactors = FALSE
+  )
+  }))
+
+summary_df <- summary_df %>%
+  mutate(row_label = paste0(cell_type, " | ", stage, " | ", cycling)) %>%
+  arrange(cell_type, stage, cycling)
+
+mat <- cbind(Up_Control = summary_df$n_up, Up_Mib1KO = summary_df$n_down)
+rownames(mat) <- summary_df$row_label
+
+row_ann <- rowAnnotation(
+  CellType = summary_df$cell_type,
+  col      = list(CellType = celltype_cols),
+  annotation_legend_param = list(CellType = list(title = "Cell Type")),
+  show_annotation_name = TRUE
+)
+
+stage_cols <- setNames(
+  colorRampPalette(c("#FEE08B", "#3288BD"))(length(unique(summary_df$stage))),
+  sort(unique(summary_df$stage))
+)
+
+row_ann2 <- rowAnnotation(
+  Stage   = summary_df$stage,
+  Cycling = summary_df$cycling,
+  col = list(
+    Stage   = stage_cols,
+    Cycling = c("cycling" = "#D95F02", "not_cycling" = "#7570B3")
+  )
+)
+
+col_fun <- colorRamp2(
+  c(min(mat), 0, max(mat)),
+  c("#2166AC", "white", "#D6604D")
+)
+
+# generate the heatmap object
+ht <- Heatmap(
+  mat,
+  name                = "DEG count\n(red = up in Control\nblue = up in Mib1_KO)",
+  col                 = col_fun,
+  cluster_rows        = TRUE,
+  cluster_columns     = FALSE,
+  show_row_names      = TRUE,
+  row_names_gp        = gpar(fontsize = 8),
+  column_names_gp     = gpar(fontsize = 10, fontface = "bold"),
+  left_annotation     = row_ann,
+  right_annotation    = row_ann2,
+  rect_gp             = gpar(col = "white", lwd = 0.5),
+  row_title           = NULL,
+  column_title        = "Control vs Mib1_KO — significant DEGs per group",
+  column_title_gp     = gpar(fontsize = 12, fontface = "bold"),
+  cell_fun = function(j, i, x, y, width, height, fill) {
+    val <- mat[i, j]
+    if (abs(val) > 0)
+      grid.text(abs(val), x, y, gp = gpar(fontsize = 7, col = "black"))
+  }
+)
+# plot and save the heatmap
+png(file.path(out_dir, "heatmap_control_vs_mib1ko.png"),
+    width = 10,
+    height = 12,
+    units = "in",
+    res = 300)
+draw(ht,
+     heatmap_legend_side = "right",
+     annotation_legend_side = "right")
+dev.off()
+```
+
+# fgsea and visualisation 
+
+```{r}
+# Supply your cycling gene set
+cycling_genes <- unique(c(g2m.genes, s.genes))
+# convert to a list as required by
+gene_sets <- list(CyclingSignature = cycling_genes)
+
+# Run fgsea across all groups
+fgsea_results <- lapply(names(results_list_full), function(key) {
+  df <- results_list_full[[key]]   # full unfiltered gene list
+  
+  df <- df %>%
+    mutate(rank_metric = sign(avg_log2FC) * -log10(p_val_adj + 1e-300)) %>%
+    arrange(desc(rank_metric))
+  
+  ranked_genes <- setNames(df$rank_metric, df$gene)
+  ranked_genes <- ranked_genes[!duplicated(names(ranked_genes))]
+  
+  # Check overlap before running
+  n_overlap <- length(intersect(names(ranked_genes), gene_sets$CyclingSignature))
+  if (n_overlap < 3) return(NULL)
+  
+  res <- tryCatch(
+    fgsea(
+      pathways    = gene_sets,
+      stats       = ranked_genes,
+      minSize     = 3,
+      maxSize     = 500,
+      nPermSimple = 10000
+    ),
+    error = function(e) NULL
+  )
+  
+  if (is.null(res) || nrow(res) == 0) return(NULL)
+  
+  parts <- strsplit(key, "__")[[1]]
+  res$cell_type <- parts[1]
+  res$stage     <- parts[2]
+  res$cycling   <- parts[3]
+  res$key       <- key
+  res
+})
+
+fgsea_df <- do.call(rbind, Filter(Negate(is.null), fgsea_results))
+
+cat("Groups with fgsea results:", nrow(fgsea_df), "\n")
+cat("Significant (padj < 0.05):", sum(fgsea_df$padj < 0.05, na.rm = TRUE), "\n")
+
+# Check overlap per group
+overlap_check <- sapply(names(results_list), function(key) {
+  genes <- results_list[[key]]$gene
+  length(intersect(genes, gene_sets$CyclingSignature))
+})
+
+print(sort(overlap_check))
+cat("\nGroups with overlap >= 5:", sum(overlap_check >= 5), "\n")
+cat("Groups with overlap < 5:", sum(overlap_check < 5), "\n")
+cat("Groups with overlap == 0:", sum(overlap_check == 0), "\n")
+
+
+# Plot
+fgsea_plot_df <- fgsea_df %>%
+  filter(pathway == "CyclingSignature") %>%
+  mutate(
+    sig       = ifelse(padj < 0.05, "padj < 0.05", "NS"),
+    direction = ifelse(NES > 0, "Enriched in Control", "Enriched in Mib1_KO"),
+    label     = paste0(cell_type, " | ", stage, " | ", cycling)
+  ) %>%
+  arrange(NES)
+
+png(file.path(out_dir, "GSEA_enrichment_control_vs_mib1ko.png"),
+    width = 12,
+    height = 10,
+    units = "in",
+    res = 300)
+ggplot(fgsea_plot_df, aes(x = reorder(label, NES), y = NES, fill = direction)) +
+  geom_col(aes(alpha = sig), width = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40") +
+  scale_fill_manual(values = c(
+    "Enriched in Control" = "#D6604D",
+    "Enriched in Mib1_KO" = "#2166AC"
+  )) +
+  scale_alpha_manual(
+    values = c("padj < 0.05" = 1, "NS" = 0.35),
+    name   = "Significance"
+  ) +
+  coord_flip() +
+  labs(
+    title    = "fgsea — Cycling gene signature enrichment",
+    subtitle = "Control vs Mib1_KO, per cell type × stage × cycling group",
+    caption  = "Gene set = unique(S.Score + G2M.Score) genes",
+    x        = NULL,
+    y        = "Normalised Enrichment Score (NES)",
+    fill     = NULL
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    plot.title      = element_text(face = "bold"),
+    legend.position = "bottom"
+  )
+dev.off()
+```
+
+# Upset plot of common genes
+
+```{r}
+
+# Build gene × group membership matrix
+# Collect all unique DEGs across all groups
+all_genes <- unique(unlist(lapply(results_list, function(df) df$gene)))
+
+# Binary membership matrix
+upset_mat <- sapply(results_list, function(df) {
+  as.integer(all_genes %in% df$gene)
+})
+rownames(upset_mat) <- all_genes
+
+upset_df <- as.data.frame(upset_mat)
+
+# Optional: separate up- and down-regulated
+# Up = higher in Mib1_KO
+upset_mat_up <- sapply(results_list, function(df) {
+  as.integer(all_genes %in% df$gene[df$avg_log2FC > 0])
+})
+rownames(upset_mat_up) <- all_genes
+upset_df_up <- as.data.frame(upset_mat_up)
+
+# Down = higher in Control
+upset_mat_down <- sapply(results_list, function(df) {
+  as.integer(all_genes %in% df$gene[df$avg_log2FC < 0])
+})
+rownames(upset_mat_down) <- all_genes
+upset_df_down <- as.data.frame(upset_mat_down)
+
+# Plot — all DEGs
+png(file.path(out_dir, "08-upset_all_deg.png"),
+    width = 10,
+    height = 10,
+    units = "in",
+    res = 300)
+upset(
+  upset_df,
+  nsets         = min(20, ncol(upset_df)),   # top 20 groups by size
+  nintersects   = 40,
+  order.by      = "freq",
+  decreasing    = TRUE,
+  point.size    = 2.5,
+  line.size     = 0.8,
+  text.scale    = c(1.2, 1, 1, 1, 1, 0.9),  # title, axis, etc.
+  mainbar.y.label = "Shared DEG count",
+  sets.x.label    = "DEGs per group",
+  mb.ratio        = c(0.6, 0.4)
+)
+dev.off()
+
+# Plot — upregulated in Mib1_KO only
+png(file.path(out_dir, "08-upset_up_ko_deg.png"),
+    width = 10,
+    height = 10,
+    units = "in",
+    res = 300)
+upset(
+  upset_df_up,
+  nsets         = min(20, ncol(upset_df_up)),
+  nintersects   = 40,
+  order.by      = "freq",
+  main.bar.color = "#D6604D",
+  point.size    = 2.5,
+  line.size     = 0.8,
+  mainbar.y.label = "Shared DEGs (up in Mib1_KO)",
+  sets.x.label    = "DEGs per group"
+)
+dev.off()
+# Plot — upregulated in Control only
+png(file.path(out_dir, "08-upset_up_wt_deg.png"),
+    width = 10,
+    height = 10,
+    units = "in",
+    res = 300)
+upset(
+  upset_df_down,
+  nsets         = min(20, ncol(upset_df_down)),
+  nintersects   = 40,
+  order.by      = "freq",
+  main.bar.color = "#2166AC",
+  point.size    = 2.5,
+  line.size     = 0.8,
+  mainbar.y.label = "Shared DEGs (up in Control)",
+  sets.x.label    = "DEGs per group"
+)
+dev.off()
+```
+
+
+
 
