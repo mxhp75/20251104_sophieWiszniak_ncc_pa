@@ -43,6 +43,7 @@ library(fgsea)
 library(patchwork)
 library(pheatmap)
 library(ggExtra)
+library(ggrepel)
 library(ComplexHeatmap)
 library(circlize)
 library(UpSetR)
@@ -447,7 +448,7 @@ propeller_cycling_stage_celltype_results <- lapply(cell_types, function(ct) {
 names(propeller_cycling_stage_celltype_results) <- cell_types
 
 combined_cycling_stage_celltype_results <- bind_rows(propeller_cycling_stage_celltype_results, .id = "cell_type") %>%
-  as.tibble()
+  as_tibble()
 
 ```
 
@@ -501,8 +502,8 @@ top10_markers_up_not_cycling <- combined_markers %>%
 
 ```{r}
 # Configuration
-MIN_CELLS      <- 3
-LOGFC_THRESH   <- 0.25
+MIN_CELLS      <- 30
+LOGFC_THRESH   <- 0.0
 PADJ_THRESH    <- 0.05
 IDENT_1        <- "control"
 IDENT_2        <- "Mib1_KO"
@@ -585,6 +586,153 @@ cat("Groups with any DEGs tested:      ", length(results_list_full), "\n")
 cat("Groups with significant DEGs:     ", length(results_list), "\n")
 
 ```
+
+# Volcano plots
+
+```{r}
+# ── Volcano plot function ───────────────────────────────────────────────────
+
+make_volcano <- function(df,
+                         title,
+                         padj_thresh  = 0.05,
+                         lfc_thresh   = 0.25,
+                         n_label      = 10,
+                         ident1_label = "control",
+                         ident2_label = "Mib1_KO") {
+  
+  # guard: must have required columns
+  stopifnot(all(c("gene", "avg_log2FC", "p_val_adj") %in% colnames(df)))
+  
+  # replace zero adjusted p-values to avoid -log10(0) = Inf
+  # use the smallest non-zero value in the data as a floor
+  min_nonzero <- min(df$p_val_adj[df$p_val_adj > 0], na.rm = TRUE)
+  df <- df %>%
+    dplyr::mutate(
+      p_val_adj_plot = dplyr::if_else(p_val_adj == 0, min_nonzero, p_val_adj),
+      neg_log10_padj = -log10(p_val_adj_plot),
+      
+      # classify each gene
+      direction = dplyr::case_when(
+        p_val_adj < padj_thresh & avg_log2FC >  lfc_thresh ~ paste0("Up in ", ident1_label),
+        p_val_adj < padj_thresh & avg_log2FC < -lfc_thresh ~ paste0("Up in ", ident2_label),
+        TRUE                                                ~ "NS"
+      ),
+      direction = factor(direction,
+                         levels = c(paste0("Up in ", ident1_label),
+                                    paste0("Up in ", ident2_label),
+                                    "NS"))
+    )
+  
+  # top n genes to label (by adjusted p-value, among significant only)
+  label_genes <- df %>%
+    dplyr::filter(direction != "NS") %>%
+    dplyr::slice_min(p_val_adj_plot, n = n_label) %>%
+    dplyr::pull(gene)
+  
+  df <- df %>%
+    dplyr::mutate(label = dplyr::if_else(gene %in% label_genes, gene, NA_character_))
+  
+  # colour palette
+  cols <- setNames(
+    c("#E41A1C", "#377EB8", "grey70"),
+    c(paste0("Up in ", ident1_label),
+      paste0("Up in ", ident2_label),
+      "NS")
+  )
+  
+  # count sig genes for subtitle
+  n_up1 <- sum(df$direction == paste0("Up in ", ident1_label), na.rm = TRUE)
+  n_up2 <- sum(df$direction == paste0("Up in ", ident2_label), na.rm = TRUE)
+  
+  ggplot(df, aes(x = avg_log2FC,
+                 y = neg_log10_padj,
+                 colour = direction)) +
+    geom_point(size = 1.2, alpha = 0.6) +
+    scale_colour_manual(values = cols, name = NULL) +
+    
+    # significance threshold lines
+    geom_hline(yintercept = -log10(padj_thresh),
+               linetype = "dashed", colour = "grey40", linewidth = 0.4) +
+    geom_vline(xintercept = c(-lfc_thresh, lfc_thresh),
+               linetype = "dashed", colour = "grey40", linewidth = 0.4) +
+    
+    # gene labels
+    ggrepel::geom_text_repel(
+      aes(label = label),
+      size          = 2.8,
+      max.overlaps  = 20,
+      segment.size  = 0.3,
+      segment.color = "grey50",
+      na.rm         = TRUE,
+      show.legend   = FALSE
+    ) +
+    
+    labs(
+      title    = title,
+      subtitle = glue::glue(
+        "Up in {ident1_label}: {n_up1}  |  Up in {ident2_label}: {n_up2}",
+        "  |  padj < {padj_thresh}, |log2FC| > {lfc_thresh}"
+      ),
+      x = expression(log[2]~"fold change"),
+      y = expression(-log[10]~"(adjusted p-value)")
+    ) +
+    theme_bw(base_size = 11) +
+    theme(
+      plot.title    = element_text(size = 10, face = "bold"),
+      plot.subtitle = element_text(size = 8,  colour = "grey40"),
+      legend.position = "top",
+      panel.grid.minor = element_blank()
+    )
+}
+
+# ── Generate and save all volcano plots ────────────────────────────────────
+# results_list_full contains all genes (needed for proper volcano plots —
+# using results_list (sig only) would hide the NS cloud entirely)
+
+volcano_out_dir <- file.path(out_dir, "volcano_plots")
+if (!dir.exists(volcano_out_dir)) dir.create(volcano_out_dir, recursive = TRUE)
+
+# iterate over all tested groups
+for (key in names(results_list_full)) {
+  
+  df  <- results_list_full[[key]]
+  
+  # parse the key back into readable components
+  # key format: "CellType__Stage__cycling"
+  parts <- stringr::str_split_fixed(key, "__", n = 3)
+  ct    <- parts[1]
+  st    <- parts[2]
+  cy    <- parts[3]
+  
+  plot_title <- glue::glue(
+    "{ct}  |  {st}  |  {cy} cells\ncontrol vs Mib1_KO"
+  )
+  
+  p <- make_volcano(
+    df           = df,
+    title        = plot_title,
+    ident1_label = "control",
+    ident2_label = "Mib1_KO"
+  )
+  
+  # sanitise key for use as a filename
+  safe_key  <- stringr::str_replace_all(key, "[^A-Za-z0-9_-]", "_")
+  file_path <- file.path(volcano_out_dir, paste0("volcano__", safe_key, ".pdf"))
+  
+  ggsave(
+    filename = file_path,
+    plot     = p,
+    width    = 7,
+    height   = 5.5,
+    device   = "pdf"
+  )
+}
+
+cat("Saved", length(results_list_full), "volcano plots to:\n", volcano_out_dir, "\n")
+
+
+```
+
 
 # Heatmap visualisation
 
