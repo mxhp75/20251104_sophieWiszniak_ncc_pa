@@ -717,14 +717,14 @@ for (key in names(results_list_full)) {
   
   # sanitise key for use as a filename
   safe_key  <- stringr::str_replace_all(key, "[^A-Za-z0-9_-]", "_")
-  file_path <- file.path(volcano_out_dir, paste0("volcano__", safe_key, ".pdf"))
+  file_path <- file.path(volcano_out_dir, paste0("volcano__", safe_key, ".png"))
   
   ggsave(
     filename = file_path,
     plot     = p,
     width    = 7,
     height   = 5.5,
-    device   = "pdf"
+    device   = "png"
   )
 }
 
