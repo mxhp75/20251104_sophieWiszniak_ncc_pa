@@ -212,6 +212,161 @@ DimPlot(slim_re_embed_interesting_cells,
 
 ```
 
+# Heatmap of cell cycle genes in each cell type
+- I have some concerns about how confident I am in the assignment of phase based on the cell cycle genes.  
+I'm sure the genes themselves are well curated, but I would like to see how the expression of these genes is manifest on this dataset.  
+
+```{r}
+# Helper: build one heatmap for one cell type
+
+make_cc_heatmap <- function(seurat_obj,
+                            ct,
+                            s_genes,
+                            g2m_genes,
+                            phase_cols) {
+  
+  # subset to this cell type
+  sub_obj <- subset(seurat_obj, subset = new_celltypes == ct)
+  
+  # combine gene sets, keeping only those present in the object
+  all_cc_genes  <- c(s_genes, g2m_genes)
+  genes_present <- all_cc_genes[all_cc_genes %in% rownames(sub_obj)]
+  
+  if (length(genes_present) < 2) {
+    message(glue::glue("Skipping {ct}: fewer than 2 cell cycle genes detected"))
+    return(NULL)
+  }
+  
+  # pull normalised expression matrix (genes x cells)
+  expr_mat <- as.matrix(
+    Seurat::GetAssayData(sub_obj, assay = "RNA", layer = "data")[genes_present, ]
+  )
+  
+  # z-score per gene across cells so rare high-expressors don't dominate colour scale
+  expr_mat_scaled <- t(scale(t(expr_mat)))
+  
+  # cap extreme values for cleaner colour scale
+  expr_mat_scaled <- pmin(pmax(expr_mat_scaled, -2.5), 2.5)
+  
+  # Annotations
+  
+  # cell-level metadata for column annotation
+  cell_meta <- sub_obj@meta.data %>%
+    dplyr::select(Phase, genotype, stage) %>%
+    tibble::rownames_to_column("barcode")
+  
+  # order cells by Phase so block structure is visible
+  cell_order <- cell_meta %>%
+    dplyr::arrange(Phase, genotype, stage) %>%
+    dplyr::pull(barcode)
+  
+  expr_mat_scaled <- expr_mat_scaled[, cell_order]
+  cell_meta <- cell_meta %>%
+    dplyr::filter(barcode %in% cell_order) %>%
+    dplyr::arrange(match(barcode, cell_order))
+  
+  # build stage colours — handle brewer.pal minimum of 3
+  stages_present <- sort(unique(cell_meta$stage))
+  n_stages       <- length(stages_present)
+  stage_cols     <- setNames(
+    RColorBrewer::brewer.pal(max(3, n_stages), "Oranges")[seq_len(n_stages)],
+    stages_present
+  )
+  
+  # column annotation (cells)
+  col_ann <- ComplexHeatmap::HeatmapAnnotation(
+    Phase    = cell_meta$Phase,
+    Genotype = cell_meta$genotype,
+    Stage    = cell_meta$stage,
+    col = list(
+      Phase    = phase_cols,
+      Genotype = c("control" = "#4DAF4A", "Mib1_KO" = "#984EA3"),
+      Stage    = stage_cols
+    ),
+    annotation_name_side = "left",
+    show_legend          = TRUE
+  )
+  
+  # row annotation (genes) — which gene set each gene belongs to
+  gene_set_labels <- dplyr::case_when(
+    genes_present %in% s_genes   ~ "S",
+    genes_present %in% g2m_genes ~ "G2M"
+  )
+  
+  row_ann <- ComplexHeatmap::rowAnnotation(
+    Gene_set = gene_set_labels,
+    col      = list(Gene_set = c("S" = "#FF7F00", "G2M" = "#2ca02c")),
+    show_legend = TRUE
+  )
+  
+  # Colour scale
+  col_fun <- circlize::colorRamp2(
+    c(-2.5, 0, 2.5),
+    c("#2166AC", "white", "#B2182B")   # blue → white → red
+  )
+  
+  # Draw heatmap
+  ht <- ComplexHeatmap::Heatmap(
+    expr_mat_scaled,
+    name             = "Z-score",
+    col              = col_fun,
+    
+    top_annotation   = col_ann,
+    right_annotation = row_ann,
+    
+    # cluster rows (genes) but split by gene set
+    cluster_rows     = TRUE,
+    row_split        = gene_set_labels,
+    row_title_gp     = grid::gpar(fontsize = 9, fontface = "bold"),
+    
+    # don't cluster columns — phase order preserved
+    cluster_columns  = FALSE,
+    show_column_names = FALSE,
+    
+    row_names_gp     = grid::gpar(fontsize = 7),
+    column_title     = glue::glue("{ct}  |  cell cycle gene expression"),
+    column_title_gp  = grid::gpar(fontsize = 11, fontface = "bold"),
+    
+    heatmap_legend_param = list(
+      title         = "Z-score",
+      legend_height = unit(3, "cm")
+    ),
+    use_raster     = TRUE,
+    raster_quality = 5
+  )
+  
+  return(ht)
+}
+
+# Generate and save one PDF per cell type
+
+heatmap_out_dir <- file.path(out_dir, "cc_gene_heatmaps")
+if (!dir.exists(heatmap_out_dir)) dir.create(heatmap_out_dir, recursive = TRUE)
+
+for (ct in cell_types) {
+  
+  ht <- make_cc_heatmap(
+    seurat_obj = slim_re_embed_interesting_cells,
+    ct         = ct,
+    s_genes    = s.genes,
+    g2m_genes  = g2m.genes,
+    phase_cols = phase_cols
+  )
+  
+  if (is.null(ht)) next
+  
+  safe_ct   <- stringr::str_replace_all(ct, "[^A-Za-z0-9_-]", "_")
+  file_path <- file.path(heatmap_out_dir, glue::glue("cc_heatmap__{safe_ct}.png"))
+  
+  png(file_path, width = 14, height = 8, units = "in", res = 300)
+  ComplexHeatmap::draw(ht)
+  dev.off()
+  
+  message(glue::glue("Saved: {file_path}"))
+}
+```
+
+
 # Test cell cycle proportions
 ## Combined cell types
 - pool time points or genotypes to create pseudo biological replicates and test differences in cell type proportions.  
@@ -245,6 +400,7 @@ propeller_cycling_stage_results <- speckle::propeller(
   sample   = slim_re_embed_interesting_cells$orig.ident,      # biological replicates
   group    = slim_re_embed_interesting_cells$stage,       # condition of intrest
   transform = "asin")
+
 
 # speckle style bar plots (per cycling/not-cycling)
 props_cycling <- speckle::getTransformedProps(
