@@ -1169,6 +1169,196 @@ upset(
 dev.off()
 ```
 
+```{r hallmark-pathway-analysis, message=FALSE, warning=FALSE}
+
+library(fgsea)
+library(msigdbr)
+
+# ── Load Hallmark gene sets for mouse ─────────────────────────────────────────
+hallmark_sets <- msigdbr::msigdbr(
+  species   = "Mus musculus",
+  category  = "H"              # H = Hallmark collection
+) %>%
+  dplyr::select(gs_name, gene_symbol) %>%
+  split(f = .$gs_name) %>%
+  purrr::map(~ .x$gene_symbol)
+
+# ── Output directory ──────────────────────────────────────────────────────────
+hallmark_out_dir <- file.path(out_dir, "hallmark_fgsea")
+if (!dir.exists(hallmark_out_dir)) dir.create(hallmark_out_dir, recursive = TRUE)
+
+# ── fgsea helper: build ranked list and run fgsea for one results data frame ──
+run_fgsea_hallmark <- function(df, gene_sets, label) {
+  
+  # guard: need gene, avg_log2FC, p_val_adj columns
+  required_cols <- c("gene", "avg_log2FC", "p_val_adj")
+  if (!all(required_cols %in% colnames(df))) {
+    message(glue::glue("Skipping {label}: missing required columns"))
+    return(NULL)
+  }
+  
+  # floor zero adjusted p-values to avoid Inf in -log10
+  min_nonzero <- min(df$p_val_adj[df$p_val_adj > 0], na.rm = TRUE)
+  
+  # build signed ranking metric: sign(log2FC) x -log10(padj)
+  # positive = upregulated and significant in ident.1 (control)
+  # negative = upregulated and significant in ident.2 (Mib1_KO)
+  ranked <- df %>%
+    dplyr::mutate(
+      p_val_adj_floor = dplyr::if_else(p_val_adj == 0, min_nonzero, p_val_adj),
+      rank_metric     = sign(avg_log2FC) * -log10(p_val_adj_floor)
+    ) %>%
+    dplyr::arrange(dplyr::desc(rank_metric)) %>%
+    # keep one entry per gene (in case of duplicates, keep most extreme)
+    dplyr::distinct(gene, .keep_all = TRUE) %>%
+    { setNames(.$rank_metric, .$gene) }
+  
+  # run fgsea
+  set.seed(42)
+  res <- fgsea::fgsea(
+    pathways   = gene_sets,
+    stats      = ranked,
+    minSize    = 10,      # minimum genes in pathway after filtering to ranked list
+    maxSize    = 500,
+    nPermSimple = 10000
+  )
+  
+  res <- res %>%
+    tibble::as_tibble() %>%
+    dplyr::arrange(padj) %>%
+    dplyr::mutate(comparison = label)
+  
+  return(res)
+}
+
+# ── Run fgsea across all cell type x stage x cycling combos ──────────────────
+fgsea_hallmark_results <- purrr::imap(results_list_full, function(df, key) {
+  
+  parts <- stringr::str_split_fixed(key, "__", n = 3)
+  ct    <- parts[1]
+  st    <- parts[2]
+  cy    <- parts[3]
+  label <- glue::glue("{ct} | {st} | {cy}")
+  
+  run_fgsea_hallmark(df           = df,
+                     gene_sets    = hallmark_sets,
+                     label        = label)
+})
+
+# drop any NULLs from skipped combos
+fgsea_hallmark_results <- purrr::compact(fgsea_hallmark_results)
+
+# ── Combine into a single flat table ─────────────────────────────────────────
+combined_fgsea_hallmark <- dplyr::bind_rows(fgsea_hallmark_results) %>%
+  # unlist the leadingEdge column (stored as a list) for writing to CSV
+  dplyr::mutate(leadingEdge = purrr::map_chr(leadingEdge, paste, collapse = ", "))
+
+# save full results table
+readr::write_csv(
+  combined_fgsea_hallmark,
+  file.path(hallmark_out_dir, "hallmark_fgsea_all_results.csv")
+)
+
+cat("Total combos tested:    ", length(fgsea_hallmark_results), "\n")
+cat("Total pathway results:  ", nrow(combined_fgsea_hallmark), "\n")
+cat("Significant (padj<0.05):", sum(combined_fgsea_hallmark$padj < 0.05, na.rm = TRUE), "\n")
+
+# ── Bar charts: one PNG per cell type ─────────────────────────────────────────
+# plot only if significant padj < 0.05
+for (ct in cell_types) {
+  
+  # collect all combo keys for this cell type
+  ct_keys <- names(fgsea_hallmark_results)[
+    stringr::str_starts(names(fgsea_hallmark_results),
+                        stringr::fixed(paste0(ct, "__")))
+  ]
+  
+  if (length(ct_keys) == 0) next
+  
+  # iterate over each combo independently
+  for (key in ct_keys) {
+    
+    combo_df <- fgsea_hallmark_results[[key]] %>%
+      dplyr::mutate(leadingEdge = purrr::map_chr(leadingEdge, paste, collapse = ", "))
+    
+    # check significance within this combo specifically
+    sig_pathways <- combo_df %>%
+      dplyr::filter(padj < 0.05) %>%
+      dplyr::arrange(dplyr::desc(abs(NES))) %>%
+      dplyr::slice_max(abs(NES), n = 20) %>%
+      dplyr::pull(pathway)
+    
+    if (length(sig_pathways) == 0) {
+      message(glue::glue("No significant pathways for {key} — skipping"))
+      next
+    }
+    
+    # parse key for plot title
+    parts <- stringr::str_split_fixed(key, "__", n = 3)
+    ct    <- parts[1]
+    st    <- parts[2]
+    cy    <- parts[3]
+    
+    plot_df <- combo_df %>%
+      dplyr::filter(pathway %in% sig_pathways) %>%
+      dplyr::mutate(
+        pathway_clean = stringr::str_replace(pathway, "HALLMARK_", "") %>%
+          stringr::str_replace_all("_", " ") %>%
+          stringr::str_to_title(),
+        direction = dplyr::if_else(NES > 0, "Up in control", "Up in Mib1_KO")
+      )
+    
+    p <- ggplot2::ggplot(
+      plot_df,
+      ggplot2::aes(x     = NES,
+                   y     = reorder(pathway_clean, NES),
+                   fill  = direction,
+                   alpha = -log10(padj))
+    ) +
+      ggplot2::geom_col() +
+      ggplot2::scale_fill_manual(
+        values = c("Up in control" = "#E41A1C",
+                   "Up in Mib1_KO" = "#377EB8"),
+        name   = NULL
+      ) +
+      ggplot2::scale_alpha_continuous(
+        name  = expression(-log[10]~"(padj)"),
+        range = c(0.4, 1.0)
+      ) +
+      ggplot2::geom_vline(xintercept = 0, linewidth = 0.4, colour = "grey30") +
+      ggplot2::labs(
+        title    = glue::glue("{ct}  |  {st}  |  {cy} cells  |  Hallmark pathway enrichment"),
+        subtitle = "control vs Mib1_KO  |  significant pathways (padj < 0.05)",
+        x        = "Normalised enrichment score (NES)",
+        y        = NULL
+      ) +
+      ggplot2::theme_bw(base_size = 10) +
+      ggplot2::theme(
+        plot.title       = ggplot2::element_text(face = "bold", size = 11),
+        plot.subtitle    = ggplot2::element_text(colour = "grey40", size = 9),
+        legend.position  = "right",
+        panel.grid.minor = ggplot2::element_blank()
+      )
+    
+    safe_key  <- stringr::str_replace_all(key, "[^A-Za-z0-9_-]", "_")
+    file_path <- file.path(hallmark_out_dir,
+                           glue::glue("hallmark_fgsea__{safe_key}.png"))
+    
+    ggplot2::ggsave(
+      filename = file_path,
+      plot     = p,
+      width    = 10,
+      height   = max(4, length(sig_pathways) * 0.4),
+      dpi      = 300,
+      units    = "in"
+    )
+    
+    message(glue::glue("Saved: {file_path}"))
+  }
+}
+
+```
+
 
 
 
