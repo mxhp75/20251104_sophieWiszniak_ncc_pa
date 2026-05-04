@@ -38,6 +38,7 @@ library(loupeR)
 
 # gene set enrichment
 library(fgsea)
+library(msigdbr)
 
 # additional plotting functions
 library(patchwork)
@@ -217,6 +218,10 @@ DimPlot(slim_re_embed_interesting_cells,
 I'm sure the genes themselves are well curated, but I would like to see how the expression of these genes is manifest on this dataset.  
 
 ```{r}
+
+# make a subset object for each of the cell types
+# collect the cell type names
+cell_types <- unique(slim_re_embed_interesting_cells@meta.data$new_celltypes)
 # Helper: build one heatmap for one cell type
 
 make_cc_heatmap <- function(seurat_obj,
@@ -509,6 +514,112 @@ slim_re_embed_interesting_cells@meta.data %>%
        caption = "Pre cell-cycle regression")
 
 ```
+
+### Per sample, per cell type S. G2M.Score distribution
+
+```{r}
+# stat halfeye plots of S.Score for each sample, facet wrap by cell type
+
+unique_sample <- unique(slim_re_embed_interesting_cells@meta.data$orig.ident)
+
+# S.Score
+cycle_dist_plot_results <- setNames(
+  lapply(unique_sample, function(us) {
+  
+  sub_obj <- subset(slim_re_embed_interesting_cells, subset = orig.ident == us)
+
+plot_results <- sub_obj@meta.data %>%
+  tibble::as_tibble(rownames = "barcode") %>%
+  dplyr::select(barcode, orig.ident, S.Score, G2M.Score, Phase, cycling, new_celltypes) %>%
+  ggplot2::ggplot(aes(x = Phase, y = S.Score)) +
+  
+  # Right half: density + median line
+  ggdist::stat_halfeye(
+    side = "right",
+    aes(fill = Phase),
+    # alpha = 0.5,
+    .width = 0.5,           # median line
+    justification = -0.2,
+    scale = 0.9,
+    linewidth = 0.4,
+    color = "black"
+  ) +
+  scale_fill_manual(values = phase_cols) +
+  
+  # Left half: dots
+  ggdist::stat_dots(
+    side = "left",
+    alpha = 0.3,
+    justification = 1.25,
+    quantiles = NULL,       # prevents binwidth error
+    dotsize = 0.7
+  ) +
+  
+  facet_wrap(~ new_celltypes,
+             nrow = 1) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major.x = element_blank()
+  ) +
+  labs(title = paste("S.Score -", us),
+       caption = "Pre cell-cycle regression")
+
+return(plot_results)
+
+}),
+unique_sample)
+
+# G2M.Score
+
+cycle_dist_plot_results_G2M <- setNames(
+  lapply(unique_sample, function(us) {
+  
+  sub_obj <- subset(slim_re_embed_interesting_cells, subset = orig.ident == us)
+
+plot_results <- sub_obj@meta.data %>%
+  tibble::as_tibble(rownames = "barcode") %>%
+  dplyr::select(barcode, orig.ident, S.Score, G2M.Score, Phase, cycling, new_celltypes) %>%
+  ggplot2::ggplot(aes(x = Phase, y = G2M.Score)) +
+  
+  # Right half: density + median line
+  ggdist::stat_halfeye(
+    side = "right",
+    aes(fill = Phase),
+    # alpha = 0.5,
+    .width = 0.5,           # median line
+    justification = -0.2,
+    scale = 0.9,
+    linewidth = 0.4,
+    color = "black"
+  ) +
+  scale_fill_manual(values = phase_cols) +
+  
+  # Left half: dots
+  ggdist::stat_dots(
+    side = "left",
+    alpha = 0.3,
+    justification = 1.25,
+    quantiles = NULL,       # prevents binwidth error
+    dotsize = 0.7
+  ) +
+  
+  facet_wrap(~ new_celltypes,
+             nrow = 1) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major.x = element_blank()
+  ) +
+  labs(title = paste("G2M.Score -", us),
+       caption = "Pre cell-cycle regression")
+
+return(plot_results)
+  }),
+unique_sample)
+
+```
+
 
 ### perform the tests  
 
@@ -1169,10 +1280,9 @@ upset(
 dev.off()
 ```
 
-```{r hallmark-pathway-analysis, message=FALSE, warning=FALSE}
+# fgsea Hallmark genes
 
-library(fgsea)
-library(msigdbr)
+```{r hallmark-pathway-analysis, message=FALSE, warning=FALSE}
 
 # ── Load Hallmark gene sets for mouse ─────────────────────────────────────────
 hallmark_sets <- msigdbr::msigdbr(
@@ -1358,6 +1468,71 @@ for (ct in cell_types) {
 }
 
 ```
+
+## Visualisation fgsea Hallmark results
+
+```{r}
+# quick look at the combined significant results
+# hallmark_results <- bind_rows(fgsea_hallmark_results, .id = "comparison") %>%
+#   as_tibble() %>%
+#   dplyr:: filter(., padj < 0.05)
+
+# Combine fgsea results
+fgsea_combined <- bind_rows(fgsea_hallmark_results, .id = "comparison")
+
+# Filter significant pathways
+sig_pathways <- fgsea_combined %>%
+  filter(padj < 0.05) %>%
+  pull(pathway) %>%
+  unique()
+
+# Create matrix
+heatmap_df <- fgsea_combined %>%
+  filter(pathway %in% sig_pathways) %>%
+  select(pathway, comparison, NES) %>%
+  pivot_wider(names_from = comparison, values_from = NES)
+
+mat <- as.matrix(heatmap_df[,-1])
+rownames(mat) <- heatmap_df$pathway
+
+# Optional: replace NA with 0 or leave as NA
+mat[is.na(mat)] <- 0
+
+# add a column annotation so we can see which cells are cycling versus not-cycling
+col_anno <- data.frame(
+  cycling_status = sub(".*__", "", colnames(mat))
+)
+
+rownames(col_anno) <- colnames(mat)
+
+pheatmap(mat,
+         annotation_col = col_anno,
+         color = colorRampPalette(c("red", "white", "green"))(100),
+         main = "Shared Hallmark Pathways Across Comparisons")
+
+library(UpSetR)
+
+pathway_lists <- fgsea_combined %>%
+  filter(padj < 0.05) %>%
+  group_by(comparison) %>%
+  summarise(pathways = list(unique(pathway)))
+
+# Convert to list format
+list_input <- setNames(pathway_lists$pathways, pathway_lists$comparison)
+
+upset(fromList(list_input),
+      order.by = "freq",
+      mainbar.y.label = "Shared pathways",
+      sets.x.label = "Total pathways")
+
+ggplot(fgsea_combined %>% filter(padj < 0.05),
+       aes(x = comparison, y = pathway)) +
+  geom_point(aes(size = -log10(padj), color = NES)) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red") +
+  theme_bw() +
+  labs(title = "Shared pathway enrichment across comparisons")
+```
+
 
 
 
