@@ -1533,6 +1533,45 @@ ggplot(fgsea_combined %>% filter(padj < 0.05),
   labs(title = "Shared pathway enrichment across comparisons")
 ```
 
+## fgsea enrichment plots
+
+```{r}
+
+# subset the fgsea results to only include padj < 0.05
+fgsea_combined_sig <- fgsea_combined %>%
+  dplyr::filter(., padj < 0.05 & abs(NES) > 1)
+
+
+
+for (i in seq_len(nrow(fgsea_combined_sig))) {
+
+  pathway    <- fgsea_combined_sig$pathway[i]
+  comparison <- fgsea_combined_sig$comparison[i]
+  
+  if (!comparison %in% names(results_list_full)) next
+  if (!pathway %in% names(hallmark_sets)) next
+  
+  df <- results_list_full[[comparison]]
+  
+  df <- df %>%
+    mutate(rank_metric = sign(avg_log2FC) * -log10(p_val_adj + 1e-300)) %>%
+    arrange(desc(rank_metric))
+  
+  ranked_genes <- setNames(df$rank_metric, df$gene)
+  ranked_genes <- ranked_genes[!duplicated(names(ranked_genes))]
+  
+  plot <- plotEnrichment(hallmark_sets[[pathway]], ranked_genes) +
+    labs(title = stringr::str_replace(pathway, "^HALLMARK_", "") |>
+           stringr::str_replace_all("_", " "))
+  
+  safe_key  <- stringr::str_replace_all(pathway, "[^A-Za-z0-9_-]", "_")
+  file_path <- file.path(hallmark_out_dir,
+                         paste0("enrichment_plot__", comparison, "_", safe_key, ".png"))
+  
+  ggsave(filename = file_path, plot = plot, width = 7, height = 5.5)
+}
+
+```
 
 
 
