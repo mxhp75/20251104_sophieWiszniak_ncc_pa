@@ -802,8 +802,8 @@ for (i in seq_len(nrow(combos))) {
   
   cells_group <- rownames(meta)[
     meta$new_celltypes == ct &
-      meta$stage         == st &
-      meta$cycling       == cy
+      meta$stage       == st &
+      meta$cycling     == cy
   ]
   
   if (length(cells_group) == 0) next
@@ -997,6 +997,144 @@ for (key in names(results_list_full)) {
 
 cat("Saved", length(results_list_full), "volcano plots to:\n", volcano_out_dir, "\n")
 
+
+```
+
+# MA plots
+
+```{r}
+meta <- slim_re_embed_interesting_cells@meta.data
+
+# Get all combinations
+cell_types <- unique(slim_re_embed_interesting_cells@meta.data$new_celltypes)
+stages     <- unique(slim_re_embed_interesting_cells@meta.data$stage)
+cyclings   <- unique(slim_re_embed_interesting_cells@meta.data$cycling)
+
+combos <- expand.grid(
+  cell_type = cell_types,
+  stage     = stages,
+  cycling   = cyclings,
+  stringsAsFactors = FALSE
+)
+
+padj_thresh  <- 0.05
+lfc_thresh   <-  0.25
+n_label      <- 20
+ident1_label <-  "control"
+ident2_label <-  "Mib1_KO"
+
+
+for (i in seq_len(nrow(combos))) {
+# for (i in 1:5) {
+  
+  ct  <- combos$cell_type[i]
+  st  <- combos$stage[i]
+  cy  <- combos$cycling[i]
+
+cells_group <- rownames(meta)[
+  meta$new_celltypes == ct &
+    meta$stage       == st &
+    meta$cycling     == cy
+  ]
+
+# colour palette
+cols <- setNames(
+  c("#E41A1C", "#377EB8", "grey70"),
+  c(paste0("Up in ", ident1_label),
+    paste0("Up in ", ident2_label),
+    "NS")
+)
+
+markers <- results_list_full[[i]] %>%
+  
+  # classify signficance and direction for each gene
+  dplyr::mutate(
+    direction = dplyr::case_when(
+    p_val_adj < padj_thresh & avg_log2FC >  lfc_thresh ~ paste0("Up in ", ident1_label),
+    p_val_adj < padj_thresh & avg_log2FC < -lfc_thresh ~ paste0("Up in ", ident2_label), TRUE ~ "NS"
+    ), 
+direction = factor(direction,
+                   levels = c(paste0("Up in ", ident1_label),
+                              paste0("Up in ", ident2_label),
+                              "NS"))
+)
+
+sub_obj <- subset(slim_re_embed_interesting_cells,
+                  cells = cells_group)
+
+# Step 1: compute average expression per group
+avg_exp <- AverageExpression(sub_obj,
+                             group.by = "genotype",
+                             slot = "data")$RNA
+
+# Step 2: compute A (mean log expression)
+A_values <- (log2(avg_exp[, "control"] + 1) + log2(avg_exp[, "Mib1-KO"] + 1)) / 2
+
+# Step 3: combine with FindMarkers() output
+markers$A <- A_values[rownames(markers)]
+markers$M <- markers$avg_log2FC
+
+# top n genes to label (by adjusted p-value, among significant only)
+label_genes <- markers %>%
+  dplyr::filter(direction != "NS") %>%
+  dplyr::slice_min(p_val_adj, n = n_label) %>%
+  dplyr::pull(gene)
+
+markers <- markers %>%
+  dplyr::mutate(label = dplyr::if_else(gene %in% label_genes, gene, NA_character_))
+
+# Step 4: plot
+plot <- ggplot(markers,
+               aes(x = A,
+                   y = M,
+                   colour = direction)) +
+  # plot non sig points first
+  geom_point(data = dplyr::filter(markers, direction == "NS"),
+             color = "grey70", alpha = 0.5) +
+  # plot sig points on top
+  geom_point(data = dplyr::filter(markers, direction != "NS"),
+             aes(color = direction)) +
+  scale_colour_manual(values = cols, name = NULL) +
+  theme_bw() +
+  
+  # gene labels
+  ggrepel::geom_text_repel(
+    aes(label = label),
+    size          = 2.8,
+    max.overlaps  = 20,
+    force         = 2,
+    box.padding   = 0.5, # increase padding between labels
+    point.padding = 0.5, # increase padding around points
+    segment.size  = 0.3,
+    segment.color = "grey50",
+    na.rm         = TRUE,
+    show.legend   = FALSE
+  ) +
+  
+  labs(
+    title    = glue::glue(
+      "{markers[['cell_type']][i]} | {markers[['stage']][i]} | {markers[['cycling']][i]}\n{markers[['comparison']][i]}"
+    ),
+    # subtitle = glue::glue(
+    #   "Up in {ident1_label}: {n_up1}  |  Up in {ident2_label}: {n_up2}",
+    #   "  |  padj < {padj_thresh}, |log2FC| > {lfc_thresh}"
+    # ),
+    x = expression(log[2]~"Average expression (A)"),
+    y = expression(log[2]~"Fold change (M)")
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    plot.title    = element_text(size = 10, face = "bold"),
+    plot.subtitle = element_text(size = 8,  colour = "grey40"),
+    legend.position = "top",
+    panel.grid.minor = element_blank()
+  )
+
+file_path <- file.path(out_dir, "volcano_plots",
+                       paste0("ma_plot_", markers[['cell_type']][i], "_", markers[['stage']][i], "_", markers[['cycling']][i], ".png"))
+
+ggsave(filename = file_path, plot = plot, width = 7, height = 5.5)
+}
 
 ```
 
