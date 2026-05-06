@@ -5,7 +5,6 @@ date: "2026-04-17"
 output: html_document
 ---
 
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 set.seed(42)
@@ -48,6 +47,7 @@ library(ggrepel)
 library(ComplexHeatmap)
 library(circlize)
 library(UpSetR)
+library(glue)
 
 ```
 
@@ -1135,6 +1135,91 @@ file_path <- file.path(out_dir, "volcano_plots",
 
 ggsave(filename = file_path, plot = plot, width = 7, height = 5.5)
 }
+
+```
+
+# plots to compare logFC
+
+```{r scatter_logfc_comparison, message=FALSE, warning=FALSE}
+
+meta <- slim_re_embed_interesting_cells@meta.data
+
+cell_types <- unique(meta$new_celltypes)
+stages     <- unique(meta$stage)
+
+out_dir_scatter <- file.path(out_dir, "logFC_scatter")
+dir.create(out_dir_scatter, showWarnings = FALSE, recursive = TRUE)
+
+for (ct in cell_types) {
+  for (st in stages) {
+    
+    # construct keys
+    key_cycling     <- paste(ct, st, "cycling", sep = "__")
+    key_noncycling  <- paste(ct, st, "not_cycling", sep = "__")
+    
+    # skip if missing
+    if (!(key_cycling %in% names(results_list_full))) next
+    if (!(key_noncycling %in% names(results_list_full))) next
+    
+    df_cyc  <- results_list_full[[key_cycling]]
+    df_non  <- results_list_full[[key_noncycling]]
+    
+    # merge by gene (safe even if identical)
+    df_merged <- df_cyc %>%
+      dplyr::select(gene, logFC_cycling = avg_log2FC) %>%
+      dplyr::inner_join(
+        df_non %>%
+          dplyr::select(gene, logFC_noncycling = avg_log2FC),
+        by = "gene"
+      )
+    
+    # optional: remove NA / infinite
+    df_merged <- df_merged %>%
+      dplyr::filter(is.finite(logFC_cycling),
+                    is.finite(logFC_noncycling))
+    
+    # compute correlation (nice to show)
+    cor_val <- cor(df_merged$logFC_cycling,
+                   df_merged$logFC_noncycling,
+                   method = "pearson")
+    
+    # plot
+    p <- ggplot(df_merged,
+                aes(x = logFC_cycling,
+                    y = logFC_noncycling)) +
+      geom_point(alpha = 0.5, color = "grey30") +
+      
+      # reference lines
+      geom_hline(yintercept = 0, linetype = "dashed", color = "grey70") +
+      geom_vline(xintercept = 0, linetype = "dashed", color = "grey70") +
+      geom_abline(slope = 1, intercept = 0, linetype = "dotted", color = "red") +
+      
+      theme_bw(base_size = 11) +
+      labs(
+        title = glue::glue("{ct} | {st}"),
+        subtitle = glue::glue("Cycling vs Non-cycling logFC comparison\nPearson r = {round(cor_val, 3)}"),
+        x = expression(log[2]~"FC (control vs KO) - cycling"),
+        y = expression(log[2]~"FC (control vs KO) - not cycling")
+      ) +
+      theme(
+        plot.title = element_text(face = "bold"),
+        panel.grid.minor = element_blank()
+      )
+    
+    # print in RMarkdown
+    print(p)
+    
+    # save
+    file_path <- file.path(
+      out_dir_scatter,
+      paste0("scatter_logFC_", ct, "_", st, ".png")
+    )
+    
+    ggsave(file_path, plot = p, width = 6, height = 5)
+    
+  }
+}
+
 
 ```
 
