@@ -419,6 +419,23 @@ all_raw_results <- all_raw_results %>%
 
 # quick sanity check
 glimpse(all_raw_results)
+
+summary_table_stage <- all_raw_results %>%
+  dplyr::group_by(
+    BaselineProp.clusters,
+    stage,
+    cell_type
+  ) %>%
+  dplyr::summarise(
+    n_bootstraps     = dplyr::n(),
+    mean_PropRatio   = mean(PropRatio, na.rm = TRUE),
+    median_PropRatio = median(PropRatio, na.rm = TRUE),
+    sd_PropRatio     = sd(PropRatio, na.rm = TRUE),
+    CI_lower         = quantile(PropRatio, 0.025, na.rm = TRUE),
+    CI_upper         = quantile(PropRatio, 0.975, na.rm = TRUE),
+    mean_log2PR      = mean(log2(PropRatio), na.rm = TRUE),
+    .groups = "drop"
+  )
 ```
 
 ```{r plot-pvalue-boxplots, fig.width = 10, fig.height = 5}
@@ -771,7 +788,7 @@ all_raw_results <- all_raw_results %>%
 # quick sanity check
 glimpse(all_raw_results)
 
-summary_table <- all_raw_results %>%
+summary_table_genotype <- all_raw_results %>%
   dplyr::group_by(
     BaselineProp.clusters,
     stage,
@@ -871,7 +888,7 @@ p_e11 <- all_raw_results %>%
   )
 
 # save the figure
-ggsave(plot = p_control, filename = file.path(out_dir, "bootstrap_genotype_control.png"))
+ggsave(plot = p_e11, filename = file.path(out_dir, "bootstrap_genotype_e11.png"))
 
 # ---- Mib1_KO figure ---------------------------------------------------------
 p_e12 <- all_raw_results %>%
@@ -880,7 +897,7 @@ p_e12 <- all_raw_results %>%
     title = "Bootstrap propeller proportions — e12 (Mib1-KO - Control)"
   )
 # save the figure
-ggsave(plot = p_ko, filename = file.path(out_dir, "bootstrap_genotype_ko.png"))
+ggsave(plot = p_e12, filename = file.path(out_dir, "bootstrap_genotype_e12.png"))
 
 # ---- display ----------------------------------------------------------------
 p_e11
