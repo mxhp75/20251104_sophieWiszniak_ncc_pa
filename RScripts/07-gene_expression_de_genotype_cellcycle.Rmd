@@ -257,6 +257,105 @@ for (ct in cell_types) {
 message("All comparisons complete. Outputs saved to: ", out_dir)
 ```
 
+# Plot: cycling vs not_cycling logFC scatter for all cell types × timepoints
+
+```{r, message=FALSE, warning=FALSE, fig.width=10, fig.height=8}
+for (ct in cell_types) {
+  for (tp in timepoints) {
+
+    key_cycling     <- paste0(ct, "_", tp, "_KO_vs_control_cycling")
+    key_not_cycling <- paste0(ct, "_", tp, "_KO_vs_control_not_cycling")
+
+    # Check both comparisons exist
+    if (!key_cycling %in% names(all_de_results) || !key_not_cycling %in% names(all_de_results)) {
+      warning(
+        "Skipping ", ct, " ", tp,
+        " — one or both DE result sets not found.\n",
+        "  Looking for: ", key_cycling, " and ", key_not_cycling
+      )
+      next
+    }
+
+    cycling_de     <- all_de_results[[key_cycling]]
+    not_cycling_de <- all_de_results[[key_not_cycling]]
+
+    # Join on gene — inner join keeps only genes tested in both groups
+    joined <- inner_join(
+      cycling_de     %>% dplyr::select(gene, lfc_cycling     = avg_log2FC, sig_cycling     = sig),
+      not_cycling_de %>% dplyr::select(gene, lfc_not_cycling = avg_log2FC, sig_not_cycling = sig),
+      by = "gene"
+    ) %>%
+      dplyr::mutate(
+        highlight = case_when(
+          sig_cycling != "Not significant" & sig_not_cycling != "Not significant" ~ "Sig in both",
+          sig_cycling != "Not significant" & sig_not_cycling == "Not significant" ~ "Sig in cycling only",
+          sig_cycling == "Not significant" & sig_not_cycling != "Not significant" ~ "Sig in not_cycling only",
+          TRUE ~ "Not significant"
+        )
+      )
+
+    # Genes to label — significant in at least one group with strong FC
+label_genes <- joined %>%
+  dplyr::filter(highlight != "Not significant") %>%
+  dplyr::filter(abs(lfc_cycling) > 0.5 | abs(lfc_not_cycling) > 0.5)
+
+    p <- ggplot(joined, aes(x = lfc_not_cycling, y = lfc_cycling)) +
+      geom_point(aes(color = highlight), alpha = 0.5, size = 1.5) +
+      geom_text_repel(
+        data         = label_genes,
+        aes(label    = gene),
+        size         = 3,
+        max.overlaps = 20
+      ) +
+      scale_color_manual(
+        values = c(
+          "Sig in both"             = "firebrick",
+          "Sig in cycling only"     = "darkorange",
+          "Sig in not_cycling only" = "steelblue",
+          "Not significant"         = "grey80"
+        )
+      ) +
+      geom_hline(yintercept = 0, linetype = "dashed",  colour = "grey50") +
+      geom_vline(xintercept = 0, linetype = "dashed",  colour = "grey50") +
+      geom_abline(slope = 1, intercept = 0, linetype = "dotted", colour = "grey30") +
+      labs(
+        title    = paste0(ct, " ", tp, ": KO vs control"),
+        subtitle = paste0(
+          "Genes tested in both groups: ", nrow(joined),
+          "  |  Sig in both: ",             sum(joined$highlight == "Sig in both"),
+          "  |  Cycling only: ",            sum(joined$highlight == "Sig in cycling only"),
+          "  |  Not_cycling only: ",        sum(joined$highlight == "Sig in not_cycling only")
+        ),
+        x     = "avg_log2FC (not cycling)",
+        y     = "avg_log2FC (cycling)",
+        color = NULL
+      ) +
+      theme_classic()
+
+    # Save PNG
+    out_file <- file.path(
+      out_dir,
+      paste0(ct, "_", tp, "_KO_vs_control_cycling_scatter.png")
+    )
+
+    ggsave(
+      p,
+      filename = out_file,
+      width    = 10,
+      height   = 8,
+      units    = "in",
+      dpi      = 300
+    )
+
+    # Print to notebook
+    print(p)
+    message("Saved: ", basename(out_file))
+  }
+}
+
+message("All scatter plots complete. Saved to: ", out_dir)
+```
+
 # Summary: comparisons run and DE gene counts
 
 ```{r}
