@@ -1,0 +1,283 @@
+---
+title: "gene_expression_de_genotype_cellcycle"
+author: "Melanie Smith"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc()                             # free up memory and report the memory usage
+options(
+  max.print        = .Machine$integer.max,
+  scipen            = 999,
+  stringsAsFactors  = FALSE,
+  dplyr.summarise.inform = FALSE
+)
+set.seed(42)
+```
+
+# Load libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+
+# Single cell
+library(Seurat)
+
+# Plotting
+library(ggrepel)
+```
+
+# Set project directories and file paths
+
+```{r}
+project_name     <- "20251104_sophieWiszniak_ncc_pa"
+base_repo_dir    <- "/home/melanie-smith/workDir/sophieWiszniak"
+project_repo_dir <- file.path(base_repo_dir, project_name)
+out_dir          <- file.path(project_repo_dir, "outDir", "07-gene_expression_de_genotype_cellcycle")
+
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir, recursive = TRUE)
+}
+```
+
+# Load required object
+
+- This object has been filtered for doublets and >10% MT genes
+
+```{r}
+re_embed_interesting_cells <- readRDS(
+  file.path(
+    project_repo_dir, "outDir", "06-cluster_marker_genes",
+    "final_interesting_cells_0.6.rds"
+  )
+)
+```
+
+# Collapse cell cycle phase into cycling / not_cycling
+
+G1 = not_cycling; S or G2M = cycling
+
+```{r}
+re_embed_interesting_cells$cycling_status <- case_when(
+  re_embed_interesting_cells@meta.data$Phase == "G1" ~ "not_cycling",
+  re_embed_interesting_cells@meta.data$Phase %in% c("S", "G2M") ~ "cycling",
+  TRUE ~ NA_character_  # catches anything unexpected — check for NAs after
+)
+
+cat("\nAny unassigned cells:", sum(is.na(re_embed_interesting_cells$cycling_status)), "\n")
+```
+
+# Create composite identity variable
+
+Combines cell type + timepoint + genotype + cycling status into a single
+grouping variable for pairwise DE comparisons.
+
+```{r}
+re_embed_interesting_cells$celltype.cond.cycle <- paste(
+  re_embed_interesting_cells$new_celltypes,
+  re_embed_interesting_cells$orig.ident,
+  re_embed_interesting_cells$cycling_status,
+  sep = "_"
+)
+
+Idents(re_embed_interesting_cells) <- "celltype.cond.cycle"
+
+# Preview group sizes — important for catching groups too small for DE
+cat("\nCell counts per group:\n")
+table(re_embed_interesting_cells$celltype.cond.cycle) %>%
+  as.data.frame() %>%
+  arrange(Var1) %>%
+  as_tibble() %>%
+  print(n = Inf)
+```
+
+# Define comparison parameters
+
+```{r}
+cell_types      <- c("Mesenchyme", "Myocardium", "Endocardium", "Epicardium", "VSMC")
+timepoints      <- c("e11", "e12")
+cycle_states    <- c("cycling", "not_cycling")
+
+# Significance thresholds — defined once, used consistently throughout
+fc_threshold  <- 0.25  # minimum absolute avg_log2FC to call significance
+padj_threshold <- 0.05  # adjusted p-value cutoff
+top_fc        <- 0.5   # avg_log2FC threshold for labelling top genes on volcano
+top_padj      <- 0.01  # adjusted p-value threshold for labelling top genes
+
+# Minimum cells required in each group to attempt DE
+min_cells <- 10
+```
+
+# Run DE and plot: KO vs control, per cell type, timepoint, and cycling status
+
+For each comparison, `ident.1 = KO` and `ident.2 = control`, so:
+
+- **Positive avg_log2FC** = higher expression in KO
+- **Negative avg_log2FC** = higher expression in control
+
+Results tables (CSV) and volcano plots (PNG) are saved per comparison.
+
+```{r, message=FALSE, warning=FALSE}
+all_de_results <- list()
+
+for (ct in cell_types) {
+  for (tp in timepoints) {
+    for (cs in cycle_states) {
+
+      comparison_label <- paste0(ct, "_", tp, "_KO_vs_control_", cs)
+      message("Running DE: ", comparison_label)
+
+      ident_ko      <- paste(ct, tp, "ko",      cs, sep = "_")
+      ident_control <- paste(ct, tp, "control", cs, sep = "_")
+
+      # --- Check both groups exist ---
+      available_idents <- levels(Idents(re_embed_interesting_cells))
+      if (!ident_ko %in% available_idents || !ident_control %in% available_idents) {
+        warning(
+          "Skipping ", comparison_label,
+          " — one or both groups not found.\n",
+          "  Looking for: ", ident_ko, " and ", ident_control
+        )
+        next
+      }
+
+      # --- Check minimum cell numbers ---
+      n_ko      <- sum(Idents(re_embed_interesting_cells) == ident_ko)
+      n_control <- sum(Idents(re_embed_interesting_cells) == ident_control)
+
+      if (n_ko < min_cells || n_control < min_cells) {
+        warning(
+          "Skipping ", comparison_label,
+          " — too few cells (KO: ", n_ko, ", control: ", n_control,
+          "). Minimum required: ", min_cells
+        )
+        next
+      }
+
+      # --- Run DE ---
+      de_result <- FindMarkers(
+        re_embed_interesting_cells,
+        ident.1         = ident_ko,
+        ident.2         = ident_control,
+        test.use        = "wilcox",
+        min.pct         = 0.1,
+        logfc.threshold = 0.25,
+        verbose         = FALSE
+      )
+
+      # --- Annotate results ---
+      de_annotated <- de_result %>%
+        rownames_to_column("gene") %>%
+        mutate(
+          neg_log10_padj = -log10(p_val_adj),
+          sig = case_when(
+            p_val_adj < padj_threshold & avg_log2FC >  fc_threshold ~ "Up in KO",
+            p_val_adj < padj_threshold & avg_log2FC < -fc_threshold ~ "Up in control",
+            TRUE ~ "Not significant"
+          )
+        )
+
+      all_de_results[[comparison_label]] <- de_annotated
+
+      # --- Save DE table ---
+      write_csv(
+        de_annotated,
+        file.path(out_dir, paste0(comparison_label, "_de_results.csv"))
+      )
+
+      # Print top hits to notebook
+      cat("\n### Top DE genes:", comparison_label,
+          "(n KO =", n_ko, "| n control =", n_control, ")\n")
+      de_annotated %>%
+        filter(sig != "Not significant") %>%
+        arrange(desc(abs(avg_log2FC))) %>%
+        head(20) %>%
+        print()
+
+      # --- Top genes to label on volcano ---
+      top_genes <- de_annotated %>%
+        filter(p_val_adj < top_padj, abs(avg_log2FC) > top_fc)
+
+      # --- Volcano plot ---
+      volcano <- ggplot(de_annotated, aes(x = avg_log2FC, y = neg_log10_padj)) +
+        geom_point(aes(color = sig), alpha = 0.5, size = 1) +
+        ggrepel::geom_text_repel(
+          data         = top_genes,
+          aes(label    = gene),
+          size         = 3,
+          max.overlaps = 20
+        ) +
+        scale_color_manual(
+          values = c(
+            "Up in KO"        = "firebrick",
+            "Up in control"   = "steelblue",
+            "Not significant" = "grey80"
+          )
+        ) +
+        geom_vline(xintercept = c(-fc_threshold, fc_threshold), linetype = "dashed", color = "grey50") +
+        geom_hline(yintercept = -log10(padj_threshold),         linetype = "dashed", color = "grey50") +
+        labs(
+          title    = paste0(ct, " ", tp, " (", cs, "): KO vs control"),
+          subtitle = paste0(
+            "n KO = ", n_ko, "  |  n control = ", n_control,
+            "  |  Up in KO: ",      sum(de_annotated$sig == "Up in KO"),
+            "  |  Up in control: ", sum(de_annotated$sig == "Up in control")
+          ),
+          x     = "Average log2 fold change (KO / control)",
+          y     = "-log10 adjusted p-value",
+          color = NULL
+        ) +
+        theme_classic()
+
+      # --- Save volcano ---
+      ggsave(
+        volcano,
+        filename = file.path(out_dir, paste0(comparison_label, "_volcano.png")),
+        width    = 10,
+        height   = 8,
+        units    = "in",
+        dpi      = 300
+      )
+
+      # Print to notebook
+      print(volcano)
+    }
+  }
+}
+
+message("All comparisons complete. Outputs saved to: ", out_dir)
+```
+
+# Summary: comparisons run and DE gene counts
+
+```{r}
+summary_table <- map_dfr(names(all_de_results), function(name) {
+  df <- all_de_results[[name]]
+  tibble(
+    comparison    = name,
+    total_tested  = nrow(df),
+    up_in_ko      = sum(df$sig == "Up in KO"),
+    up_in_control = sum(df$sig == "Up in control"),
+    not_sig       = sum(df$sig == "Not significant")
+  )
+})
+
+print(summary_table)
+
+write_csv(summary_table, file.path(out_dir, "00-DE_summary_all_comparisons.csv"))
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```
