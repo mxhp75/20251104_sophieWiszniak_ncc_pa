@@ -72,7 +72,7 @@ Idents(re_embed_interesting_cells) <- "seurat_clusters"
 
 ```{r}
 
-# for a cell-type, what's the difference between proportions between time points
+# for a cell-type, what's the difference between proportions between time points -> create a new composite variable
 re_embed_interesting_cells$celltype.cond <- paste(re_embed_interesting_cells$new_celltypes,
                                                   re_embed_interesting_cells$orig.ident,
                                                   sep = "_")
