@@ -370,8 +370,35 @@ summary_table <- map_dfr(names(all_de_results), function(name) {
   )
 })
 
-print(summary_table)
+# Add column: genes significant in both cycling and not_cycling for each celltype x timepoint
+sig_in_both <- map_dfr(cell_types, function(ct) {
+  map_dfr(timepoints, function(tp) {
+    
+    key_cycling     <- paste0(ct, "_", tp, "_KO_vs_control_cycling")
+    key_not_cycling <- paste0(ct, "_", tp, "_KO_vs_control_not_cycling")
+    
+    # Return NA if either comparison wasn't run
+    if (!key_cycling %in% names(all_de_results) || !key_not_cycling %in% names(all_de_results)) {
+      return(tibble(comparison = c(key_cycling, key_not_cycling), n_sig_in_both = NA_integer_))
+    }
+    
+    cycling_sig     <- all_de_results[[key_cycling]]     %>% dplyr::filter(sig != "Not significant") %>% dplyr::pull(gene)
+    not_cycling_sig <- all_de_results[[key_not_cycling]] %>% dplyr::filter(sig != "Not significant") %>% dplyr::pull(gene)
+    
+    n <- length(intersect(cycling_sig, not_cycling_sig))
+    
+    # Return one row per comparison so it joins cleanly onto summary_table
+    tibble(
+      comparison    = c(key_cycling, key_not_cycling),
+      n_sig_in_both = n
+    )
+  })
+})
 
+summary_table <- summary_table %>%
+  dplyr::left_join(sig_in_both, by = "comparison")
+
+print(summary_table)
 write_csv(summary_table, file.path(out_dir, "00-DE_summary_all_comparisons.csv"))
 ```
 
