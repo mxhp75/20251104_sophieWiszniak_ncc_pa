@@ -1,0 +1,500 @@
+---
+title: "gene_expression_gsea_genotype_cellcycle"
+author: "Melanie Smith"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE))
+gc()
+options(
+  max.print              = .Machine$integer.max,
+  scipen                 = 999,
+  stringsAsFactors       = FALSE,
+  dplyr.summarise.inform = FALSE
+)
+set.seed(42)
+```
+
+# Load libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+
+# Annotation
+library(org.Mm.eg.db)
+library(AnnotationDbi)
+
+# GSEA
+library(clusterProfiler)
+
+# Plotting
+library(enrichplot)
+```
+
+# Set project directories
+
+```{r}
+project_name     <- "20251104_sophieWiszniak_ncc_pa"
+base_repo_dir    <- "/home/melanie-smith/workDir/sophieWiszniak"
+project_repo_dir <- file.path(base_repo_dir, project_name)
+
+# Input: DE results from script 08
+de_dir <- file.path(project_repo_dir, "outDir", "07-gene_expression_de_genotype_cellcycle")
+
+# Output: GSEA results go to their own directory
+out_dir <- file.path(project_repo_dir, "outDir", "09-gsea_genotype_cellcycle")
+
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir, recursive = TRUE)
+}
+```
+
+# Define parameters
+
+```{r}
+cell_types     <- c("Mesenchyme", "Myocardium", "Endocardium", "Epicardium", "VSMC")
+timepoints     <- c("e11", "e12")
+cycle_states   <- c("cycling", "not_cycling")
+
+# gseGO parameters
+gsea_pval_cutoff  <- 0.05   # p-value cutoff for significant terms
+gsea_min_gs_size  <- 10     # minimum gene set size
+gsea_max_gs_size  <- 500    # maximum gene set size
+gsea_n_perm       <- 1000   # number of permutations
+simplify_cutoff   <- 0.7    # semantic similarity threshold for GO term redundancy removal
+
+# Number of top terms to show on dotplot
+n_top_terms <- 20
+```
+
+# Load DE results from CSV
+
+Rebuilds `all_de_results` from saved CSVs from script 08
+
+```{r}
+all_de_results <- list()
+csv_files <- list.files(de_dir, pattern = "_de_results\\.csv$", full.names = TRUE)
+
+if (length(csv_files) == 0) {
+  stop("No DE result CSVs found in: ", de_dir, "\nRun 07-gene_expression_de_genotype_cellcycle.Rmd first.")
+}
+
+for (f in csv_files) {
+  key <- basename(f) %>% stringr::str_remove("_de_results\\.csv$")
+  all_de_results[[key]] <- read_csv(f, show_col_types = FALSE)
+}
+
+message("Loaded ", length(all_de_results), " DE result sets.")
+```
+
+# Helper: convert gene symbols to Entrez IDs
+
+clusterProfiler's `gseGO()` requires Entrez IDs. This function maps a
+character vector of gene symbols to Entrez IDs using the mouse annotation
+database, returning a named vector suitable for use as the GSEA universe or
+ranked gene list.
+
+```{r}
+symbols_to_entrez <- function(gene_symbols) {
+  mapped <- AnnotationDbi::mapIds(
+    org.Mm.eg.db,
+    keys      = gene_symbols,
+    column    = "ENTREZID",
+    keytype   = "SYMBOL",
+    multiVals = "first"
+  )
+  # Drop any genes that failed to map
+  mapped <- mapped[!is.na(mapped)]
+  return(mapped)
+}
+```
+
+# Run GSEA: GO:BP for all 20 comparisons
+
+For each comparison:
+1. Rank genes using: `sign(avg_log2FC) * -log10(p_val_adj)`
+2. Map gene symbols to Entrez IDs
+3. Set the universe to only genes expressed in that comparison (i.e. all genes
+   tested, not the whole genome)
+4. Run `gseGO()` on GO:BP
+5. Save results CSV and dotplot PNG
+
+```{r, message=FALSE, warning=FALSE}
+all_gsea_results <- list()
+
+for (ct in cell_types) {
+  for (tp in timepoints) {
+    for (cs in cycle_states) {
+      
+      comparison_label <- paste0(ct, "_", tp, "_KO_vs_control_", cs)
+      message("Running GSEA: ", comparison_label)
+      
+      # --- Load DE results ---
+      if (!comparison_label %in% names(all_de_results)) {
+        warning("Skipping ", comparison_label, " — DE results not found.")
+        next
+      }
+      
+      de <- all_de_results[[comparison_label]]
+      
+      # --- Sanity check: required columns present ---
+      required_cols <- c("gene", "avg_log2FC", "p_val_adj")
+      if (!all(required_cols %in% colnames(de))) {
+        warning("Skipping ", comparison_label, " — missing required columns.")
+        next
+      }
+      
+      # --- Compute rank metric ---
+      de <- de %>%
+        dplyr::mutate(
+          p_val_adj_floored = dplyr::if_else(p_val_adj == 0, .Machine$double.eps, p_val_adj),
+          rank = sign(avg_log2FC) * (-log10(p_val_adj_floored))
+        )
+      
+      # --- Map gene symbols to Entrez IDs ---
+      universe_entrez <- symbols_to_entrez(de$gene)
+      
+      if (length(universe_entrez) < gsea_min_gs_size) {
+        warning("Skipping ", comparison_label, " — too few genes mapped to Entrez IDs.")
+        next
+      }
+      
+      de_mapped <- de %>%
+        dplyr::filter(gene %in% names(universe_entrez)) %>%
+        dplyr::mutate(entrez = universe_entrez[gene]) %>%
+        dplyr::arrange(desc(rank))
+      
+      ranked_list <- de_mapped$rank
+      names(ranked_list) <- de_mapped$entrez
+      ranked_list <- ranked_list[!duplicated(names(ranked_list))]
+      
+      # --- Run gseGO ---
+      gsea_result <- tryCatch(
+        clusterProfiler::gseGO(
+          geneList      = ranked_list,
+          OrgDb         = org.Mm.eg.db,
+          ont           = "BP",
+          keyType       = "ENTREZID",
+          minGSSize     = gsea_min_gs_size,
+          maxGSSize     = gsea_max_gs_size,
+          pvalueCutoff  = gsea_pval_cutoff,
+          pAdjustMethod = "BH",
+          nPermSimple   = gsea_n_perm,
+          verbose       = FALSE
+        ),
+        error = function(e) {
+          warning("gseGO failed for ", comparison_label, ": ", conditionMessage(e))
+          return(NULL)
+        }
+      )
+      
+      if (is.null(gsea_result) || nrow(as.data.frame(gsea_result)) == 0) {
+        message("No significant GO:BP terms found for: ", comparison_label)
+        next
+      }
+      
+      # --- Simplify: remove redundant GO terms by semantic similarity ---
+      gsea_result_simplified <- tryCatch(
+        clusterProfiler::simplify(
+          gsea_result,
+          cutoff     = simplify_cutoff,
+          by         = "p.adjust",
+          select_fun = min
+        ),
+        error = function(e) {
+          warning("simplify() failed for ", comparison_label, ": ", conditionMessage(e),
+                  "\nFalling back to unsimplified result.")
+          return(gsea_result)
+        }
+      )
+      
+      n_before <- nrow(as.data.frame(gsea_result))
+      n_after  <- nrow(as.data.frame(gsea_result_simplified))
+      message("  Terms before simplify: ", n_before, " | after: ", n_after)
+      
+      all_gsea_results[[comparison_label]] <- gsea_result_simplified
+      
+      # --- Save results CSV (simplified) ---
+      write_csv(
+        as.data.frame(gsea_result_simplified),
+        file.path(out_dir, paste0(comparison_label, "_gsea_GOBP_simplified.csv"))
+      )
+      
+      # --- Dotplot ---
+      n_terms <- min(n_top_terms, n_after)
+      
+      dotplot <- enrichplot::dotplot(
+        gsea_result_simplified,
+        showCategory = n_terms,
+        title        = paste0(ct, " ", tp, " (", cs, "): GO:BP GSEA\nKO vs control (simplified)"),
+        font.size    = 9
+      )
+      
+      ggsave(
+        dotplot,
+        filename = file.path(out_dir, paste0(comparison_label, "_gsea_GOBP_simplified_dotplot.png")),
+        width    = 10,
+        height   = max(6, n_terms * 0.35),
+        units    = "in",
+        dpi      = 300
+      )
+      
+      print(dotplot)
+      message("Saved: ", comparison_label)
+    }
+  }
+}
+
+message("All GSEA complete. Outputs saved to: ", out_dir)
+```
+
+# Enrichment plot if I want one
+
+```{r}
+# Generate enrichment plot for a specific term of interest
+# comparison_of_interest <- "Mesenchyme_e11_KO_vs_control_cycling"\
+comparison_of_interest <- "Endocardium_e11_KO_vs_control_not_cycling"
+temp_inspect_results <- all_gsea_results[[comparison_of_interest]] %>% data.frame 
+
+enrichplot::gseaplot2(
+  all_gsea_results[[comparison_of_interest]],
+  geneSetID = "GO:0007267",   # paste the ID of the term you want
+  title     = paste0(comparison_of_interest, ": ", "cell cell signalling")
+)
+```
+
+
+# Summary: significant GO:BP terms per comparison
+
+```{r}
+gsea_summary <- map_dfr(names(all_gsea_results), function(name) {
+  df <- as.data.frame(all_gsea_results[[name]]) %>%
+    dplyr::rename(gsea_rank = rank)
+  
+  # Pre-compute top terms outside tibble() construction
+  top_activated <- df %>%
+    dplyr::filter(NES > 0) %>%
+    dplyr::arrange(p.adjust) %>%
+    dplyr::slice(1) %>%
+    dplyr::pull(Description)
+  top_activated <- if (length(top_activated) == 0) NA_character_ else top_activated
+  
+  top_suppressed <- df %>%
+    dplyr::filter(NES < 0) %>%
+    dplyr::arrange(p.adjust) %>%
+    dplyr::slice(1) %>%
+    dplyr::pull(Description)
+  top_suppressed <- if (length(top_suppressed) == 0) NA_character_ else top_suppressed
+  
+  tibble(
+    comparison     = name,
+    n_sig_terms    = nrow(df),
+    n_activated    = sum(df$NES > 0),
+    n_suppressed   = sum(df$NES < 0),
+    top_activated  = top_activated,
+    top_suppressed = top_suppressed
+  )
+})
+print(gsea_summary)
+write_csv(gsea_summary, file.path(out_dir, "00-GSEA_summary_all_comparisons.csv"))
+```
+
+# Build long-format NES table
+
+Combines all comparisons into a single tidy data frame, then filters to GO
+terms significant in at least `min_comparisons` comparisons.
+
+```{r}
+nes_long <- map_dfr(names(all_gsea_results), function(name) {
+  
+  df <- as.data.frame(all_gsea_results[[name]]) %>%
+    dplyr::rename(gsea_rank = rank)
+  
+  parts <- stringr::str_match(
+    name,
+    "^(.+)_(e\\d+)_KO_vs_control_(cycling|not_cycling)$"
+  )
+  
+  if (anyNA(parts)) {
+    warning("Could not parse comparison label: ", name, " — skipping.")
+    return(NULL)
+  }
+  
+  df %>%
+    dplyr::select(Description, NES, p.adjust) %>%
+    dplyr::mutate(
+      comparison  = name,
+      cell_type   = parts[, 2],
+      timepoint   = parts[, 3],
+      cycle_state = parts[, 4],
+      NES_plot    = dplyr::if_else(p.adjust < 0.05, NES, NA_real_)
+    )
+})
+
+message("Total term-comparison rows before filtering: ", nrow(nes_long))
+
+# --- Filter: keep only terms significant in >= min_comparisons ---
+# Minimum number of comparisons a GO term must be significant in to be shown
+min_comparisons <- 4
+# NES colour scale limits — symmetric around 0 so colour is meaningful
+nes_limit <- 2.5  # values beyond +/- this are clipped to the colour scale ends
+
+terms_to_keep <- nes_long %>%
+  dplyr::filter(!is.na(NES_plot)) %>%
+  dplyr::count(Description) %>%
+  dplyr::filter(n >= min_comparisons) %>%
+  dplyr::pull(Description)
+
+message("GO terms significant in >= ", min_comparisons, " comparisons: ", length(terms_to_keep))
+
+nes_filtered <- nes_long %>%
+  dplyr::filter(Description %in% terms_to_keep)
+```
+
+# Hierarchical clustering of GO terms (rows)
+
+Clusters GO terms by their NES profile across all comparisons so that
+biologically related pathways appear adjacent on the heatmap.
+
+```{r}
+# Pivot to wide matrix for clustering — fill missing/non-sig with 0
+nes_matrix <- nes_filtered %>%
+  dplyr::select(Description, comparison, NES_plot) %>%
+  tidyr::pivot_wider(
+    names_from  = comparison,
+    values_from = NES_plot,
+    values_fill = 0
+  ) %>%
+  tibble::column_to_rownames("Description")
+
+# Hierarchical clustering
+row_clust   <- hclust(dist(nes_matrix), method = "complete")
+term_order  <- rownames(nes_matrix)[row_clust$order]
+
+# Apply clustering order as factor levels
+nes_filtered <- nes_filtered %>%
+  dplyr::mutate(Description = factor(Description, levels = term_order))
+```
+
+# Build column labels and ordering
+
+Within each timepoint facet, columns are ordered: cycling then not_cycling,
+and within each cycle state by cell type.
+
+```{r}
+col_order <- expand.grid(
+  cell_type   = cell_types,
+  cycle_state = cycle_states,
+  stringsAsFactors = FALSE
+) %>%
+  dplyr::mutate(col_label = paste0(cell_type, "\n(", cycle_state, ")"))
+
+nes_filtered <- nes_filtered %>%
+  dplyr::mutate(
+    col_label = paste0(cell_type, "\n(", cycle_state, ")"),
+    col_label = factor(col_label, levels = col_order$col_label)
+  )
+```
+
+# Plot: NES heatmap faceted by timepoint
+
+```{r, fig.width=16, fig.height=max(8, length(term_order) * 0.28)}
+# Clip NES values to colour scale limits for display
+nes_filtered <- nes_filtered %>%
+  dplyr::mutate(
+    NES_clipped = dplyr::case_when(
+      is.na(NES_plot)          ~ NA_real_,
+      NES_plot >  nes_limit    ~  nes_limit,
+      NES_plot < -nes_limit    ~ -nes_limit,
+      TRUE                     ~ NES_plot
+    )
+  )
+
+heatmap_plot <- ggplot(
+  nes_filtered,
+  aes(x = col_label, y = Description, fill = NES_clipped)
+) +
+  geom_tile(colour = "white", linewidth = 0.3) +
+  scale_fill_gradient2(
+    low      = "steelblue",
+    mid      = "white",
+    high     = "firebrick",
+    midpoint = 0,
+    limits   = c(-nes_limit, nes_limit),
+    na.value = "grey90",
+    name     = "NES\n(KO / control)"
+  ) +
+  facet_grid(
+    cols   = vars(timepoint),
+    scales = "free_x",
+    space  = "free_x"
+  ) +
+  labs(
+    title    = "GO:BP GSEA — Normalised Enrichment Score (NES) across KO vs control comparisons",
+    subtitle = paste0(
+      "Mouse cardiac development | Cell cycle-stratified | ",
+      "Terms significant (padj < 0.05) in \u2265 ", min_comparisons, " comparisons | ",
+      "Rows ordered by hierarchical clustering | Grey = not significant"
+    ),
+    x = NULL,
+    y = NULL
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x      = element_text(size = 8, angle = 45, hjust = 1),
+    axis.text.y      = element_text(size = 7),
+    strip.text       = element_text(size = 11, face = "bold"),
+    strip.background = element_rect(fill = "grey92", colour = NA),
+    legend.position  = "right",
+    plot.title       = element_text(size = 12, face = "bold"),
+    plot.subtitle    = element_text(size = 8, colour = "grey40"),
+    panel.spacing    = unit(1, "lines")
+  )
+
+print(heatmap_plot)
+
+# Save — height scales with number of GO terms
+ggsave(
+  heatmap_plot,
+  filename = file.path(
+    out_dir,
+    "KO_vs_control_GOBP_NES_heatmap_by_timepoint_cellcycle.png"
+  ),
+  width  = 16,
+  height = max(8, length(term_order) * 0.28),
+  units  = "in",
+  dpi    = 300
+)
+
+message("Heatmap saved to: ", out_dir)
+```
+
+# Export: filtered NES table used for plotting
+
+Saves the underlying data so the heatmap can be recreated or customised
+without re-running the full GSEA pipeline.
+
+```{r}
+nes_filtered %>%
+  dplyr::select(Description, cell_type, timepoint, cycle_state, NES, p.adjust, NES_plot) %>%
+  dplyr::arrange(Description, timepoint, cell_type, cycle_state) %>%
+  write_csv(file.path(out_dir, "KO_vs_control_GOBP_NES_heatmap_data.csv"))
+
+message("Heatmap data exported.")
+```
+
+
+# Session info
+
+```{r}
+sessionInfo()
+```
