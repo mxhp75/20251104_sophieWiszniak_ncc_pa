@@ -1,0 +1,905 @@
+---
+title:  "bootstrap cell type proportions"
+author: "Melanie Smith"
+date:   "2026-05-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean-up environment
+
+```{r clean-up}
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr's "grouped output" informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Core single cell
+library(Seurat)
+library(loupeR)
+
+# test cell type proportions
+library(speckle)
+
+# additional plotting functions
+library(patchwork)
+library(pheatmap)
+library(ggExtra)
+library(ggrepel)
+library(ggdist)
+library(ComplexHeatmap)
+library(circlize)
+library(UpSetR)
+library(glue)
+
+```
+
+# Set project directories
+
+```{r}
+# set directories
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+out_dir <- file.path(project_repo_dir, "outDir", "08-regress-cell-cycle", "bootstrap_propeller")
+
+# Create directory if it doesn't exist
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir,
+             recursive = TRUE)
+}
+
+```
+
+# Load required Seurat object
+- Load the final Seurat object as created in `06-cellType_filter.Rmd`. This object is post-QC, post-filtering and has layers for PCA, UMAP etc.  
+- This object contains all 4 samples and has all layers merged.  
+
+```{r}
+# read in the complete Seurat object
+re_embed_interesting_cells <- readRDS(file.path(project_repo_dir, "outDir", "06-cluster_marker_genes", "final_interesting_cells_0.6.rds"))
+# sanity check to ensure this is a Seurat object
+stopifnot(inherits(re_embed_interesting_cells, "Seurat"))
+
+# ensure "seurat_cluster" is the current identity
+Idents(re_embed_interesting_cells) <- "seurat_clusters"
+Idents(re_embed_interesting_cells) <- factor(Idents(re_embed_interesting_cells))
+
+# ensure "RNA" is the default assay
+DefaultAssay(re_embed_interesting_cells) <- "RNA"
+
+```
+
+# create the slim object
+- I've found this analyses difficult to get through without accumulating enough RAM to crash RStudio.  
+- Here I will create a slim version of my Seurat object so that it and all subsequent objects are taking up less space.  
+
+```{r}
+# Slim down while keeping exactly what FindMarkers needs
+slim_re_embed_interesting_cells <- DietSeurat(
+  object = re_embed_interesting_cells,
+  
+  # Keep only the normalized data layer (this is what FindMarkers uses)
+  layers = "data",                    # keep only the required layer
+  
+  # Keep only the main assay
+  assays = "RNA",                     # keep only the required assay
+  
+  # Keep only the reductions you actually use
+  dimreducs = c("pca", "umap"),       # keep only the required reductions
+  
+  # Drop everything else
+  graphs = FALSE
+)
+
+# remove the large object
+rm(re_embed_interesting_cells)
+# clean up
+gc()
+```
+
+
+## Set up the cell-type and phase colours for consistency
+- setting the colours here to make sure they are consistent across all scripts.  
+
+```{r}
+celltype_cols <- c("Myocardium"    = "#E41A1C",
+                   "VSMC"          = "#984EA3",  
+                   "Epicardium"    =  "#FF7F00",
+                   "Mesenchyme"    =  "#4DAF4A", 
+                   "Endocardium"   = "#377EB8",
+                   "Other/Unknown" = "grey70")
+
+phase_cols <- c(
+  "G1" = "#1f77b4",
+  "G2M" = "#2ca02c",
+  "S" = "#ff7f0e"
+  )
+```
+
+# Quick sanity check
+
+```{r}
+print(slim_re_embed_interesting_cells)
+# which ident is currently active
+table(Idents(slim_re_embed_interesting_cells))
+stopifnot(!anyDuplicated(colnames(slim_re_embed_interesting_cells)))
+```
+
+# Collapse cell cycle phase into cycling vs not-cycling
+
+```{r}
+# set the cell cycle phase as a factor to ensure plots are always in the same order
+slim_re_embed_interesting_cells$Phase <- factor(
+  slim_re_embed_interesting_cells$Phase,
+  levels = c("G1", "G2M", "S")  # match the order in phase_cols exactly
+)
+
+## collapse the S and G2M phase allocations
+slim_re_embed_interesting_cells[[]] <- slim_re_embed_interesting_cells[[]] %>%
+  dplyr::mutate(
+    cycling = dplyr::if_else(
+      Phase %in% c("S", "G2M"),
+      "cycling",
+      "not_cycling"
+    )
+  )
+
+# lets make these a factor so they always plot in the same order
+slim_re_embed_interesting_cells$cycling <- factor(
+  slim_re_embed_interesting_cells$cycling,
+  levels = c("not_cycling", "cycling")
+)
+
+# quick sanity check
+table(slim_re_embed_interesting_cells$Phase,
+      slim_re_embed_interesting_cells$cycling)
+  #     cycling not_cycling
+  # G1        0       12436
+  # G2M    5796           0
+  # S      6095           0
+```
+
+# =============================================================================
+# Bootstrap propeller: cycling vs not_cycling proportions
+# Testing: e11 vs e12 within each genotype x cell type
+# =============================================================================
+
+```{r bootstrap-setup-timepoint}
+# parameters
+N_BOOTSTRAPS    <- 100
+N_PSEUDOREPS    <- 3   # pseudo-replicates per stage per bootstrap
+set.seed(42)
+
+# define the levels to loop over
+genotypes  <- unique(slim_re_embed_interesting_cells$genotype)
+celltypes  <- unique(slim_re_embed_interesting_cells$new_celltypes)
+stages     <- unique(slim_re_embed_interesting_cells$stage)
+
+# initialise the results list
+# structure: bootstrap_results_timepoint[["genotype"]][["celltype"]]
+bootstrap_results_timepoint <- setNames(
+  lapply(genotypes, function(g) setNames(vector("list", length(celltypes)), celltypes)),
+  genotypes
+)
+```
+
+```{r bootstrap-propeller-timepoint, message=FALSE, warning=FALSE}
+# helper: assign pseudo-replicate labels to a cell barcode vector
+# samples with replacement within each stage separately, then assigns
+# cells into n_reps groups of equal size (remainder cells are dropped
+# to keep groups balanced)
+assign_pseudo_replicates <- function(meta_subset, n_reps, stages) {
+
+  pseudo_rep_col <- rep(NA_character_, nrow(meta_subset))
+
+  for (stg in stages) {
+
+    idx <- which(meta_subset$stage == stg)
+
+    if (length(idx) < n_reps) {
+      warning(glue::glue(
+        "Fewer than {n_reps} cells for stage {stg} — skipping this stage in this bootstrap."
+      ))
+      next
+    }
+
+    # sample with replacement to get the same number of cells as we started with
+    sampled_idx <- sample(idx, size = length(idx), replace = TRUE)
+
+    # split evenly into n_reps groups (drop remainder to keep balanced groups)
+    n_keep       <- floor(length(sampled_idx) / n_reps) * n_reps
+    sampled_idx  <- sampled_idx[seq_len(n_keep)]
+    rep_labels   <- rep(
+      paste0(stg, "_rep", seq_len(n_reps)),
+      each = floor(length(sampled_idx) / n_reps)
+    )
+
+    # assign back using the *sampled* positions (not original idx)
+    # we expand meta_subset rows to match the bootstrap sample
+    pseudo_rep_col[sampled_idx] <- rep_labels
+  }
+
+  return(pseudo_rep_col)
+}
+
+# ---- main bootstrap loop ----------------------------------------------------
+
+for (geno in genotypes) {
+
+  message(glue::glue("\n--- Genotype: {geno} ---"))
+
+  # subset to this genotype once (outside the celltype loop for efficiency)
+  geno_cells <- slim_re_embed_interesting_cells[
+    , slim_re_embed_interesting_cells$genotype == geno
+  ]
+
+  for (ct in celltypes) {
+
+    message(glue::glue("  Cell type: {ct}"))
+
+    # subset to this cell type
+    ct_cells <- geno_cells[
+      , geno_cells$new_celltypes == ct
+    ]
+
+    n_cells <- ncol(ct_cells)
+
+    if (n_cells < (N_PSEUDOREPS * length(stages) * 2)) {
+      warning(glue::glue(
+        "Too few cells for {geno} / {ct} (n = {n_cells}). Skipping."
+      ))
+      bootstrap_results_timepoint[[geno]][[ct]] <- list(
+        raw_results = NULL,
+        summary     = data.frame(skipped = TRUE, n_cells = n_cells)
+      )
+      next
+    }
+
+    # pull the metadata we need once
+    ct_meta <- ct_cells@meta.data %>%
+      dplyr::select(stage, cycling) %>%
+      tibble::rownames_to_column("barcode")
+
+    # storage for this genotype x cell type across bootstraps
+    raw_boot_list <- vector("list", N_BOOTSTRAPS)
+
+    for (b in seq_len(N_BOOTSTRAPS)) {
+
+      # ---- 1. assign pseudo-replicates (separately per stage) ----------------
+      pseudo_reps <- assign_pseudo_replicates(
+        meta_subset = ct_meta,
+        n_reps      = N_PSEUDOREPS,
+        stages      = stages
+      )
+
+      ct_meta$pseudo_rep <- pseudo_reps
+
+      # keep only cells that received a pseudo-replicate label (balanced set)
+      meta_boot <- ct_meta %>%
+        dplyr::filter(!is.na(pseudo_rep))
+
+      if (nrow(meta_boot) < (N_PSEUDOREPS * length(stages))) {
+        raw_boot_list[[b]] <- NULL
+        next
+      }
+
+      # ---- 2. run propeller --------------------------------------------------
+      prop_result <- tryCatch(
+        {
+          speckle::propeller(
+            clusters  = meta_boot$cycling,        # cycling vs not_cycling
+            sample    = meta_boot$pseudo_rep,     # pseudo-replicates
+            group     = meta_boot$stage,          # testing e11 vs e12
+            transform = "asin"
+          )
+        },
+        error = function(e) {
+          message(glue::glue("    Bootstrap {b} failed: {conditionMessage(e)}"))
+          NULL
+        }
+      )
+
+      if (!is.null(prop_result)) {
+        # tag which bootstrap this came from
+        prop_result$bootstrap_id <- b
+        prop_result$genotype     <- geno
+        prop_result$cell_type    <- ct
+      }
+
+      raw_boot_list[[b]] <- prop_result
+
+    } # end bootstrap loop
+
+    # ---- 3. compile raw results and append summary --------------------------
+
+    # bind all non-null bootstrap results into one data frame
+    raw_results_df <- dplyr::bind_rows(
+      Filter(Negate(is.null), raw_boot_list)
+    )
+
+    # summary across bootstraps (per cycling category row returned by propeller)
+    summary_df <- raw_results_df %>%
+      dplyr::group_by(BaselineProp.clusters) %>%    # propeller row = cycling level
+      dplyr::summarise(
+        n_bootstraps_run       = dplyr::n(),
+        n_bootstraps_sig_fdr05 = sum(FDR < 0.05,      na.rm = TRUE),
+        prop_sig_fdr05         = mean(FDR < 0.05,     na.rm = TRUE),
+        median_FDR             = median(FDR,           na.rm = TRUE),
+        median_PropRatio       = median(PropRatio,     na.rm = TRUE),
+        CI_FDR_lower           = quantile(FDR, 0.025, na.rm = TRUE),
+        CI_FDR_upper           = quantile(FDR, 0.975, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      dplyr::mutate(
+        genotype  = geno,
+        cell_type = ct
+      )
+
+    # store in the named list
+    bootstrap_results_timepoint[[geno]][[ct]] <- list(
+      raw_results = raw_results_df,
+      summary     = summary_df
+    )
+
+    message(glue::glue(
+      "    Done. {nrow(raw_results_df)} propeller results stored across bootstraps."
+    ))
+
+  } # end cell type loop
+
+} # end genotype loop
+
+message("\nAll bootstraps complete.")
+```
+
+```{r bootstrap-save-timepoint}
+# save the full named list to disk
+saveRDS(
+  bootstrap_results_timepoint,
+  file = file.path(out_dir, "bootstrap_propeller_cycling_results.rds")
+)
+
+message(glue::glue("Results saved to: {out_dir}"))
+```
+
+```{r bootstrap-quick-peek-timepoint}
+# quick sanity check — peek at one combination
+example_geno <- genotypes[1]
+example_ct   <- celltypes[1]
+
+message(glue::glue("Preview: {example_geno} / {example_ct}"))
+
+# summary table
+print(bootstrap_results_timepoint[[example_geno]][[example_ct]]$summary)
+
+# first few rows of raw results
+head(bootstrap_results_timepoint[[example_geno]][[example_ct]]$raw_results)
+```
+
+# Visualise bootstrap results
+
+```{r extract-raw-results-timepoint}
+# extract and combine all raw results into a single long data frame
+all_raw_results_timepoint <- purrr::map_dfr(
+  genotypes, function(geno) {
+    purrr::map_dfr(
+      celltypes, function(ct) {
+        res <- bootstrap_results_timepoint[[geno]][[ct]]$raw_results
+        if (is.null(res)) return(NULL)
+        res
+      }
+    )
+  }
+)
+
+# ensure cell_type and BaselineProp.clusters are factors for consistent plotting
+all_raw_results_timepoint <- all_raw_results_timepoint %>%
+  dplyr::mutate(
+    cell_type             = factor(cell_type, levels = celltypes),
+    BaselineProp.clusters = factor(
+      BaselineProp.clusters,
+      levels = c("not_cycling", "cycling")
+    )
+  )
+
+# quick sanity check
+glimpse(all_raw_results_timepoint)
+
+summary_table_timepoint <- all_raw_results_timepoint %>%
+  dplyr::group_by(
+    BaselineProp.clusters,
+    genotype,
+    cell_type
+  ) %>%
+  dplyr::summarise(
+    n_bootstraps     = dplyr::n(),
+    mean_PropRatio   = mean(PropRatio, na.rm = TRUE),
+    median_PropRatio = median(PropRatio, na.rm = TRUE),
+    sd_PropRatio     = sd(PropRatio, na.rm = TRUE),
+    CI_lower         = quantile(PropRatio, 0.025, na.rm = TRUE),
+    CI_upper         = quantile(PropRatio, 0.975, na.rm = TRUE),
+    mean_log2PR      = mean(log2(PropRatio), na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r plot-pvalue-boxplots-timepoint, fig.width = 10, fig.height = 5}
+
+bootstrap_theme <- theme_bw() +
+  theme(
+    strip.background   = element_rect(fill = "grey92", colour = "grey70"),
+    strip.text         = element_text(size = 11, face = "bold"),
+    axis.title         = element_text(size = 11),
+    axis.text.x        = element_text(size = 10),
+    axis.text.y        = element_text(size = 10),
+    legend.title       = element_text(size = 11),
+    legend.text        = element_text(size = 10),
+    legend.position    = "bottom",
+    panel.grid.major.x = element_blank()
+  )
+
+# shared plot builder function
+make_bootstrap_plot <- function(data, title) {
+  
+  ggplot(
+    data,
+    aes(
+      x    = cell_type,
+      y    = log2(PropRatio),
+      fill = BaselineProp.clusters
+    )
+  ) +
+    
+    ggdist::stat_halfeye(
+      adjust        = 0.7,
+      width         = 0.6,
+      justification = -0.2,
+      .width        = c(0.5, 0.95),
+      point_colour  = NA,
+      alpha         = 0.8,
+      position      = position_dodge(width = 0.7)
+    ) +
+
+    # ggdist::stat_dots(
+    #   aes(group = BaselineProp.clusters),
+    #   side          = "left",
+    #   justification = 1.1,
+    #   binwidth      = 0.05,
+    #   alpha         = 0.75,
+    #   dotsize       = 0.25,
+    #   position      = position_dodge(width = 0.7)
+    # ) +
+    
+    scale_fill_manual(
+      values = c(
+        "cycling"     = "#E69F00",
+        "not_cycling" = "#56B4E9"
+      ),
+      labels = c(
+        "cycling"     = "Cycling",
+        "not_cycling" = "Not cycling"
+      ),
+      name = "Cell cycle state"
+    ) +
+    
+    geom_hline(
+      yintercept = 0,
+      linetype   = "dashed",
+      colour     = "red"
+    ) +
+    
+    labs(
+      title = title,
+      x     = "Cell type",
+      y     = expression(Log[2]~"Proportion Ratio (100 bootstraps)")
+    ) +
+    
+    bootstrap_theme
+}
+
+# ---- control figure ---------------------------------------------------------
+p_control <- all_raw_results_timepoint %>%
+  dplyr::filter(genotype == "control") %>%
+  make_bootstrap_plot(
+    title = "Bootstrap propeller proportions — control (e11 vs e12)"
+  )
+
+# save the figure
+ggsave(plot = p_control, filename = file.path(out_dir, "bootstrap_timepoint_control.png"))
+
+# ---- Mib1_KO figure ---------------------------------------------------------
+p_ko <- all_raw_results_timepoint %>%
+  dplyr::filter(genotype == "Mib1_KO") %>%
+  make_bootstrap_plot(
+    title = "Bootstrap propeller proportions — Mib1_KO (e11 vs e12)"
+  )
+# save the figure
+ggsave(plot = p_ko, filename = file.path(out_dir, "bootstrap_timepoint_ko.png"))
+
+# ---- display ----------------------------------------------------------------
+p_control
+p_ko
+```
+
+# =============================================================================
+# Bootstrap propeller: cycling vs not_cycling proportions
+# Testing: Mib1-KO vs control within each timepoint x cell type
+# =============================================================================
+
+```{r bootstrap-setup-genotype}
+# set the genotype factor levels
+slim_re_embed_interesting_cells$genotype <- factor(
+  slim_re_embed_interesting_cells$genotype,
+  levels = c("Mib1_KO", "control")
+  )
+
+# parameters
+N_BOOTSTRAPS    <- 100
+N_PSEUDOREPS    <- 3   # pseudo-replicates per genotype per bootstrap
+set.seed(42)
+
+# define the levels to loop over
+genotypes  <- unique(slim_re_embed_interesting_cells$genotype)
+celltypes  <- unique(slim_re_embed_interesting_cells$new_celltypes)
+stages     <- unique(slim_re_embed_interesting_cells$stage)
+
+# initialise the results list
+# structure: bootstrap_results_genotype[["stage"]][["celltype"]]
+bootstrap_results_genotype <- setNames(
+  lapply(stages, function(s) setNames(vector("list", length(celltypes)), celltypes)),
+  stages
+)
+```
+
+```{r bootstrap-propeller-genotype, message=FALSE, warning=FALSE}
+# helper: assign pseudo-replicate labels to a cell barcode vector
+# samples with replacement within each genotype separately, then assigns
+# cells into n_reps groups of equal size (remainder cells are dropped
+# to keep groups balanced)
+assign_pseudo_replicates <- function(meta_subset, n_reps, genotypes) {
+  
+  pseudo_rep_col <- rep(NA_character_, nrow(meta_subset))
+  
+  for (geno in genotypes) {
+    
+    idx <- which(meta_subset$genotype == geno)
+    
+    if (length(idx) < n_reps) {
+      warning(glue::glue(
+        "Fewer than {n_reps} cells for genotype {geno} — skipping this genotype in this bootstrap."
+      ))
+      next
+    }
+    
+    # sample with replacement to get the same number of cells as we started with
+    sampled_idx <- sample(idx, size = length(idx), replace = TRUE)
+    
+    # split evenly into n_reps groups (drop remainder to keep balanced groups)
+    n_keep       <- floor(length(sampled_idx) / n_reps) * n_reps
+    sampled_idx  <- sampled_idx[seq_len(n_keep)]
+    rep_labels   <- rep(
+      paste0(geno, "_rep", seq_len(n_reps)),
+      each = floor(length(sampled_idx) / n_reps)
+    )
+    
+    # assign back using the *sampled* positions (not original idx)
+    # we expand meta_subset rows to match the bootstrap sample
+    pseudo_rep_col[sampled_idx] <- rep_labels
+  }
+  
+  return(pseudo_rep_col)
+}
+
+# ---- main bootstrap loop ----------------------------------------------------
+
+for (stg in stages) {
+  
+  message(glue::glue("\n--- Stage: {stg} ---"))
+  
+  # subset to this stage once (outside the celltype loop for efficiency)
+  stg_cells <- slim_re_embed_interesting_cells[
+    , slim_re_embed_interesting_cells$stage == stg
+  ]
+  
+  for (ct in celltypes) {
+    
+    message(glue::glue("  Cell type: {ct}"))
+    
+    # subset to this cell type
+    ct_cells <- stg_cells[
+      , stg_cells$new_celltypes == ct
+    ]
+    
+    n_cells <- ncol(ct_cells)
+    
+    if (n_cells < (N_PSEUDOREPS * length(genotypes) * 2)) {
+      warning(glue::glue(
+        "Too few cells for {stg} / {ct} (n = {n_cells}). Skipping."
+      ))
+      bootstrap_results_genotype[[stg]][[ct]] <- list(
+        raw_results = NULL,
+        summary     = data.frame(skipped = TRUE, n_cells = n_cells)
+      )
+      next
+    }
+    
+    # pull the metadata we need once
+    ct_meta <- ct_cells@meta.data %>%
+      dplyr::select(genotype, cycling) %>%
+      tibble::rownames_to_column("barcode")
+    
+    # storage for this stage x cell type across bootstraps
+    raw_boot_list <- vector("list", N_BOOTSTRAPS)
+    
+    for (b in seq_len(N_BOOTSTRAPS)) {
+      
+      # ---- 1. assign pseudo-replicates (separately per genotype) -------------
+      pseudo_reps <- assign_pseudo_replicates(
+        meta_subset = ct_meta,
+        n_reps      = N_PSEUDOREPS,
+        genotypes   = genotypes
+      )
+      
+      ct_meta$pseudo_rep <- pseudo_reps
+      
+      # keep only cells that received a pseudo-replicate label (balanced set)
+      meta_boot <- ct_meta %>%
+        dplyr::filter(!is.na(pseudo_rep))
+      
+      if (nrow(meta_boot) < (N_PSEUDOREPS * length(genotypes))) {
+        raw_boot_list[[b]] <- NULL
+        next
+      }
+      
+      # ---- 2. run propeller --------------------------------------------------
+      prop_result <- tryCatch(
+        {
+          speckle::propeller(
+            clusters  = meta_boot$cycling,        # cycling vs not_cycling
+            sample    = meta_boot$pseudo_rep,     # pseudo-replicates
+            group     = meta_boot$genotype,       # testing control vs ko
+            transform = "asin"
+          )
+        },
+        error = function(e) {
+          message(glue::glue("    Bootstrap {b} failed: {conditionMessage(e)}"))
+          NULL
+        }
+      )
+      
+      if (!is.null(prop_result)) {
+        # tag which bootstrap this came from
+        prop_result$bootstrap_id <- b
+        prop_result$stage        <- stg
+        prop_result$cell_type    <- ct
+      }
+      
+      raw_boot_list[[b]] <- prop_result
+      
+    } # end bootstrap loop
+    
+    # ---- 3. compile raw results and append summary --------------------------
+    
+    # bind all non-null bootstrap results into one data frame
+    raw_results_df <- dplyr::bind_rows(
+      Filter(Negate(is.null), raw_boot_list)
+    )
+    
+    # summary across bootstraps (per cycling category row returned by propeller)
+    summary_df <- raw_results_df %>%
+      dplyr::group_by(BaselineProp.clusters) %>%    # propeller row = cycling level
+      dplyr::summarise(
+        n_bootstraps_run       = dplyr::n(),
+        n_bootstraps_sig_fdr05 = sum(FDR < 0.05,      na.rm = TRUE),
+        prop_sig_fdr05         = mean(FDR < 0.05,     na.rm = TRUE),
+        median_FDR             = median(FDR,           na.rm = TRUE),
+        median_PropRatio       = median(PropRatio,     na.rm = TRUE),
+        CI_FDR_lower           = quantile(FDR, 0.025, na.rm = TRUE),
+        CI_FDR_upper           = quantile(FDR, 0.975, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      dplyr::mutate(
+        stage     = stg,
+        cell_type = ct
+      )
+    
+    # store in the named list
+    bootstrap_results_genotype[[stg]][[ct]] <- list(
+      raw_results = raw_results_df,
+      summary     = summary_df
+    )
+    
+    message(glue::glue(
+      "    Done. {nrow(raw_results_df)} propeller results stored across bootstraps."
+    ))
+    
+  } # end cell type loop
+  
+} # end stage loop
+
+message("\nAll bootstraps complete.")
+```
+
+```{r bootstrap-save-genotype}
+# save the full named list to disk
+saveRDS(
+  bootstrap_results_genotype,
+  file = file.path(out_dir, "bootstrap_propeller_cycling_genotype_results.rds")
+)
+
+message(glue::glue("Results saved to: {out_dir}"))
+```
+
+```{r bootstrap-quick-peek-genotype}
+# quick sanity check — peek at one combination
+example_stg <- stages[1]
+example_ct  <- celltypes[1]
+
+message(glue::glue("Preview: {example_stg} / {example_ct}"))
+
+# summary table
+print(bootstrap_results_genotype[[example_stg]][[example_ct]]$summary)
+
+# first few rows of raw results
+head(bootstrap_results_genotype[[example_stg]][[example_ct]]$raw_results)
+```
+
+# Visualise bootstrap results
+
+```{r extract-raw-results-genotype}
+# extract and combine all raw results into a single long data frame
+all_raw_results_genotype <- purrr::map_dfr(
+  stages, function(stg) {
+    purrr::map_dfr(
+      celltypes, function(ct) {
+        res <- bootstrap_results_genotype[[stg]][[ct]]$raw_results
+        if (is.null(res)) return(NULL)
+        res
+      }
+    )
+  }
+)
+
+# ensure cell_type and BaselineProp.clusters are factors for consistent plotting
+all_raw_results_genotype <- all_raw_results_genotype %>%
+  dplyr::mutate(
+    cell_type             = factor(cell_type, levels = celltypes),
+    BaselineProp.clusters = factor(
+      BaselineProp.clusters,
+      levels = c("not_cycling", "cycling")
+    )
+  )
+
+# quick sanity check
+glimpse(all_raw_results_genotype)
+
+summary_table_genotype <- all_raw_results_genotype %>%
+  dplyr::group_by(
+    BaselineProp.clusters,
+    stage,
+    cell_type
+  ) %>%
+  dplyr::summarise(
+    n_bootstraps     = dplyr::n(),
+    mean_PropRatio   = mean(PropRatio, na.rm = TRUE),
+    median_PropRatio = median(PropRatio, na.rm = TRUE),
+    sd_PropRatio     = sd(PropRatio, na.rm = TRUE),
+    CI_lower         = quantile(PropRatio, 0.025, na.rm = TRUE),
+    CI_upper         = quantile(PropRatio, 0.975, na.rm = TRUE),
+    mean_log2PR      = mean(log2(PropRatio), na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r plot-pvalue-boxplots-genotype, fig.width = 10, fig.height = 5}
+
+bootstrap_theme <- theme_bw() +
+  theme(
+    strip.background   = element_rect(fill = "grey92", colour = "grey70"),
+    strip.text         = element_text(size = 11, face = "bold"),
+    axis.title         = element_text(size = 11),
+    axis.text.x        = element_text(size = 10),
+    axis.text.y        = element_text(size = 10),
+    legend.title       = element_text(size = 11),
+    legend.text        = element_text(size = 10),
+    legend.position    = "bottom",
+    panel.grid.major.x = element_blank()
+  )
+
+# shared plot builder function
+make_bootstrap_plot <- function(data, title) {
+  
+  ggplot(
+    data,
+    aes(
+      x    = cell_type,
+      y    = log2(PropRatio),
+      fill = BaselineProp.clusters
+    )
+  ) +
+    
+    ggdist::stat_halfeye(
+      adjust        = 0.7,
+      width         = 0.6,
+      justification = -0.2,
+      .width        = c(0.5, 0.95),
+      point_colour  = NA,
+      alpha         = 0.8,
+      position      = position_dodge(width = 0.7)
+    ) +
+    
+    # ggdist::stat_dots(
+    #   aes(group = BaselineProp.clusters),
+    #   side          = "left",
+    #   justification = 1.1,
+    #   binwidth      = 0.05,
+    #   alpha         = 0.75,
+    #   dotsize       = 0.25,
+    #   position      = position_dodge(width = 0.7)
+    # ) +
+    
+    scale_fill_manual(
+      values = c(
+        "cycling"     = "#E69F00",
+        "not_cycling" = "#56B4E9"
+      ),
+      labels = c(
+        "cycling"     = "Cycling",
+        "not_cycling" = "Not cycling"
+      ),
+      name = "Cell cycle state"
+    ) +
+    
+    geom_hline(
+      yintercept = 0,
+      linetype   = "dashed",
+      colour     = "red"
+    ) +
+    
+    labs(
+      title = title,
+      x     = "Cell type",
+      y     = expression(Log[2]~"Proportion Ratio (100 bootstraps)")
+    ) +
+    
+    bootstrap_theme
+}
+
+# ---- e11 figure -------------------------------------------------------------
+p_e11 <- all_raw_results_genotype %>%
+  dplyr::filter(stage == "e11") %>%
+  make_bootstrap_plot(
+    title = "Bootstrap propeller proportions — e11 (Mib1-KO vs Control)"
+  )
+
+# save the figure
+ggsave(plot = p_e11, filename = file.path(out_dir, "bootstrap_genotype_e11.png"))
+
+# ---- e12 figure -------------------------------------------------------------
+p_e12 <- all_raw_results_genotype %>%
+  dplyr::filter(stage == "e12") %>%
+  make_bootstrap_plot(
+    title = "Bootstrap propeller proportions — e12 (Mib1-KO vs Control)"
+  )
+# save the figure
+ggsave(plot = p_e12, filename = file.path(out_dir, "bootstrap_genotype_e12.png"))
+
+# ---- display ----------------------------------------------------------------
+p_e11
+p_e12
+```
