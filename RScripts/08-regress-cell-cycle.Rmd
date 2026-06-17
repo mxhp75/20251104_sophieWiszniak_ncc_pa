@@ -717,10 +717,10 @@ cycling_props <- meta %>%
     .groups = "drop"
   )
 
-ggplot(cycling_props,
-       aes(x = new_celltypes,
-           y = prop_cycling,
-           fill = new_celltypes)) +
+cycle_bar <- ggplot(cycling_props,
+                    aes(x = new_celltypes,
+                        y = prop_cycling,
+                        fill = new_celltypes)) +
   scale_fill_manual(values = celltype_cols) +
   geom_col() +
   facet_wrap(~ orig.ident) +
@@ -735,11 +735,26 @@ ggplot(cycling_props,
     axis.text.x = element_text(angle = 45, hjust = 1),
     panel.grid.major.x = element_blank(),
     legend.position = "right"
-  )
+  ) +
+  
+  geom_text(aes(label = paste0(round(prop_cycling, 2))), 
+            position = position_fill(vjust = 0.2),
+            size = 3.5,
+            color = "white",
+            fontface = "bold")
+
+# save the plot
+ggsave(cycle_bar,
+       filename = file.path(out_dir, "08-cycle_bar.png"),
+       width = 12,
+       height = 8,
+       dpi = 300,
+       bg = "white")
+
 ```
 
 
-# stacked barchart of cycling cells per cell type
+# Stacked barchart of cycling cells per cell type
 
 ```{r}
 
