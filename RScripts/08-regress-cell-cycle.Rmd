@@ -82,10 +82,10 @@ DefaultAssay(re_embed_interesting_cells) <- "RNA"
 
 ```{r}
 celltype_cols <- c("Myocardium" = "#E41A1C",
-                   "VSMC" = "#377EB8", 
-                   "Epicardium" = "#4DAF4A",
-                   "Mesenchyme" = "#984EA3", 
-                   "Endocardium" = "#FF7F00",
+                   "VSMC" = "#984EA3",  
+                   "Epicardium" =  "#FF7F00",
+                   "Mesenchyme" =  "#4DAF4A", 
+                   "Endocardium" = "#377EB8",
                    "Other/Unknown" = "grey70")
 ```
 
@@ -93,6 +93,7 @@ celltype_cols <- c("Myocardium" = "#E41A1C",
 
 ```{r}
 print(re_embed_interesting_cells)
+# which ident is currently active
 table(Idents(re_embed_interesting_cells))
 stopifnot(!anyDuplicated(colnames(re_embed_interesting_cells)))
 ```
@@ -101,7 +102,7 @@ stopifnot(!anyDuplicated(colnames(re_embed_interesting_cells)))
 ## cell cycle genes -> ridge plots
 
 ```{r}
-# set active identity to cell cycle
+# set active identity to cell cycle phase
 Idents(re_embed_interesting_cells) <- "Phase"
 
 # Visualize the distribution of cell cycle markers across
@@ -496,6 +497,30 @@ re_embed_interesting_cells$Phase <- factor(
   levels = c("G1", "G2M", "S")  # match the order in phase_cols exactly
 )
 
+## collapse the S and G2M phase allocations
+re_embed_interesting_cells[[]] <- re_embed_interesting_cells[[]] %>%
+  dplyr::mutate(
+    cycling = dplyr::if_else(
+      Phase %in% c("S", "G2M"),
+      "cycling",
+      "not_cycling"
+    )
+  )
+
+# quick sanity check
+table(re_embed_interesting_cells$Phase,
+      re_embed_interesting_cells$cycling)
+  #     cycling not_cycling
+  # G1        0       12436
+  # G2M    5796           0
+  # S      6095           0
+
+# lets make these a factor so they always plot in the same order
+re_embed_interesting_cells$cycling <- factor(
+  re_embed_interesting_cells$cycling,
+  levels = c("not_cycling", "cycling")
+)
+
 ############################################
 ## 5. Make the plot
 ############################################
@@ -679,46 +704,40 @@ ggsave(scatter_cycle_score_dist,
 
 ```
 
-# collapse cell cycle phase
+# Bar chart of cycling cell proportion
 
 ```{r}
-## collapse the S and G2M phase allocations
-re_embed_interesting_cells[[]] <- re_embed_interesting_cells[[]] %>%
-  dplyr::mutate(
-    cycling = dplyr::if_else(
-      Phase %in% c("S", "G2M"),
-      "cycling",
-      "not_cycling"
-    )
+meta <- re_embed_interesting_cells@meta.data
+
+cycling_props <- meta %>%
+  group_by(orig.ident, new_celltypes) %>%
+  summarise(
+    prop_cycling = mean(cycling == "cycling"),
+    n_cells = n(),
+    .groups = "drop"
   )
 
-# quick sanity check
-table(re_embed_interesting_cells$Phase,
-      re_embed_interesting_cells$cycling)
-  #     cycling not_cycling
-  # G1        0       12436
-  # G2M    5796           0
-  # S      6095           0
-
-# lets make these a factor so they always plot in the same order
-re_embed_interesting_cells$cycling <- factor(
-  re_embed_interesting_cells$cycling,
-  levels = c("not_cycling", "cycling")
-)
-
-DimPlot(re_embed_interesting_cells,
-        group.by = "cycling",
-        # split.by = "orig.ident",
-        reduction = "umap",
-        label = FALSE,
-        repel = TRUE,
-        label.size = 3) +
-  plot_annotation(
-    title = "Cell Cycle Phase",
-    caption = "Final dataset"
+ggplot(cycling_props,
+       aes(x = new_celltypes,
+           y = prop_cycling,
+           fill = new_celltypes)) +
+  scale_fill_manual(values = celltype_cols) +
+  geom_col() +
+  facet_wrap(~ orig.ident) +
+  labs(title = "Cell Cycle Phase Distribution by Cell Type (full dataset)",
+       subtitle = "Proportion of cycling cells",
+       x = "Cell Type",
+       y = "Proportion of Cells",
+       fill = "Cell Type") +
+  
+  theme_bw(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major.x = element_blank(),
+    legend.position = "right"
   )
-
 ```
+
 
 # stacked barchart of cycling cells per cell type
 
@@ -816,162 +835,6 @@ phase_prop %>%
   arrange(orig.ident, new_celltypes) %>%
   dplyr::mutate(., Percent_cycling = 100-Percent_not_cycling)
 
-
-```
-
-# Test cell cycle proportions
-## Combined cell types
-- pool time points or genotypes to create pseudo biological replicates and test differences in cell type proportions.  
-
-```{r}
-# Q1. Are there differences in the proportion of cells in each cycle phase (G1, S, and G2M)) between the different genotypes?
-propeller_phase_genotype_results <- speckle::propeller(
-  clusters = re_embed_interesting_cells$Phase,           # what you want to test proportions of
-  sample   = re_embed_interesting_cells$orig.ident,      # biological replicates
-  group    = re_embed_interesting_cells$genotype,       # condition of interest
-  transform = "asin")   
-
-# Q2. Are there differences in the proportion of cycling cells (cycling or not-cycling) between the different genotypes?
-propeller_cycling_genotype_results <- speckle::propeller(
-  clusters = re_embed_interesting_cells$cycling,           # what you want to test proportions of
-  sample   = re_embed_interesting_cells$orig.ident,      # biological replicates
-  group    = re_embed_interesting_cells$genotype,       # condition of interest
-  transform = "asin")  
-
-# Q3. Does the developmental stage affect the proportion cell cycle phase (G1, S, and G2M) between timepoints?
-propeller_phase_stage_results <- speckle::propeller(
-  clusters = re_embed_interesting_cells$Phase,           # what you want to test proportions of
-  sample   = re_embed_interesting_cells$orig.ident,      # biological replicates
-  group    = re_embed_interesting_cells$stage,       # condition of interest
-  transform = "asin")   
-
-# Q4. Does the developmental stage affect the proportion of cycling cells (cycling or not-cycling) between timepoints?
-propeller_cycling_stage_results <- speckle::propeller(
-  clusters = re_embed_interesting_cells$cycling,           # what you want to test proportions of
-  sample   = re_embed_interesting_cells$orig.ident,      # biological replicates
-  group    = re_embed_interesting_cells$stage,       # condition of intrest
-  transform = "asin")
-
-
-props_cycling <- speckle::getTransformedProps(
-  re_embed_interesting_cells$cycling, re_embed_interesting_cells$orig.ident,
-  transform="asin")
-barplot(props_cycling$Proportions,
-        col = c("orange","purple"),
-        legend=TRUE, 
-        ylab="Proportions")
-
-props_phase <- speckle::getTransformedProps(
-  re_embed_interesting_cells$Phase, re_embed_interesting_cells$orig.ident,
-  transform="asin")
-barplot(props_phase$Proportions,
-        col = c("G1" = "#1f77b4", "G2M" = "#2ca02c", "S" = "#ff7f0e"),
-        legend=TRUE, 
-        ylab="Proportions")
-
-# par(mfrow=c(1,1))
-# speckle::plotCellTypeMeanVar(props_cycling$Counts)
-# speckle::plotCellTypePropsMeanVar(props_cycling$Counts)
-
-
-```
-
-## Individual cell types
-- Subset each of the cell types and ask the proportion question again for each.  
-- The hope is that this retains cell type specific behaviour that might be masked at the higher level.  
-- Keep in mind that we still can't interpret the p-values because we don't have true biological replicates.  
-
-```{r}
-# make a subset object for each of the cell types
-# collect the cell type names
-cell_types <- unique(re_embed_interesting_cells@meta.data$new_celltypes)
-# create the subset objects
-for (ct in cell_types) {
-  obj_name <- paste0("subset_", ct)
-  
-  assign(
-    obj_name,
-    subset(re_embed_interesting_cells, subset = new_celltypes == ct)
-  )
-}
-
-# testing cell cycle phase % differences between genotypes
-propeller_phase_genotype_results <- lapply(cell_types, function(ct) {
-  
-  sub_obj <- subset(re_embed_interesting_cells, subset = new_celltypes == ct)
-  
-  res <- speckle::propeller(
-    clusters = sub_obj$Phase,
-    sample   = sub_obj$orig.ident,
-    group    = sub_obj$genotype,
-    transform = "asin"
-  )
-  
-  res$cell_type <- ct  # keep track of origin
-  
-  return(res)
-})
-
-names(propeller_phase_genotype_results) <- cell_types
-
-# testing cycling vs not-cycling % differences between time genotypes
-propeller_cycling_genotype_results <- lapply(cell_types, function(ct) {
-  
-  sub_obj <- subset(re_embed_interesting_cells, subset = new_celltypes == ct)
-  
-  res <- speckle::propeller(
-    clusters = sub_obj$cycling,
-    sample   = sub_obj$orig.ident,
-    group    = sub_obj$genotype,
-    transform = "asin"
-  )
-  
-  res$cell_type <- ct  # keep track of origin
-  
-  return(res)
-})
-
-names(propeller_cycling_genotype_results) <- cell_types
-
-# testing cell cycle phase % differences between time points
-propeller_phase_stage_results <- lapply(cell_types, function(ct) {
-  
-  sub_obj <- subset(re_embed_interesting_cells, subset = new_celltypes == ct)
-  
-  res <- speckle::propeller(
-    clusters = sub_obj$Phase,
-    sample   = sub_obj$orig.ident,
-    group    = sub_obj$stage,
-    transform = "asin"
-  )
-  
-  res$cell_type <- ct  # keep track of origin
-  
-  return(res)
-})
-
-names(propeller_phase_stage_results) <- cell_types
-
-# testing cycling vs not-cycling % differences between time points
-propeller_cycling_stage_results <- lapply(cell_types, function(ct) {
-  
-  sub_obj <- subset(re_embed_interesting_cells, subset = new_celltypes == ct)
-  
-  res <- speckle::propeller(
-    clusters = sub_obj$cycling,
-    sample   = sub_obj$orig.ident,
-    group    = sub_obj$stage,
-    transform = "asin"
-  )
-  
-  res$cell_type <- ct  # keep track of origin
-  
-  return(res)
-})
-
-names(propeller_cycling_stage_results) <- cell_types
-
-combined_results <- bind_rows(propeller_cycling_stage_results, .id = "cell_type")
 
 ```
 
