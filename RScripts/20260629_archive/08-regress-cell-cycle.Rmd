@@ -59,6 +59,24 @@ if (!dir.exists(out_dir)) {
 
 ```
 
+# Cell cycle gene enrichment mudule gene sets
+- The cell cycle genes aren't stored in the Seurat object according to the original workflow so I will reproduce them here for use in visualisation. Going forward it might be a good idea to store them in `object@misc$s.features <- s.genes` and `object@misc$g2m.features <- g2m.genes` so we have a reporoducible record should the list from Seurat change.  
+
+```{r}
+# this is the function Nick wrote in the initial pre-processing
+# Seurat comes with a set of cell cycle genes but these are human genes derived from the Tirosh et al. 2015 paper (the melanoma single-cell study). We need to convert them to mouse gene symbols before we can use them.
+human_genes_to_mouse <- function(human_genes){
+  hom_data <- homologene::homologene(human_genes, inTax = 9606, outTax = 10090)
+  result <- setNames(hom_data$`10090`, hom_data$`9606`)
+  return(result)
+}
+
+# convert S.Score genes from human to mouse, starting with the 2019 updated gene list
+s.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$s.genes)
+# convert G2M scores from human to mouse, starting with the 2019 updated gene list
+g2m.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$g2m.genes)
+```
+
 # Load required Seurat object
 - Load the final Seurat object as created in `06-cellType_filter.Rmd`. This object is post-QC, post-filtering and has layers for PCA, UMAP etc.  
 - This object contains all 4 samples and has all layers merged.  
@@ -216,9 +234,9 @@ create_pc_heatmap <- function(pc_number, object = re_embed_interesting_cells) {
   }
   
   # Get scaled data
-  scaled_data <- GetAssayData(object, 
-                              assay = "RNA",
-                              slot = "scale.data")[genes_of_interest, ]
+scaled_data <- GetAssayData(object, 
+                            assay = "RNA",
+                            layer = "scale.data")[genes_of_interest, ]
   
   # Cell annotation
   cell_annotation <- data.frame(
@@ -397,17 +415,6 @@ DimPlot(re_embed_interesting_cells,
     title = "Cell Cycle Phase",
     caption = "Final dataset"
   )
-DimPlot(re_embed_interesting_cells,
-        group.by = "seurat_clusters",
-        split.by = "orig.ident",
-        reduction = "umap",
-        label = FALSE,
-        repel = TRUE,
-        label.size = 3) +
-  plot_annotation(
-    title = "Cell Cycle Phase",
-    caption = "Final dataset"
-  )
 
 DimPlot(re_embed_interesting_cells,
         group.by = "new_celltypes",
@@ -422,24 +429,6 @@ DimPlot(re_embed_interesting_cells,
   )
 ```
 
-# Cell cycle gene enrichment mudule gene sets
-- The cell cycle genes aren't stored in the Seurat object according to the original workflow so I will reproduce them here for use in visualisation. Going forward it might be a good idea to store them in `object@misc$s.features <- s.genes` and `object@misc$g2m.features <- g2m.genes` so we have a reporoducible record should the list from Seurat change.  
-
-```{r}
-# this is the function Nick wrote in the initial pre-processing
-# Seurat comes with a set of cell cycle genes but these are human genes derived from the Tirosh et al. 2015 paper (the melanoma single-cell study). We need to convert them to mouse gene symbols before we can use them.
-human_genes_to_mouse <- function(human_genes){
-  hom_data <- homologene::homologene(human_genes, inTax = 9606, outTax = 10090)
-  result <- setNames(hom_data$`10090`, hom_data$`9606`)
-  return(result)
-}
-
-# convert S.Score genes from human to mouse, starting with the 2019 updated gene list
-s.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$s.genes)
-# convert G2M scores from human to mouse, starting with the 2019 updated gene list
-g2m.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$g2m.genes)
-```
-
 # Distribution of cell cycle scores
 
 ```{r}
@@ -447,20 +436,16 @@ g2m.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$g2m.genes)
 ## 1. Calculate % of cells in each phase per sample
 ############################################
 
-phase_prop <- prop.table(
+phase_prop_by_sample <- prop.table(
   table(re_embed_interesting_cells$orig.ident,
         re_embed_interesting_cells$Phase),
   margin = 1
 ) * 100
 
-prop_df <- as.data.frame(phase_prop)
-colnames(prop_df) <- c("orig.ident", "Phase", "Percent")
-
-prop_df <- prop_df %>%
-  mutate(
-    Percent = round(Percent, 1),
-    label = paste0(Percent, "%")
-  )
+prop_df <- as.data.frame(phase_prop_by_sample) %>%
+  setNames(c("orig.ident", "Phase", "Percent")) %>%
+  mutate(Percent = round(Percent, 1),
+         label   = paste0(Percent, "%"))
 
 ############################################
 ## 2. Duplicate for both features (CRITICAL FIX)
@@ -846,7 +831,7 @@ ggsave(phase_prop_bar,
 
 phase_prop %>%
   filter(Phase == "G1") %>%
-  select(orig.ident, new_celltypes, Phase, Percent_not_cycling = Percent, -Phase) %>%
+  select(orig.ident, new_celltypes, Phase, Percent_not_cycling = Percent) %>%
   arrange(orig.ident, new_celltypes) %>%
   dplyr::mutate(., Percent_cycling = 100-Percent_not_cycling)
 
@@ -865,24 +850,142 @@ re_embed_interesting_cells$seurat_clusters_original <- re_embed_interesting_cell
 re_embed_interesting_cells$Phase_original <- re_embed_interesting_cells$Phase
 ```
 
+# Run PCA on the cell cycle genes only
+- let's take a look at the pre-regressed PCA of cell cycle genes. We will use this PCA as a sanity check to see what affect regressing both the difference (S.Score-G2M.Score) and regressing all of cell cycle makes.
+
+```{r}
+# Running a PCA on cell cycle genes reveals, unsurprisingly, that cells separate entirely by
+# phase
+# re_embed_interesting_cells <- RunPCA(
+#   re_embed_interesting_cells,
+#   features = c(s.genes, g2m.genes),
+#   reduction.name = "pca_cc",
+#   reduction.key  = "pcaCC_"
+# )
+# 
+# # then plot it explicitly
+# DimPlot(re_embed_interesting_cells, reduction = "pca_cc") +
+#   labs(title = "PCA cell cycle genes, pre regression of cell cycle difference")
+
+
+cc_genes <- c(s.genes, g2m.genes)
+
+# Run PCA on the cell cycle genes only
+# let's take a look at the pre-regressed PCA of cell cycle genes. We will use this PCA as a 
+# sanity check to see what effect regressing both the difference (S.Score-G2M.Score) and 
+# regressing all of cell cycle makes.
+
+# Ensure CC genes are present in scale.data before running PCA
+# (ScaleData was run on VariableFeatures only, so CC genes may be absent from scale.data)
+# Note: no vars.to.regress here — this does not interfere with the regression workflow
+re_embed_interesting_cells <- ScaleData(
+  re_embed_interesting_cells,
+  features = cc_genes
+  )
+
+# Running a PCA on cell cycle genes reveals, unsurprisingly, that cells separate entirely by phase
+re_embed_interesting_cells <- RunPCA(
+  re_embed_interesting_cells,
+  npcs = 20,
+  features = cc_genes,
+  reduction.name = "pca_cc",
+  reduction.key  = "pcaCC_"
+  )
+
+# Plot coloured by Phase to confirm phase separation pre-regression
+DimPlot(re_embed_interesting_cells, 
+        reduction = "pca_cc",
+        group.by = "Phase") +
+  labs(title = "PCA cell cycle genes, pre regression")
+
+
+```
+
 # Regress cell cycle difference
 
 ```{r}
+
 # Create the difference score (milder regression)
+# taken from https://satijalab.org/seurat/articles/cell_cycle_vignette
 re_embed_interesting_cells$CC.Difference <- re_embed_interesting_cells$S.Score - re_embed_interesting_cells$G2M.Score
 
 # Scale with regression
 DefaultAssay(re_embed_interesting_cells) <- "RNA"  # make sure RNA is the default assay
-
 re_embed_interesting_cells <- ScaleData(re_embed_interesting_cells,
-                                        vars.to.regress = c("CC.Difference"),  # onlu regressing for cell cycle difference
+                                        vars.to.regress = c("CC.Difference"),
                                         features = VariableFeatures(re_embed_interesting_cells))
 
-# Re-run downstream (use same dims/resolution as before, or tune slightly)
-re_embed_interesting_cells <- RunPCA(re_embed_interesting_cells, npcs = 50)
-re_embed_interesting_cells <- FindNeighbors(re_embed_interesting_cells, dims = 1:30)
-re_embed_interesting_cells <- FindClusters(re_embed_interesting_cells, resolution = 0.6)  # your previous choice
-re_embed_interesting_cells <- RunUMAP(re_embed_interesting_cells, dims = 1:30)
+saveRDS(re_embed_interesting_cells,
+        file.path(out_dir, "08-re_embed_cc_diff_regressed.rds"))
+
+# clean up and memory clear
+to_remove <- c("cells_to_plot", "pc_loadings",
+                "top_loadings_pc1", "top_loadings_pc2",
+                "top_loadings_pc3", "top_loadings_pc4")
+rm(list = intersect(to_remove, ls()))
+
+
+# Re-scale CC genes specifically, as they were excluded from VariableFeatures scaling above
+re_embed_interesting_cells <- ScaleData(
+  re_embed_interesting_cells,
+  features = cc_genes,
+  block.size = 500
+)
+
+gc()
+
+# Running a PCA on cell cycle genes post regression of CC difference
+re_embed_interesting_cells <- RunPCA(
+  re_embed_interesting_cells,
+  npcs = 20,
+  features = cc_genes,
+  reduction.name = "pca_cc_diff",
+  reduction.key  = "pcaCC_diff_"
+)
+
+# then plot it explicitly
+DimPlot(re_embed_interesting_cells, reduction = "pca_cc_diff") +
+  labs(title = "PCA cell cycle genes, post regression of cell cycle difference")
+
+
+
+# re_embed_interesting_cells <- FindNeighbors(re_embed_interesting_cells, dims = 1:30)
+# re_embed_interesting_cells <- FindClusters(re_embed_interesting_cells, resolution = 0.6)  # your previous choice
+# re_embed_interesting_cells <- RunUMAP(re_embed_interesting_cells, dims = 1:30)
+```
+
+# Regress all of cell cycle
+
+```{r}
+re_embed_interesting_cells <- ScaleData(re_embed_interesting_cells,
+                                        vars.to.regress = c("S.Score", "G2M.Score"),
+                                        features = VariableFeatures(re_embed_interesting_cells))
+
+# Re-scale CC genes specifically, as they were excluded from VariableFeatures scaling above
+re_embed_interesting_cells <- ScaleData(
+  re_embed_interesting_cells,
+  features = cc_genes,
+  block.size = 500
+)
+
+gc()
+
+# Running a PCA on cell cycle genes post regression of all of cell cycle
+re_embed_interesting_cells <- RunPCA(
+  re_embed_interesting_cells,
+  npcs = 20,
+  features = cc_genes,
+  reduction.name = "pca_cc_all",
+  reduction.key  = "pcaCCall_"
+)
+
+# then plot it explicitly
+DimPlot(re_embed_interesting_cells, reduction = "pca_cc_all") +
+  labs(title = "PCA cell cycle genes, post regression of all of cell cycle")
+
+saveRDS(re_embed_interesting_cells,
+        file.path(out_dir, "08-re_embed_cc_all_regressed.rds"))
+
 ```
 
 # UMAP - colour thing of interest
@@ -908,17 +1011,6 @@ FeaturePlot(re_embed_interesting_cells,
     colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
     name = "Score")
 
-DimPlot(re_embed_interesting_cells,
-        group.by = "seurat_clusters",
-        split.by = "orig.ident",
-        reduction = "umap",
-        label = FALSE,
-        repel = TRUE,
-        label.size = 3) +
-  plot_annotation(
-    title = "Cell Cycle Phase",
-    caption = "Final dataset"
-  )
 DimPlot(re_embed_interesting_cells,
         group.by = "seurat_clusters",
         split.by = "orig.ident",
