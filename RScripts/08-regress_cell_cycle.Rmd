@@ -1,0 +1,766 @@
+---
+title: "Cell Cycle Regression - PCA Comparison"
+author: "Melanie Smith"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+set.seed(42)
+```
+
+# Clean-up environment
+
+```{r clean-environment}
+rm(list = ls(all.names = TRUE))
+gc()
+options(
+  max.print             = .Machine$integer.max,
+  scipen                = 999,
+  stringsAsFactors      = FALSE,
+  dplyr.summarise.inform = FALSE
+)
+set.seed(42)
+```
+
+# Helper functions
+
+```{r helper-functions}
+#' Save a ggplot to file and return the object invisibly
+save_plot <- function(plot, filename, width = 14, height = 8, dpi = 300) {
+  ggsave(
+    plot     = plot,
+    filename = file.path(out_dir, filename),
+    width    = width,
+    height   = height,
+    dpi      = dpi,
+    bg       = "white"
+  )
+  invisible(plot)
+  }
+```
+
+# Load libraries
+
+```{r load-libraries}
+if (!requireNamespace("homologene", quietly = TRUE))
+  stop("Package 'homologene' is not installed. Install with: install.packages('homologene')")
+
+library(tidyverse)
+library(dplyr)
+library(Seurat)
+library(patchwork)
+```
+
+---
+
+# Overview
+
+This script compares the effect of three cell cycle regression strategies on
+PCA structure. Each condition is run on an independent copy of the Seurat
+object so that no scaling or regression from one condition can carry over to
+another.
+
+1. **No regression** — baseline; cell cycle scores are not regressed
+2. **CC.Difference regression** — regress `S.Score - G2M.Score`; retains the
+   broad cycling vs. quiescent signal but removes S vs. G2M phase noise among
+   proliferating cells
+3. **Full CC regression** — regress `S.Score` and `G2M.Score` independently;
+   intended to attenuate most cell-cycle-associated variation, though residual
+   CC structure often remains
+
+For each condition two PCAs are computed:
+
+- **Variable-feature PCA** — uses `VariableFeatures(seu)`; shows how CC
+  regression affects transcriptome-wide structure
+- **CC-gene PCA** — uses CC genes only; a sensitive direct readout of residual
+  cell-cycle structure after each regression strategy
+
+Both PCAs within a condition are computed from a single `ScaleData()` call
+that covers the union of variable features and CC genes, ensuring both draw
+from the same consistently-regressed `scale.data` slot.
+
+---
+
+# Set project directories
+
+```{r set-directories}
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+out_dir          <- file.path(project_repo_dir, "outDir", "08-regress-cell-cycle")
+
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir, recursive = TRUE)
+}
+```
+
+# Cell cycle gene sets (mouse)
+
+Cell cycle gene lists are re-derived here from `cc.genes.updated.2019` via
+human → mouse ortholog conversion. This is the same conversion used in the
+upstream pre-processing script.
+
+```{r cc-gene-sets}
+human_genes_to_mouse <- function(human_genes) {
+  hom_data <- homologene::homologene(human_genes, inTax = 9606, outTax = 10090)
+  setNames(hom_data$`10090`, hom_data$`9606`)
+}
+
+s_genes   <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$s.genes)
+g2m_genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$g2m.genes)
+cc_genes  <- c(s_genes, g2m_genes)
+
+cat("S-phase genes retained: ",   length(s_genes),   "\n")
+cat("G2M-phase genes retained: ", length(g2m_genes), "\n")
+cat("Total CC genes: ",           length(cc_genes),  "\n")
+```
+
+# Load Seurat object
+
+Load the final Seurat object from `06-cluster_marker_genes`. This object is
+post-QC, post-filtering, and has been run through `CellCycleScoring()`.
+
+```{r load-object}
+seu_base <- readRDS(
+  file.path(project_repo_dir, "outDir", "06-cluster_marker_genes",
+            "final_interesting_cells_0.6.rds")
+)
+stopifnot(inherits(seu_base, "Seurat"))
+stopifnot("new_celltypes" %in% colnames(seu_base@meta.data))
+stopifnot(all(c("S.Score", "G2M.Score", "Phase") %in% colnames(seu_base@meta.data)))
+
+# Ensure RNA is the active assay
+DefaultAssay(seu_base) <- "RNA"
+
+# Derive CC.Difference score (S - G2M)
+seu_base$CC.Difference <- seu_base$S.Score - seu_base$G2M.Score
+
+cat("Cells: ", ncol(seu_base), "\n")
+cat("Samples: "); print(table(seu_base$orig.ident))
+cat("Phase distribution: "); print(table(seu_base$Phase))
+```
+
+# Gene sets for scaling
+
+Compute the union of variable features and CC genes once. This single set is
+passed to every `ScaleData()` call so that both the variable-feature PCA and
+the CC-gene PCA within each condition draw from the same `scale.data` slot.
+
+```{r gene-sets-for-scaling}
+cc_genes_present  <- cc_genes[cc_genes %in% rownames(seu_base)]
+all_genes_to_scale <- union(VariableFeatures(seu_base), cc_genes_present)
+
+cat("Variable features: ",         length(VariableFeatures(seu_base)), "\n")
+cat("CC genes present in object: ", length(cc_genes_present),          "\n")
+cat("Total genes to scale: ",       length(all_genes_to_scale),        "\n")
+
+# Guard: ensure enough CC genes survive for the requested npcs
+npcs_cc <- min(20L, length(cc_genes_present) - 1L)
+cat("npcs for CC-gene PCA: ", npcs_cc, "\n")
+```
+
+# Colours
+
+```{r colours}
+celltype_cols <- c(
+  "Myocardium"    = "#E41A1C",
+  "VSMC"          = "#984EA3",
+  "Epicardium"    = "#FF7F00",
+  "Mesenchyme"    = "#4DAF4A",
+  "Endocardium"   = "#377EB8",
+  "Other/Unknown" = "grey70"
+)
+
+phase_cols <- c(
+  "G1"  = "#1f77b4",
+  "S"   = "#ff7f0e",
+  "G2M" = "#2ca02c"
+)
+```
+
+# Base model
+## Plots
+
+```{r}
+
+# The object we are starting with here "seu_base" has been scaled, find neighbours, find clusters and run PCA previously so these slots are all populated
+
+# Let's take a look at the existing PCs
+model <- "Base "
+cells <- " all genes "
+coloured_by <- " coloured by cell cycle phase"
+dims = c(1, 2, 3, 4)
+
+# plot PC1&2 on the base object
+DimPlot(seu_base,
+        reduction = "pca",
+        group.by = "Phase",
+        dims = c(1, 2),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+      labs(
+      title    = paste0(model, "-", cells, "-", coloured_by),
+      subtitle = paste0("PC", dims[1], " vs PC", dims[2])
+    ) +
+  scale_colour_manual(values = phase_cols) +
+  theme(legend.position = "bottom")
+
+# plot PC1&2 on the base object
+coloured_by <- " coloured by cell type"
+
+DimPlot(seu_base,
+        reduction = "pca",
+        group.by = "new_celltypes",
+        dims = c(3, 4),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+      labs(
+      title    = paste0(model, "-", cells, "-", coloured_by),
+      subtitle = paste0("PC", dims[3], " vs PC", dims[4])
+    ) +
+  scale_colour_manual(values = celltype_cols) +
+  theme(legend.position = "bottom")
+
+# plot PC3&4 on the base object
+DimPlot(seu_base,
+        reduction = "pca",
+        group.by = "Phase",
+        dims = c(3, 4),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+        labs(
+      title    = paste0(model, "-", cells, "-", coloured_by),
+      subtitle = paste0("PC", dims[3], " vs PC", dims[4])
+    ) +
+  scale_colour_manual(values = phase_cols) +
+    theme(legend.position = "bottom")
+
+# Running a PCA on cell cycle genes pre regression of cell cycle. This will help us to see the shape of the data using only he cell cycle genes. We create a new slot for loadings using the reduction.name option. The reduction.key option will be used on the plot axis.
+seu_cc_only <- RunPCA(
+  seu_base,
+  npcs = 20,
+  features = cc_genes,
+  reduction.name = "pca_cc_only",
+  reduction.key  = "pcaCConly_"
+  )
+
+model <- "Base "
+genes <- " cell cycle genes "
+coloured_by <- " coloured by cell cycle phase"
+dims = c(1, 2, 3, 4)
+
+# we can then plot this PCA reduction explicitly - this will plot cells in position based only on the cell cycle genes we included in the PCA calculation
+DimPlot(seu_cc_only,
+        reduction = "pca_cc_only",
+        group.by = "Phase",
+        dims = c(1, 2),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+          labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[1], " vs PC", dims[2])
+    ) +
+  scale_colour_manual(values = phase_cols) +
+    theme(legend.position = "bottom")
+
+DimPlot(seu_cc_only,
+        reduction = "pca_cc_only",
+        group.by = "new_celltypes",
+        dims = c(1, 2),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+          labs(
+      title    = paste0(model, "-", genes, "-", "cell types"),
+      subtitle = paste0("PC", dims[1], " vs PC", dims[2])
+    ) +
+  scale_colour_manual(values = celltype_cols) +
+    theme(legend.position = "bottom")
+
+
+# Running a PCA on highly variable genes pre regression of cell cycle. This let's us see the structure based on only the highly variable genes, some of which are also cc genes. This brings us closer to the structure of the full dataset.
+seu_var_only <- RunPCA(
+  seu_base,
+  npcs = 20,
+  features = VariableFeatures(seu_base),
+  reduction.name = "pca_var_only",
+  reduction.key  = "pcaVARonly_"
+  )
+
+# then plot the variable genes reduction explicitly - this will plot cells in position based only on the highly variable genes we included in the PCA calculation
+
+genes <- " highly variable genes "
+
+DimPlot(seu_var_only,
+        reduction = "pca_var_only",
+        group.by = "Phase",
+        dims = c(1, 2),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+            labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[1], " vs PC", dims[2])
+    ) +
+  scale_colour_manual(values = phase_cols) +
+    theme(legend.position = "bottom")
+
+gc()
+
+```
+
+# Regress the CC.difference
+
+```{r}
+# we can remove the affect of cycling v not-cycling by regressing out the difference between S.Score and G2M.Score.
+# on the PCA plot we would expect to see G1 (ie not-cycling) to be stand alone and S and G2M (ie cycling) to be overlapping
+
+# calcuate the difference and add to the seurat object
+seu_base$CC.Difference <- seu_base$S.Score - seu_base$G2M.Score
+
+# Scale with regression
+DefaultAssay(seu_base) <- "RNA"  # make sure RNA is the default assay
+# regress the entire datasert on the CC.Difference metric
+seu_regress_diff <- ScaleData(seu_base,
+                              vars.to.regress = c("CC.Difference"),
+                              features = rownames(seu_base))
+
+# run PCA on only the cell cycle genes
+seu_regress_diff <- RunPCA(
+  seu_regress_diff,
+  npcs = 20,
+  features = cc_genes,
+  reduction.name = "pca_cc_only",
+  reduction.key  = "pcaCConly_"
+  )
+
+model <- "Regress difference "
+genes <- " cell cycle genes "
+coloured_by <- " coloured by cell cycle phase"
+dims = c(1, 2, 3, 4)
+
+# plot the PCA calculated on only the cc genes
+DimPlot(seu_regress_diff,
+        reduction = "pca_cc_only",
+        group.by = "Phase",
+        dims = c(1, 2),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                    labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[1], " vs PC", dims[2])
+    ) +
+  scale_colour_manual(values = phase_cols) +
+    theme(legend.position = "bottom")
+
+DimPlot(seu_regress_diff,
+        reduction = "pca_cc_only",
+        group.by = "Phase",
+        dims = c(3, 4),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                      labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[3], " vs PC", dims[4])
+    ) +
+  scale_colour_manual(values = phase_cols) +
+    theme(legend.position = "bottom")
+```
+
+## Plots
+
+```{r}
+# run PCA on only the highly variable genes
+seu_regress_diff <- RunPCA(
+  seu_regress_diff,
+  npcs = 20,
+  features = VariableFeatures(seu_regress_diff),
+  reduction.name = "pca_VF_only",
+  reduction.key  = "pcaVFonly_"
+  )
+
+model <- "Regress difference "
+genes <- " highly variable genes "
+coloured_by <- " coloured by cell cycle phase"
+dims = c(1, 2, 3, 4)
+
+# plot the PCA calculated on only the cc genes
+DimPlot(seu_regress_diff,
+        reduction = "pca_VF_only",
+        group.by = "Phase",
+        dims = c(1, 2),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                      labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[1], " vs PC", dims[2])
+    ) +
+  scale_colour_manual(values = phase_cols) +
+    theme(legend.position = "bottom")
+
+DimPlot(seu_regress_diff,
+        reduction = "pca_VF_only",
+        group.by = "Phase",
+        dims = c(3, 4),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                        labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[3], " vs PC", dims[4])
+    ) +
+  scale_colour_manual(values = phase_cols) +
+    theme(legend.position = "bottom")
+```
+
+```{r}
+model <- "Regress difference "
+genes <- " highly variable genes "
+coloured_by <- " coloured by cell type"
+dims = c(1, 2, 3, 4)
+
+# plot the PCA calculated on only the cc genes
+DimPlot(seu_regress_diff,
+        reduction = "pca_VF_only",
+        group.by = "new_celltypes",
+        dims = c(1, 2),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                      labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[1], " vs PC", dims[2])
+    ) +
+  scale_colour_manual(values = celltype_cols) +
+    theme(legend.position = "bottom")
+
+DimPlot(seu_regress_diff,
+        reduction = "pca_VF_only",
+        group.by = "new_celltypes",
+        dims = c(3, 4),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                        labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[3], " vs PC", dims[4])
+    ) +
+  scale_colour_manual(values = celltype_cols) +
+    theme(legend.position = "bottom")
+```
+
+```{r}
+# run PCA on only the cell cycle genes
+seu_regress_diff <- RunPCA(
+  seu_regress_diff,
+  npcs = 20,
+  features = rownames(seu_regress_diff),
+  reduction.name = "pca_all_genes",
+  reduction.key  = "pcaAllGenes_"
+  )
+
+```
+
+```{r}
+
+model <- "Regress the difference "
+genes <- " all genes "
+coloured_by <- " coloured by cell cycle phase"
+dims = c(1, 2, 3, 4)
+
+# plot the PCA calculated on only the cc genes
+DimPlot(seu_regress_diff,
+        reduction = "pca_all_genes",
+        group.by = "Phase",
+        dims = c(1, 2),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                      labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[1], " vs PC", dims[2])
+    ) +
+  scale_colour_manual(values = phase_cols) +
+    theme(legend.position = "bottom")
+
+DimPlot(seu_regress_diff,
+        reduction = "pca_all_genes",
+        group.by = "Phase",
+        dims = c(3, 4),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                        labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[3], " vs PC", dims[4])
+    ) +
+  scale_colour_manual(values = phase_cols) +
+    theme(legend.position = "bottom")
+```
+
+```{r}
+
+model <- "Regress the difference "
+genes <- " all genes "
+coloured_by <- " coloured by cell type"
+dims = c(1, 2, 3, 4)
+
+# plot the PCA calculated on only the cc genes
+DimPlot(seu_regress_diff,
+        reduction = "pca_all_genes",
+        group.by = "new_celltypes",
+        dims = c(1, 2),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                      labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[1], " vs PC", dims[2])
+    ) +
+  scale_colour_manual(values = celltype_cols) +
+    theme(legend.position = "bottom")
+
+DimPlot(seu_regress_diff,
+        reduction = "pca_all_genes",
+        group.by = "new_celltypes",
+        dims = c(3, 4),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                        labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[3], " vs PC", dims[4])
+    ) +
+  scale_colour_manual(values = celltype_cols) +
+    theme(legend.position = "bottom")
+```
+
+# Regress all cell cycle score
+
+```{r}
+# Now that we have a good unserstanding of the shape of our data 
+# Regress cell cycle score
+seu_regress_all_cc <- ScaleData(seu_base,
+                                vars.to.regress = c("S.Score", "G2M.Score"),
+                                features = rownames(seu_base))
+
+# run PCA on only the cell cycle genes
+seu_regress_all_cc <- RunPCA(
+  seu_regress_all_cc,
+  npcs = 20,
+  features = cc_genes,
+  reduction.name = "pca_cc_only",
+  reduction.key  = "pcaCConly_"
+  )
+
+model <- "Regress all "
+genes <- " cell cycle genes "
+coloured_by <- " coloured by cell cycle phase"
+dims = c(1, 2, 3, 4)
+
+```
+
+## Plots
+
+```{r}
+# plot the PCA calculated on only the cc genes
+DimPlot(seu_regress_all_cc,
+        reduction = "pca_cc_only",
+        group.by = "Phase",
+        dims = c(1, 2),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+              labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[1], " vs PC", dims[2])
+    ) +
+  scale_colour_manual(values = phase_cols) +
+    theme(legend.position = "bottom")
+
+DimPlot(seu_regress_all_cc,
+        reduction = "pca_cc_only",
+        group.by = "Phase",
+        dims = c(3, 4),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+              labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[3], " vs PC", dims[4])
+    ) +
+  scale_colour_manual(values = phase_cols) +
+    theme(legend.position = "bottom")
+
+```
+
+```{r}
+# run PCA on the highly variable genes
+seu_regress_all_cc <- RunPCA(
+  seu_regress_all_cc,
+  npcs = 20,
+  features = VariableFeatures(seu_regress_all_cc),
+  reduction.name = "pca_VF_only",
+  reduction.key  = "pcaVFonly_"
+  )
+
+model <- "Regress all "
+genes <- " highly variable genes "
+coloured_by <- " coloured by cell cycle phase"
+dims = c(1, 2, 3, 4)
+
+# plot the PCA calculated on only the cc genes
+DimPlot(seu_regress_all_cc,
+        reduction = "pca_VF_only",
+        group.by = "Phase",
+        dims = c(1, 2),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[1], " vs PC", dims[2])
+    ) +
+  scale_colour_manual(values = phase_cols) +
+    theme(legend.position = "bottom")
+
+DimPlot(seu_regress_all_cc,
+        reduction = "pca_VF_only",
+        group.by = "Phase",
+        dims = c(3, 4),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                  labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[3], " vs PC", dims[4])
+    ) +
+  scale_colour_manual(values = phase_cols) +
+    theme(legend.position = "bottom")
+
+coloured_by <- " coloured by cell type"
+
+DimPlot(seu_regress_all_cc,
+        reduction = "pca_VF_only",
+        group.by = "new_celltypes",
+        dims = c(1, 2),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[1], " vs PC", dims[2])
+    ) +
+  scale_colour_manual(values = celltype_cols) +
+    theme(legend.position = "bottom")
+
+DimPlot(seu_regress_all_cc,
+        reduction = "pca_VF_only",
+        group.by = "new_celltypes",
+        dims = c(3, 4),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[3], " vs PC", dims[4])
+    ) +
+  scale_colour_manual(values = celltype_cols) +
+    theme(legend.position = "bottom")
+```
+
+```{r}
+# run PCA on the all genes
+seu_regress_all_cc <- RunPCA(
+  seu_regress_all_cc,
+  npcs = 20,
+  features = rownames(seu_regress_all_cc),
+  reduction.name = "pca_all_genes",
+  reduction.key  = "pcaALLonly_"
+  )
+
+model <- "Regress all "
+genes <- " all genes "
+coloured_by <- " coloured by cell cycle phase"
+dims = c(1, 2, 3, 4)
+
+# plot the PCA calculated on only the cc genes
+DimPlot(seu_regress_all_cc,
+        reduction = "pca_all_genes",
+        group.by = "Phase",
+        dims = c(1, 2),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                  labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[1], " vs PC", dims[2])
+    ) +
+  scale_colour_manual(values = phase_cols) +
+    theme(legend.position = "bottom")
+
+DimPlot(seu_regress_all_cc,
+        reduction = "pca_all_genes",
+        group.by = "Phase",
+        dims = c(3, 4),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                    labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[3], " vs PC", dims[4])
+    ) +
+  scale_colour_manual(values = phase_cols) +
+    theme(legend.position = "bottom")
+```
+
+```{r}
+
+model <- "Regress all "
+genes <- " all genes "
+coloured_by <- " coloured by cell type"
+dims = c(1, 2, 3, 4)
+
+# plot the PCA calculated on only the cc genes
+DimPlot(seu_regress_all_cc,
+        reduction = "pca_all_genes",
+        group.by = "new_celltypes",
+        dims = c(1, 2),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                  labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[1], " vs PC", dims[2])
+    ) +
+  scale_colour_manual(values = celltype_cols) +
+    theme(legend.position = "bottom")
+
+# plot the PCA calculated on only the cc genes
+DimPlot(seu_regress_all_cc,
+        reduction = "pca_all_genes",
+        group.by = "new_celltypes",
+        dims = c(3, 4),
+        label = TRUE,
+        repel = TRUE,
+        label.size = 4) +
+                  labs(
+      title    = paste0(model, "-", genes, "-", coloured_by),
+      subtitle = paste0("PC", dims[3], " vs PC", dims[4])
+    ) +
+  scale_colour_manual(values = celltype_cols) +
+    theme(legend.position = "bottom")
+```
+
