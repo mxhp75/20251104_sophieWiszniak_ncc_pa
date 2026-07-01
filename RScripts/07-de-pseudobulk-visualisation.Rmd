@@ -1,0 +1,151 @@
+---
+title: "07-de-pseudobulk-visualisation-heatmap"
+author: "Melanie Smith"
+date: "2026-06-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(purrr)
+
+# Bulk RNAseq
+library(edgeR)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+
+library(SingleCellExperiment)
+library(biomaRt)
+library(scuttle)
+
+# additional plotting functions
+library(patchwork)
+library(pheatmap)
+```
+
+# Set project directories and file paths
+
+```{r}
+project_name <- "20251104_sophieWiszniak_ncc_pa"
+
+base_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak"
+project_repo_dir <- file.path(base_repo_dir, project_name)
+data_base_dir <- file.path(project_repo_dir, "rawData")
+
+out_dir <- file.path(project_repo_dir, "outDir", "07-gene_expression_de_genotype")
+# Create directory if it doesn't exist
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir, recursive = TRUE)
+}
+```
+
+# Load required objects
+
+```{r}
+# load the full seurat object
+re_embed_interesting_cells <- readRDS(file.path(project_repo_dir, "outDir", "06-cluster_marker_genes", "final_interesting_cells_0.6.rds"))
+
+# Find all DE result files
+files <- list.files(
+  path = out_dir,
+  pattern = "_de_results\\.csv$",
+  full.names = TRUE
+  )
+
+# Read them all into a named list
+de_results <- files %>%
+  setNames(basename(files) %>%
+             sub("_de_results\\.csv$", "", x = _)) %>%
+  map(read_csv)
+
+```
+
+# Perform Pseudobulking
+
+```{r perform-pseudobulk}
+# perform pseudobulk
+pb <- AggregateExpression(
+    re_embed_interesting_cells,
+    assays="RNA",
+    return.seurat=FALSE,
+    group.by=c("orig.ident","new_celltypes")
+)
+
+# create the edgeR object
+dge <- edgeR::DGEList(pb$RNA)
+# TMM normaliation
+dge <- edgeR::calcNormFactors(dge, method = "TMM")
+# Log2 CPM
+logCPM <- cpm(
+    dge,
+    log = TRUE,
+    prior.count = 1
+    )
+```
+
+# Generate DE heatmaps for each cell type
+
+```{r generate-heatmap}
+for (comparison_name in names(de_results)) {
+  
+  parts     <- str_match(comparison_name, "^(.+)_(e\\d+)_KO_vs_control$")
+  celltype  <- parts[, 2]
+  timepoint <- parts[, 3]
+  
+  control_col <- paste0(timepoint, ".control_", celltype)
+  ko_col      <- paste0(timepoint, ".ko_",      celltype)
+  
+  # stopifnot(all(c(control_col, ko_col) %in% colnames(logCPM)))
+  
+  temp <- de_results[[comparison_name]] %>%
+    dplyr::filter(p_val_adj < 0.05)
+  
+  gene_matrix <- data.frame(logCPM, check.names = TRUE) %>%
+    tibble::rownames_to_column("gene") %>%
+    dplyr::select(gene, dplyr::all_of(control_col), dplyr::all_of(ko_col)) %>%
+    dplyr::right_join(temp, by = "gene") %>%
+    tibble::column_to_rownames("gene")
+  
+  p <- pheatmap(
+    dplyr::select(gene_matrix, dplyr::all_of(control_col), dplyr::all_of(ko_col)),
+    cluster_rows = TRUE,
+    cluster_cols = FALSE,
+    main         = paste0(timepoint, " KO vs control - ", celltype),
+    silent       = TRUE
+  )
+  
+  ggsave(
+    filename = file.path(out_dir, paste0("07-heatmap_", comparison_name, ".png")),
+    plot     = p,
+    width    = 8,
+    height   = 10,
+    dpi      = 300,
+    bg       = "white"
+  )
+  }
+
+```
