@@ -1,0 +1,213 @@
+---
+title: "Dreamlet analysis of scRNAseq"
+author: "Melanie Smith"
+date: "2026-07-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr's "grouped output" informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load required libraries
+
+```{r}
+# if (!require("BiocManager", quietly = TRUE)) {
+#   install.packages("BiocManager")
+# }
+
+# BiocManager::install("dreamlet")
+
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Core single cell
+library(Seurat)
+library(SingleCellExperiment)
+library(dreamlet)
+
+# additional plotting functions
+library(patchwork)
+library(pheatmap)
+library(ggExtra)
+```
+
+# Set project directories
+
+```{r}
+# set directories
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+data_dir <- file.path(project_repo_dir, "outDir", "06-cluster_marker_genes")
+out_dir <- file.path(project_repo_dir, "outDir", "08-regress-cell-cycle")
+
+# Create directory if it doesn't exist
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir,
+             recursive = TRUE)
+}
+```
+
+# Load required Seurat object
+- Load the final Seurat object as created in `06-cellType_filter.Rmd`. This object is post-QC, post-filtering and has layers for PCA, UMAP etc.  
+- This object contains all 4 samples and has all layers merged.  
+
+```{r}
+# read in the complete Seurat object
+re_embed_interesting_cells <- readRDS(file.path(data_dir, "final_interesting_cells_0.6.rds"))
+# sanity check to ensure this is a Seurat object
+stopifnot(inherits(re_embed_interesting_cells, "Seurat"))
+
+# ensure "seurat_cluster" is the current identity
+Idents(re_embed_interesting_cells) <- "seurat_clusters"
+# and is a factor
+Idents(re_embed_interesting_cells) <- factor(Idents(re_embed_interesting_cells))
+
+# ensure "RNA" is the default assay
+DefaultAssay(re_embed_interesting_cells) <- "RNA"
+```
+
+# Convert Seurat object to single cell experiment object
+
+```{r}
+# The Dreamlet package prefers to work with a single cell experiment object so we can use the Seurat package to convert
+sce <- Seurat::as.SingleCellExperiment(re_embed_interesting_cells,
+                                       assay = "RNA")
+
+# Calculate mean S.Score and G2M.Score per sample (orig.ident) BEFORE removing the Seurat object
+# This is done here to retain access to cell-level metadata
+cc_means <- aggregate(
+  cbind(S.Score, G2M.Score) ~ orig.ident,
+  data = as.data.frame(colData(sce)),
+  FUN = mean
+)
+rownames(cc_means) <- cc_means$orig.ident
+
+# remove the large Seurat object, we don't need it anymore
+rm(re_embed_interesting_cells)
+# clean up the memory
+gc()
+```
+
+# Aggregate pseudobulk
+
+```{r}
+# The object contains a unique sample identifier in `orig.ident`
+# unique(colData(sce)$orig.ident)
+# [1] "e11_control" "e11_ko" "e12_control" "e12_ko"
+
+# Create pseudobulk data by specifying cluster_id and sample_id
+# Count data for each cell type is then stored in the `assay` field
+# assay: entry in assayNames(sce) storing raw counts
+# cluster_id: variable in colData(sce) indicating cell clusters
+# sample_id: variable in colData(sce) indicating sample id for aggregating cells
+pb <- aggregateToPseudoBulk(sce,
+  assay = "counts",
+  cluster_id = "new_celltypes",
+  sample_id = "orig.ident",
+  verbose = FALSE
+)
+
+# one 'assay' per cell type
+assayNames(pb)
+
+# colData(pb) rows are cell-type x sample combinations (e.g. "Mesenchyme.e11_control")
+# Extract the sample component from these rownames to key into cc_means
+pb_sample_ids <- sub("^[^.]+\\.", "", rownames(colData(pb)))
+
+# Confirm all extracted IDs are present in cc_means before assignment
+stopifnot(all(pb_sample_ids %in% rownames(cc_means)))
+
+# Add mean cell cycle scores to pb colData in matching order
+colData(pb)$S.Score   <- cc_means[pb_sample_ids, "S.Score"]
+colData(pb)$G2M.Score <- cc_means[pb_sample_ids, "G2M.Score"]
+
+# Verify all 4 variables are now present and non-NA
+colData(pb)[, c("S.Score", "G2M.Score", "genotype", "stage")]
+```
+
+# Voom for pseudobulk
+
+```{r}
+# Normalize and apply voom
+res.proc <- processAssays(pb, ~1, min_cells = 5, min.count = 5)
+
+# colData(res.proc) rows are also cell-type x sample combinations
+# Extract the sample component from these rownames to key into cc_means
+rp_sample_ids <- sub("^[^.]+\\.", "", rownames(colData(res.proc)))
+
+# Confirm all extracted IDs are present in cc_means before assignment
+stopifnot(all(rp_sample_ids %in% rownames(cc_means)))
+
+# Add mean cell cycle scores to res.proc colData in matching order
+colData(res.proc)$S.Score   <- cc_means[rp_sample_ids, "S.Score"]
+colData(res.proc)$G2M.Score <- cc_means[rp_sample_ids, "G2M.Score"]
+
+# Verify scores are present and non-NA
+colData(res.proc)[, c("S.Score", "G2M.Score", "genotype", "stage")]
+
+# Diagnostics
+details(res.proc)
+plotVoom(res.proc)
+```
+
+# Variance partitioning by cell cycle score
+- What fraction of gene-expression variation is due to cell cycle?
+
+```{r}
+# Rename cell cycle score columns to avoid issues with "." delimiter in variable names
+# Work directly with colData(res.proc) — no need to extract a separate data frame
+# as fitVarPart will use colData(res.proc) by default
+colData(res.proc)$SScore   <- colData(res.proc)$S.Score
+colData(res.proc)$G2MScore <- colData(res.proc)$G2M.Score
+
+# Fit variance partition model for cell cycle scores
+vp.form <- ~ SScore + G2MScore
+vp.res <- fitVarPart(res.proc, vp.form)
+
+# Plot genome-wide variance fractions
+plotVarPart(sortCols(vp.res))
+
+# Sort by SScore variance (or G2MScore — whichever is of primary interest)
+top_genes_sscore <- rownames(vp.res)[order(vp.res$SScore, decreasing = TRUE)][1:20]
+plotPercentBars(vp.res[top_genes_sscore, ])
+
+plotPercentBars(vp.res[
+  rownames(vp.res)[order(vp.res$SScore, decreasing = TRUE)][21:40], ])
+
+
+# Sort by SScore variance (or G2MScore — whichever is of primary interest)
+top_genes_g2m <- rownames(vp.res)[order(vp.res$G2MScore, decreasing = TRUE)][1:20]
+plotPercentBars(vp.res[top_genes_g2m, ])
+
+```
+
+# Variance partitioning by genotype
+- What fraction of gene-expression variation is due to genotype?
+
+```{r}
+# Fit variance partition model for genotype
+vp.lst <- fitVarPart(res.proc, ~genotype)
+
+# Plot genome-wide variance fractions
+plotVarPart(vp.lst, label.angle = 60)
+
+# Plot per-gene percent bars for the top 5 genes
+# Sort by genotype variance
+top_genes_geno <- rownames(vp.lst)[order(vp.lst$genotype, decreasing = TRUE)][1:20]
+plotPercentBars(vp.lst[top_genes_geno, ])
+```
