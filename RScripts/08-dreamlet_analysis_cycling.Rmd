@@ -1,0 +1,391 @@
+---
+title: "Dreamlet analysis of scRNAseq"
+author: "Melanie Smith"
+date: "2026-07-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr's "grouped output" informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load required libraries
+
+```{r}
+# if (!require("BiocManager", quietly = TRUE)) {
+#   install.packages("BiocManager")
+# }
+
+# BiocManager::install("dreamlet")
+
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Core single cell
+library(Seurat)
+library(SingleCellExperiment)
+library(dreamlet)
+
+# additional plotting functions
+library(patchwork)
+library(pheatmap)
+library(ggExtra)
+
+# annotation help
+library(homologene)
+
+```
+
+# Set project directories
+
+```{r}
+# set directories
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+data_dir <- file.path(project_repo_dir, "outDir", "06-cluster_marker_genes")
+out_dir <- file.path(project_repo_dir, "outDir", "08-regress-cell-cycle")
+
+# Create directory if it doesn't exist
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir,
+             recursive = TRUE)
+}
+```
+
+# Cell cycle gene sets (mouse)
+
+Cell cycle gene lists are re-derived here from `cc.genes.updated.2019` via
+human → mouse ortholog conversion. This is the same conversion used in the
+upstream pre-processing script.
+
+```{r cc-gene-sets}
+human_genes_to_mouse <- function(human_genes) {
+  hom_data <- homologene::homologene(human_genes, inTax = 9606, outTax = 10090)
+  setNames(hom_data$`10090`, hom_data$`9606`)
+}
+
+s_genes   <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$s.genes)
+g2m_genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$g2m.genes)
+cc_genes  <- c(s_genes, g2m_genes)
+
+cat("S-phase genes retained: ",   length(s_genes),   "\n")
+cat("G2M-phase genes retained: ", length(g2m_genes), "\n")
+cat("Total CC genes: ",           length(cc_genes),  "\n")
+```
+
+# Load required Seurat object
+- Load the final Seurat object as created in `06-cellType_filter.Rmd`. This object is post-QC, post-filtering and has layers for PCA, UMAP etc.  
+- This object contains all 4 samples and has all layers merged.  
+
+```{r}
+# read in the complete Seurat object
+re_embed_interesting_cells <- readRDS(file.path(data_dir, "final_interesting_cells_0.6.rds"))
+# sanity check to ensure this is a Seurat object
+stopifnot(inherits(re_embed_interesting_cells, "Seurat"))
+
+# ensure "seurat_cluster" is the current identity
+Idents(re_embed_interesting_cells) <- "seurat_clusters"
+# and is a factor
+Idents(re_embed_interesting_cells) <- factor(Idents(re_embed_interesting_cells))
+
+# ensure "RNA" is the default assay
+DefaultAssay(re_embed_interesting_cells) <- "RNA"
+
+# add collapsed cycling phase to the metadata
+re_embed_interesting_cells <- AddMetaData(
+  re_embed_interesting_cells,
+  metadata = ifelse(
+    re_embed_interesting_cells@meta.data$Phase %in% c("S", "G2M"),
+    "cycling",
+    "not_cycling"
+  ),
+  col.name = "cycling"
+)
+```
+
+# Trim down the Seurat object metadata -> keep only what we need
+- There a are a bunch of columns in the metadata that we don't need at all for this analysis and it makes the sce object and pseudibulked object more complicated so I want to reduce the noise here and just keep the columns we use downstream.
+
+```{r}
+# Check what you currently have
+names(re_embed_interesting_cells@meta.data)
+
+# Define columns to KEEP (easier than listing what to remove)
+cols_to_keep <- c(
+  "orig.ident",
+  "seurat_clusters",
+  "new_celltypes",
+  "stage",
+  "genotype",
+  "Phase",
+  "S.Score",
+  "G2M.Score",
+  "cycling"
+)
+
+# Remove everything not in that list
+cols_to_remove <- setdiff(names(re_embed_interesting_cells@meta.data), cols_to_keep)
+re_embed_interesting_cells@meta.data[, cols_to_remove] <- NULL
+
+# Verify
+names(re_embed_interesting_cells@meta.data)
+```
+
+# make some umaps
+- Let's remind ourselves where the object is at
+
+```{r}
+# make some umaps
+DimPlot(re_embed_interesting_cells,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = TRUE,
+        label.size = 6) +
+  NoLegend()
+
+DimPlot(re_embed_interesting_cells,
+        reduction = "umap",
+        group.by = "cycling",
+        label = TRUE,
+        label.size = 6) +
+  NoLegend()
+
+DimPlot(re_embed_interesting_cells,
+        reduction = "umap",
+        group.by = "new_celltypes",
+        label = TRUE,
+        label.size = 6) +
+  NoLegend()
+
+
+# make some summary tables
+table(re_embed_interesting_cells@meta.data$seurat_clusters,
+      re_embed_interesting_cells@meta.data$new_celltypes)
+
+# Build the table
+cc_table <- table(
+  re_embed_interesting_cells@meta.data$seurat_clusters,
+  re_embed_interesting_cells@meta.data$cycling
+)
+
+# Add percent cycling column
+cc_table_df <- as.data.frame.matrix(cc_table) %>%
+  tibble::rownames_to_column("seurat_clusters") %>%
+  dplyr::mutate(
+    total       = cycling + not_cycling,
+    pct_cycling = round(cycling / total * 100, 1)
+  ) %>%
+  dplyr::arrange(as.numeric(seurat_clusters))
+
+cc_table_df
+
+```
+
+# Add percent cycling to metadata
+-  let's add the percentage of cycling cells to the metadata before we aggregate to pseudobulk. I'm hoping hat if the values are identical then the collapse will keep the metadata column and we can use it in the VariancePartition() function downstream.
+
+```{r}
+# Calculate proportion cycling per seurat_cluster
+cluster_cycling_pct <- re_embed_interesting_cells@meta.data %>%
+  tibble::rownames_to_column("barcode") %>%
+  dplyr::group_by(seurat_clusters) %>%
+  dplyr::summarise(
+    pct_cycling = mean(cycling == "cycling") * 100,
+    .groups = "drop"
+  )
+
+# Build a named vector of pct_cycling, named by cell barcode
+# This is what AddMetaData expects for safe barcode-aligned assignment
+pct_cycling_named <- re_embed_interesting_cells@meta.data %>%
+  tibble::rownames_to_column("barcode") %>%
+  dplyr::left_join(cluster_cycling_pct, by = "seurat_clusters") %>%
+  dplyr::select(barcode, pct_cycling) %>%
+  tibble::deframe()  # converts two-column data frame to named vector
+
+# Add to Seurat object — AddMetaData aligns by barcode name
+re_embed_interesting_cells <- AddMetaData(
+  re_embed_interesting_cells,
+  metadata = pct_cycling_named,
+  col.name = "pct_cycling_in_cluster"
+)
+
+# Verify
+re_embed_interesting_cells@meta.data %>%
+  dplyr::distinct(seurat_clusters, pct_cycling_in_cluster) %>%
+  dplyr::arrange(as.numeric(as.character(seurat_clusters)))
+
+```
+
+# standardise metadata types
+
+```{r}
+# Convert categorical variables to factors
+re_embed_interesting_cells$orig.ident <-
+  factor(re_embed_interesting_cells$orig.ident)
+
+re_embed_interesting_cells$seurat_clusters <-
+  factor(re_embed_interesting_cells$seurat_clusters)
+
+re_embed_interesting_cells$stage <-
+  factor(re_embed_interesting_cells$stage)
+
+re_embed_interesting_cells$genotype <-
+  factor(re_embed_interesting_cells$genotype)
+
+re_embed_interesting_cells$cycling <-
+  factor(
+    re_embed_interesting_cells$cycling,
+    levels = c("not_cycling", "cycling")
+  )
+
+# Check
+# str(re_embed_interesting_cells[[]][, required_meta])
+```
+
+# Chunk 3: calculate proliferation percentage at sample × cluster level
+
+```{r}
+# # Extract metadata
+# cell_metadata <- re_embed_interesting_cells[[]]
+# 
+# # Summarise cycling status per sample and Seurat cluster
+# pb_metadata <- cell_metadata %>%
+#   group_by(
+#     orig.ident,
+#     seurat_clusters
+#   ) %>%
+#   summarise(
+#     n_cells = n(),
+#     n_cycling = sum(cycling == "cycling"),
+#     proliferation_percentage = n_cycling / n_cells,
+#     stage = dplyr::first(stage),
+#     genotype = dplyr::first(genotype),
+#     .groups = "drop"
+#   )
+# 
+# # Convert back to factors
+# pb_metadata <- pb_metadata %>%
+#   mutate(
+#     orig.ident = factor(orig.ident),
+#     seurat_clusters = factor(seurat_clusters),
+#     stage = factor(stage),
+#     genotype = factor(genotype)
+#   )
+# 
+# # Inspect
+# pb_metadata
+# 
+# head(pb_metadata)
+# summary(pb_metadata$proliferation_percentage)
+# table(pb_metadata$seurat_clusters, pb_metadata$orig.ident)
+```
+
+# Convert Seurat to SCE object
+
+```{r}
+# Convert Seurat object
+sce <- Seurat::as.SingleCellExperiment(
+  re_embed_interesting_cells,
+  assay = "RNA"
+)
+
+# Check assays
+assayNames(sce)
+
+# Check metadata survived conversion
+colnames(colData(sce))
+
+# inspect
+assayNames(sce)
+colData(sce)
+```
+
+# create the pseudobulk object
+
+```{r}
+pb <- aggregateToPseudoBulk(
+    sce,
+    assay = "counts",
+    cluster_id = "seurat_clusters",
+    sample_id = "orig.ident",
+    verbose = FALSE
+    )
+
+assayNames(pb)
+
+pb
+```
+
+# Voom for pseudobulk
+
+```{r}
+# Normalize and apply voom
+res.proc <- processAssays(pb, ~1, min_cells = 5, min.count = 5)
+
+# Diagnostics
+details(res.proc)
+plotVoom(res.proc)
+```
+
+```{r}
+# Build sample -> pct_cycling lookup from sce colData
+cycling_summary <- as.data.frame(colData(sce)) %>%
+  dplyr::group_by(orig.ident) %>%
+  dplyr::summarise(
+    pct_cycling = mean(cycling == "cycling") * 100,
+    .groups = "drop"
+  ) %>%
+  tibble::column_to_rownames("orig.ident")
+
+# rownames of colData(res.proc) are sample IDs directly (e.g. "e11_control")
+# no extraction needed — they match cycling_summary rownames directly
+stopifnot(all(rownames(colData(res.proc)) %in% rownames(cycling_summary)))
+
+# Add to colData
+colData(res.proc)$pct_cycling <- cycling_summary[rownames(colData(res.proc)), "pct_cycling"]
+
+# Verify
+colData(res.proc)
+
+vp_cycling <- fitVarPart(res.proc, ~ pct_cycling)
+class(vp_cycling)
+head(vp_cycling)
+
+# Plot
+plotVarPart(sortCols(vp_cycling), label.angle = 60)
+# Plot per-gene percent bars for the top 5 genes
+# Sort by genotype variance
+top_genes_geno <- rownames(vp_cycling)[order(vp_cycling$pct_cycling, decreasing = TRUE)][1:20]
+plotPercentBars(vp_cycling[top_genes_geno, ])
+
+# Find s_genes present in the gene column
+s_in_vp <- s_genes[s_genes %in% vp_cycling$gene]
+cat("S-phase genes in vp_cycling: ", length(s_in_vp), "\n")
+
+# Subset and order by pct_cycling
+s_vp <- vp_cycling[vp_cycling$gene %in% s_in_vp, ]
+s_vp <- s_vp[order(s_vp$pct_cycling, decreasing = TRUE), ]
+
+plotPercentBars(s_vp)
+
+# e.g. just cluster 0
+s_vp <- vp_cycling[vp_cycling$gene %in% s_in_vp & vp_cycling$assay == c("0", "2", "3", "5", "8", "10"), ]
+s_vp <- s_vp[order(s_vp$pct_cycling, decreasing = TRUE), ]
+
+plotPercentBars(s_vp)
+```
+
