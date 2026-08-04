@@ -515,6 +515,22 @@ consensus_genes_95
 ggplot(consensus_genes_95, aes(x = cycling_e11, y = cycling_e12, colour = gene_set)) + geom_point()
 table(consensus_genes_95$gene_set)
 
+# venn diagram of genes >=95%
+genes_e11_95 <- vp_df_e11 %>%
+  filter(cycling >= 0.95) %>%
+  pull(gene)
+
+genes_e12_95 <- vp_df_e12 %>%
+  filter(cycling >= 0.95) %>%
+  pull(gene)
+
+# let's make a venn diagram...
+ggVennDiagram(
+  list(E11.5 = genes_e11_95, E12.5 = genes_e12_95)
+) +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(title = "Genes with \u2265 0.95 cell-cycle variance explained")
+
 cat("of the", length(consensus_genes_95$gene), "consensus genes, there are", table(consensus_genes_95$gene_set)[[1]], "of the possible", length(g2m_genes), "G2M.Score genes and", table(consensus_genes_95$gene_set)[[3]], "of the possible", length(s_genes), "S.Score genes in the consensus gene set")
 
 # lets save the consensus set so we can compare to the cell type version of this
