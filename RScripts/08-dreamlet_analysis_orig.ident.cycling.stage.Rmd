@@ -47,6 +47,7 @@ library(dreamlet)
 library(patchwork)
 library(pheatmap)
 library(ggExtra)
+library(ggVennDiagram)
 
 # additional table functions
 library(kableExtra)
