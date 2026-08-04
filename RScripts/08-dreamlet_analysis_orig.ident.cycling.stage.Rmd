@@ -1,0 +1,584 @@
+---
+title: "08-dreamlet_analysis_orig.ident_cycling_stage_pseudobulk"
+author: "Melanie Smith"
+date: "2026-07-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Based on the code found [here](https://github.com/GabrielHoffman/dreamlet_analysis/blob/devel/Mathys_2023/Mathys_2023_Major_Cell_Type.Rmd)
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr's "grouped output" informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load required libraries
+
+```{r}
+# if (!require("BiocManager", quietly = TRUE)) {
+#   install.packages("BiocManager")
+# }
+
+# BiocManager::install("dreamlet")
+
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Core single cell
+library(Seurat)
+library(SingleCellExperiment)
+library(dreamlet)
+
+# additional plotting functions
+library(patchwork)
+library(pheatmap)
+library(ggExtra)
+
+# additional table functions
+library(kableExtra)
+# annotation help
+library(homologene)
+
+```
+
+# Set project directories
+
+```{r}
+# set directories
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+data_dir <- file.path(project_repo_dir, "outDir", "06-cluster_marker_genes")
+out_dir <- file.path(project_repo_dir, "outDir", "08-regress-cell-cycle")
+
+# Create directory if it doesn't exist
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir,
+             recursive = TRUE)
+}
+```
+
+# Cell cycle gene sets (mouse)
+
+Cell cycle gene lists are re-derived here from `cc.genes.updated.2019` via
+human → mouse ortholog conversion. This is the same conversion used in the
+upstream pre-processing script.
+
+```{r cc-gene-sets}
+human_genes_to_mouse <- function(human_genes) {
+  hom_data <- homologene::homologene(human_genes, inTax = 9606, outTax = 10090)
+  setNames(hom_data$`10090`, hom_data$`9606`)
+}
+
+s_genes   <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$s.genes)
+g2m_genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$g2m.genes)
+cc_genes  <- c(s_genes, g2m_genes)
+
+cat("S-phase genes retained: ",   length(s_genes),   "\n")
+cat("G2M-phase genes retained: ", length(g2m_genes), "\n")
+cat("Total CC genes: ",           length(cc_genes),  "\n")
+```
+
+# Load required Seurat object
+- Load the final Seurat object as created in `06-cellType_filter.Rmd`. This object is post-QC, post-filtering and has layers for PCA, UMAP etc.  
+- This object contains all 4 samples and has all layers merged.  
+
+```{r}
+# read in the complete Seurat object
+re_embed_interesting_cells <- readRDS(file.path(data_dir, "final_interesting_cells_0.6.rds"))
+# sanity check to ensure this is a Seurat object
+stopifnot(inherits(re_embed_interesting_cells, "Seurat"))
+
+# ensure "seurat_cluster" is the current identity
+Idents(re_embed_interesting_cells) <- "seurat_clusters"
+# and is a factor
+Idents(re_embed_interesting_cells) <- factor(Idents(re_embed_interesting_cells))
+
+# ensure "RNA" is the default assay
+DefaultAssay(re_embed_interesting_cells) <- "RNA"
+
+# add collapsed cycling phase to the metadata
+re_embed_interesting_cells <- AddMetaData(
+  re_embed_interesting_cells,
+  metadata = ifelse(
+    re_embed_interesting_cells@meta.data$Phase %in% c("S", "G2M"),
+    "cycling",
+    "not_cycling"
+  ),
+  col.name = "cycling"
+)
+
+# add collapsed seurat cluster + proliferative status to the metadata
+re_embed_interesting_cells <- AddMetaData(
+  re_embed_interesting_cells,
+  metadata = paste0(
+    re_embed_interesting_cells@meta.data$orig.ident,
+    "_",
+    re_embed_interesting_cells@meta.data$cycling
+  ),
+  col.name = "orig.ident.cycling"
+  )
+
+re_embed_interesting_cells@meta.data %>%
+  dplyr::count(orig.ident.cycling) %>%
+  dplyr::arrange(as.numeric(stringr::str_extract(orig.ident.cycling, "^[0-9]+")))
+```
+
+# Trim down the Seurat object metadata -> keep only what we need
+- There a are a bunch of columns in the metadata that we don't need at all for this analysis and it makes the sce object and pseudibulked object more complicated so I want to reduce the noise here and just keep the columns we use downstream.
+
+```{r}
+# Check what you currently have
+names(re_embed_interesting_cells@meta.data)
+
+# Define columns to KEEP (easier than listing what to remove)
+cols_to_keep <- c(
+  "orig.ident",
+  "seurat_clusters",
+  "new_celltypes",
+  "stage",
+  "genotype",
+  "Phase",
+  "S.Score",
+  "G2M.Score",
+  "cycling",
+  "orig.ident.cycling"
+  )
+
+# Remove everything not in that list
+cols_to_remove <- setdiff(names(re_embed_interesting_cells@meta.data), cols_to_keep)
+re_embed_interesting_cells@meta.data[, cols_to_remove] <- NULL
+
+# Verify
+names(re_embed_interesting_cells@meta.data)
+```
+
+# make some umaps
+- Let's remind ourselves where the object is at
+
+```{r}
+
+# make some summary tables
+table(re_embed_interesting_cells@meta.data$seurat_clusters,
+      re_embed_interesting_cells@meta.data$new_celltypes)
+
+# Build the table
+cc_table <- table(
+  re_embed_interesting_cells@meta.data$seurat_clusters,
+  re_embed_interesting_cells@meta.data$cycling
+)
+
+# Add percent cycling column
+cc_table_df <- as.data.frame.matrix(cc_table) %>%
+  tibble::rownames_to_column("seurat_clusters") %>%
+  dplyr::mutate(
+    total       = cycling + not_cycling,
+    pct_cycling = round(cycling / total * 100, 1)
+  ) %>%
+  dplyr::arrange(as.numeric(seurat_clusters))
+
+cc_table_df
+
+```
+
+# standardise metadata types
+
+```{r}
+# Convert categorical variables to factors
+re_embed_interesting_cells$orig.ident <-
+  factor(re_embed_interesting_cells$orig.ident)
+
+re_embed_interesting_cells$orig.ident.cycling <-
+  factor(re_embed_interesting_cells$orig.ident.cycling)
+
+re_embed_interesting_cells$seurat_clusters <-
+  factor(re_embed_interesting_cells$seurat_clusters)
+
+re_embed_interesting_cells$stage <-
+  factor(re_embed_interesting_cells$stage)
+
+re_embed_interesting_cells$genotype <-
+  factor(re_embed_interesting_cells$genotype)
+
+re_embed_interesting_cells$cycling <-
+  factor(
+    re_embed_interesting_cells$cycling,
+    levels = c("not_cycling", "cycling")
+  )
+
+```
+
+# Convert Seurat to SCE object
+
+```{r}
+# Convert Seurat object
+sce <- Seurat::as.SingleCellExperiment(
+  re_embed_interesting_cells,
+  assay = "RNA"
+  )
+
+# Check assays
+assayNames(sce)
+
+# Check metadata survived conversion
+colnames(colData(sce))
+
+# inspect
+assayNames(sce)
+colData(sce)
+
+# make sure cell type is a sorted factor
+# sce$new_celltypes = factor(sce$new_celltypes, sort(levels(sce$new_celltypes)))
+sce$new_celltypes <- factor(sce$new_celltypes)
+```
+
+# create the pseudobulk object
+
+```{r pseudobulk}
+# create pseudobulk 
+pb <- aggregateToPseudoBulk(sce,
+    assay = "counts",     
+    cluster_id = "stage",  
+    sample_id = "orig.ident.cycling")
+```
+
+# UMAP embedding
+
+```{r embedding}
+# make sure the umap embedding survived the conversion to sce
+reducedDimNames(sce)
+# plot
+plotProjection(sce, "UMAP", annotation='new_celltypes') 
+plotProjection(sce, "UMAP", annotation='orig.ident.cycling')
+```
+
+## Properties of dataset
+
+```{r properties}
+df = data.frame(table(pb$orig.ident))
+colnames(df) = c("orig.ident", "Count")
+
+df %>%
+  kbl(row.names=FALSE) %>% 
+  kable_classic(full_width = FALSE) 
+
+
+df = data.frame(table(pb$cycling))
+colnames(df) = c("Cycling Status", "Count")
+
+df %>%
+  kbl(row.names=FALSE) %>% 
+  kable_classic(full_width = FALSE) 
+
+df = list()
+df$`# Samples` = ncol(pb)
+df$`# Subjects` = nlevels(sce$orig.ident.cycling)
+df$`# Cells` = ncol(sce)
+df = unlist(df)
+df = data.frame(Propert=names(df), count = df)
+
+df %>%  
+  kbl(row.names=FALSE) %>% 
+  kable_classic(full_width = FALSE) 
+```
+
+## Process pseudobulk data to estimate precision weights
+# ~ cycling
+
+```{r voom}
+types = c("cycling", "not_cycling" )
+pb$cycling = factor(pb$cycling, types)
+
+types = c("control", "Mib1_KO")
+pb$genotype = factor(pb$genotype, types)
+
+# Normalize and apply voomWithDreamWeights
+# form = ~ age + sex + Study + pmi
+form <- ~ cycling
+res.proc <- processAssays(
+    pb,
+    form,
+    min_cells = 5,
+    min.count = 5,
+    min.samples = 3
+    )
+```
+
+### Show details of processing
+
+```{r details}
+details(res.proc) 
+```
+
+### Show voom-style mean-variance trends
+
+```{r voom.plot, fig.height=6, fig.width=12}
+# show voom plot for each cell clusters  
+plotVoom(res.proc, 
+         ncol=2) 
+```
+
+# Variance partitioning analysis
+## ~ cycling
+
+```{r vp}
+# run variance partitioning analysis
+vp.list <- fitVarPart(res.proc, ~ cycling)
+```
+
+```{r vp.plot, fig.height=6, fig.width=12}
+# Summarize variance fractions genome-wide for each cell type
+plotVarPart(sortCols(vp.list),
+            label.angle=60,
+            ncol=4)   
+plotPercentBars(vp.list)
+
+# all genes ordered by variance explained
+all_genes_cycling <- rownames(vp.list)[order(vp.list$cycling, decreasing = TRUE)]
+plotPercentBars(vp.list[all_genes_cycling, ]) +
+  ggtitle("Percent variance explained: All genes",
+          subtitle = "") +
+  theme(legend.position = "right")
+
+# Plot per-gene percent bars for the top 5 genes
+# Sort by genotype variance
+top_genes_cycling <- rownames(vp.list)[order(vp.list$cycling, decreasing = TRUE)][1:5000]
+plotPercentBars(vp.list[top_genes_cycling, ])
+
+# plot the cell cycle genes
+plotPercentBars(vp.list,
+                genes = c(s_genes, g2m_genes)) +
+  ggtitle("Percent variance explained: S phase and G2M genes",
+          subtitle = "") +
+  theme(legend.position = "right")
+
+# Make one bar plot per cell type with each cell type ordered by the highest variance
+stages <- unique(vp.list$assay)
+
+percent_bar_plots <- list()
+
+for (stage_of_interest in stages) {
+  
+  vp_ct <- vp.list[vp.list$assay == stage_of_interest, ]
+  
+  # order genes by variance explained *within this cell type only*
+  cc_genes <- c(s_genes, g2m_genes)
+  vp_ct_cc <- vp_ct[vp_ct$gene %in% cc_genes, ]
+  
+  cc_rank <- order(vp_ct_cc[, "cycling"], decreasing = TRUE)
+  
+  p <- plotPercentBars(vp_ct_cc[cc_rank, ]) +
+    ggtitle(paste("Percent variance explained cc genes:", stage_of_interest))
+  
+  percent_bar_plots[[stage_of_interest]] <- p
+}
+
+# summary object of cell cycle genes per cell type
+cc_genes <- c(s_genes, g2m_genes)
+
+vp_df <- as.data.frame(vp.list)
+
+cellcycle_variance_matrix <- vp_df %>%
+  filter(gene %in% cc_genes) %>%
+  select(gene, assay, cycling) %>%
+  pivot_wider(names_from = assay, values_from = cycling) %>%
+  column_to_rownames("gene") %>%
+  as.matrix()
+
+cellcycle_variance_matrix
+# super quick xy correlation plot
+ggplot(cellcycle_variance_matrix,
+       aes(x = e11, y = e12)) +
+  geom_point()
+
+# let's heatmap that sucker to see if anything stands out
+gene_order <- order(cellcycle_variance_matrix[, "e11"], decreasing = TRUE)
+
+pheatmap(cellcycle_variance_matrix[gene_order, ],
+         main = "Cell-cycle variance explained by stage: e11 order",
+         cluster_rows = FALSE,
+         cluster_cols = FALSE)
+
+# Make one bar plot per time point with each time point ordered by the highest variance
+stages <- unique(vp.list$assay)
+
+percent_bar_plots <- list()
+
+for (stages_of_interest in stages) {
+  
+  vp_ct <- vp.list[vp.list$assay == stages_of_interest, ]
+  
+  # order genes by variance explained *within this cell type only*
+  gene_order <- order(vp_ct[, "cycling"], decreasing = TRUE)
+  
+  p <- plotPercentBars(vp_ct[gene_order, ]) +
+    ggtitle(paste("Percent variance explained (all genes):", stages_of_interest))
+  
+  percent_bar_plots[[stages_of_interest]] <- p
+}
+
+all_genes_variance_matrix <- vp_df %>%
+  select(gene, assay, cycling) %>%
+  pivot_wider(names_from = assay, values_from = cycling) %>%
+  column_to_rownames("gene") %>%
+  as.matrix()
+
+# super quick xy correlation plot
+ggplot(all_genes_variance_matrix,
+       aes(x = e11, y = e12)) +
+  geom_point()
+
+# top 50 genes per cell type
+stages <- unique(vp.list$assay)
+percent_bar_plots <- list()
+
+for (stages_of_interest in stages) {
+  
+  vp_ct <- vp.list[vp.list$assay == stages_of_interest, ]
+  
+  # order genes by variance explained *within this cell type only*
+  gene_order <- order(vp_ct[, "cycling"], decreasing = TRUE)
+  
+  # keep only the top 10
+  top20_order <- gene_order[1:50]
+  
+  p <- plotPercentBars(vp_ct[top20_order, ]) +
+    ggtitle(paste("Percent variance explained:", stages_of_interest))
+  
+  percent_bar_plots[[stages_of_interest]] <- p
+}
+  
+vp_df_e11 <- dplyr::filter(vp_df, assay == "e11")
+ggplot(vp_df_e11, aes(x = cycling)) +
+  geom_density(fill = "steelblue", alpha = 0.5) +
+  geom_vline(xintercept = 0.95,
+             colour = "red",
+             linetype = "dashed") +
+  labs(
+    x = "Variance explained by cycling",
+    y = "Density",
+    title = "Density of cell-cycle variance explained (E11.5)"
+  )
+cat("in e11, there are", dim(dplyr::filter(vp_df_e11, cycling >= 0.95))[1], "genes at >= 0.95")
+
+vp_df_e12 <- dplyr::filter(vp_df, assay == "e12")
+ggplot(vp_df_e12, aes(x = cycling)) +
+  geom_density(fill = "steelblue", alpha = 0.5) +
+  geom_vline(xintercept = 0.95,
+             colour = "red",
+             linetype = "dashed") +
+  labs(
+    x = "Variance explained by cycling",
+    y = "Density",
+    title = "Density of cell-cycle variance explained (E12.5)"
+  )
+cat("in e12, there are", dim(dplyr::filter(vp_df_e12, cycling >= 0.95))[1], "genes at >= 0.95")
+```
+
+# Consensus gene set
+
+```{r}
+consensus_genes_95 <- vp_df_e11 %>%
+  select(gene, cycling_e11 = cycling) %>%
+  inner_join(
+    vp_df_e12 %>% select(gene, cycling_e12 = cycling),
+    by = "gene"
+  ) %>%
+  filter(cycling_e11 >= 0.95, cycling_e12 >= 0.95)
+
+consensus_genes_95
+
+consensus_genes_95 <- consensus_genes_95 %>%
+  mutate(
+    gene_set = case_when(
+      gene %in% s_genes   ~ "S phase",
+      gene %in% g2m_genes ~ "G2M",
+      TRUE ~ "Not cell cycle"
+    )
+  )
+
+consensus_genes_95
+
+# quick scatter plot to see the correlation
+ggplot(consensus_genes_95, aes(x = cycling_e11, y = cycling_e12, colour = gene_set)) + geom_point()
+table(consensus_genes_95$gene_set)
+
+cat("of the", length(consensus_genes_95$gene), "consensus genes, there are", table(consensus_genes_95$gene_set)[[1]], "of the possible", length(g2m_genes), "G2M.Score genes and", table(consensus_genes_95$gene_set)[[3]], "of the possible", length(s_genes), "S.Score genes in the consensus gene set")
+
+# lets save the consensus set so we can compare to the cell type version of this
+write_csv(consensus_genes_95, file = file.path(out_dir, "consensus_genes_95_stage.csv"))
+```
+
+## Heatmap of the top cell cycle associated genes
+
+```{r}
+vp_df <- as.data.frame(vp.list)
+top_n <- 500
+
+# top N genes *per cell type*, based on cycling variance, then union across cell types
+top_genes <- vp_df %>%
+  group_by(assay) %>%
+  slice_max(order_by = cycling, n = top_n) %>%
+  pull(gene) %>%
+  unique()
+
+# gene x cell type matrix of cycling variance, restricted to that gene set
+heatmap_matrix <- vp_df %>%
+  filter(gene %in% top_genes) %>%
+  select(gene, assay, cycling) %>%
+  pivot_wider(names_from = assay, values_from = cycling) %>%
+  column_to_rownames("gene") %>%
+  as.matrix()
+
+# row annotation: which cell-cycle gene set each gene belongs to
+row_annotation <- data.frame(
+  gene_set = case_when(
+    rownames(heatmap_matrix) %in% s_genes   ~ "S phase",
+    rownames(heatmap_matrix) %in% g2m_genes ~ "G2M",
+    TRUE ~ "Other"
+  ),
+  row.names = rownames(heatmap_matrix)
+)
+
+heatmap_matrix[is.na(heatmap_matrix)] <- 2
+
+gene_order <- order(heatmap_matrix[, "e11"], decreasing = TRUE)
+
+pheatmap(heatmap_matrix[gene_order, ],
+         annotation_row = row_annotation,
+         main = paste0("Top (", top_n, ") cell-cycle-associated genes per stage"),
+         cluster_rows = FALSE,
+         cluster_cols = FALSE,
+         show_rownames = FALSE,
+         show_colnames = TRUE)
+
+sum(s_genes %in% top_genes)
+cat("There are", sum(s_genes %in% top_genes), "of the", length(s_genes), "S.Score genes in the top", top_n)
+sum(g2m_genes %in% top_genes)
+cat("There are", sum(g2m_genes %in% top_genes), "of the", length(g2m_genes), "G2M.Score genes in the top", top_n)
+
+# or as a table
+table(row_annotation$gene_set)
+
+df <- as.data.frame(heatmap_matrix) %>%
+  tibble::rownames_to_column("genes") %>%
+  dplyr::left_join(., tibble::rownames_to_column(row_annotation, "genes"))
+```
+
+# Session Info
+
+```{r session-info}
+sessioninfo::session_info()
+```
