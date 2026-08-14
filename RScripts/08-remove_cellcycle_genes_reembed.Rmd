@@ -1,0 +1,297 @@
+---
+title: "09-remove_cellcycle_genes_reembed"
+author: "Melanie Smith"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Purpose: re-embed the dataset after removing the consensus cell-cycle gene
+set identified in `08-dreamlet_analysis_cycling_orig.ident_pseudobulk.Rmd`,
+and compare UMAPs before vs after removal to assess whether cell-cycle-driven
+structure was contributing to the embedding independent of the biological
+cell type / developmental structure of interest.
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE)
+set.seed(42) # set seed for reproducibility
+```
+
+# Load required libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Core single cell
+library(Seurat)
+library(SingleCellExperiment)
+
+# additional plotting functions
+library(patchwork)
+library(pheatmap)
+
+# additional table functions
+library(kableExtra)
+```
+
+# Set project directories
+
+```{r}
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+data_dir     <- file.path(project_repo_dir, "outDir", "06-cluster_marker_genes")
+cc_dir       <- file.path(project_repo_dir, "outDir", "08-regress-cell-cycle")
+out_dir      <- file.path(project_repo_dir, "outDir", "08-regress-cell-cycle")
+
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir, recursive = TRUE)
+}
+```
+
+# Load required Seurat object
+
+- Load the same post-QC, post-filtering Seurat object used in `08-...Rmd`.
+
+```{r}
+re_embed_interesting_cells <- readRDS(file.path(data_dir, "final_interesting_cells_0.6.rds"))
+stopifnot(inherits(re_embed_interesting_cells, "Seurat"))
+
+Idents(re_embed_interesting_cells) <- "seurat_clusters"
+Idents(re_embed_interesting_cells) <- factor(Idents(re_embed_interesting_cells))
+
+DefaultAssay(re_embed_interesting_cells) <- "RNA"
+
+# recreate the cycling / orig.ident.cycling columns exactly as in 08-...Rmd
+re_embed_interesting_cells <- AddMetaData(
+  re_embed_interesting_cells,
+  metadata = ifelse(
+    re_embed_interesting_cells@meta.data$Phase %in% c("S", "G2M"),
+    "cycling",
+    "not_cycling"
+  ),
+  col.name = "cycling"
+)
+
+re_embed_interesting_cells@meta.data$orig.ident    <- factor(re_embed_interesting_cells@meta.data$orig.ident)
+re_embed_interesting_cells@meta.data$seurat_clusters <- factor(re_embed_interesting_cells@meta.data$seurat_clusters)
+re_embed_interesting_cells@meta.data$new_celltypes <- factor(re_embed_interesting_cells@meta.data$new_celltypes)
+re_embed_interesting_cells@meta.data$cycling <- factor(
+  re_embed_interesting_cells@meta.data$cycling,
+  levels = c("not_cycling", "cycling")
+)
+```
+
+# Load the consensus cell-cycle gene set
+
+- This is the `full_consensus` gene vector built in `08-...Rmd`
+  (`lost_genes` + `consensus_genes_95_celltype`).
+
+```{r load-consensus-genes}
+full_consensus <- read_csv(file.path(cc_dir, "expr_mat_celltype_phase.csv"))
+
+length(full_consensus)
+
+# how many of these genes are actually present in the object
+sum(full_consensus$gene %in% rownames(re_embed_interesting_cells)) # [1] 181
+```
+
+# 1. Baseline UMAPs (before gene removal)
+
+```{r baseline-umaps, fig.width=14, fig.height=10}
+p1 <- DimPlot(re_embed_interesting_cells,
+              reduction = "umap",
+              group.by = "seurat_clusters",
+              label = TRUE,
+              label.size = 5) +
+  NoLegend() +
+  labs(title = "Seurat clusters")
+
+p2 <- DimPlot(re_embed_interesting_cells,
+              reduction = "umap",
+              group.by = "Phase") +
+  labs(title = "Cell cycle phase")
+
+p3 <- DimPlot(re_embed_interesting_cells,
+              reduction = "umap",
+              group.by = "cycling") +
+  labs(title = "Cycling status")
+
+p4 <- DimPlot(re_embed_interesting_cells,
+              reduction = "umap",
+              group.by = "new_celltypes") +
+  labs(title = "Cell type")
+
+baseline_umaps <- (p1 | p2) / (p3 | p4) +
+  plot_annotation(title = "Baseline UMAPs (all genes, before cell-cycle gene removal)")
+
+baseline_umaps
+```
+
+```{r save-baseline-umaps}
+ggsave(file.path(out_dir, "baseline_umaps.pdf"), baseline_umaps, width = 14, height = 10)
+```
+
+# 2. Remove consensus cell-cycle genes and re-embed
+
+## 2.1 Subset the object to exclude the consensus gene set
+
+```{r subset-genes}
+genes_to_keep <- setdiff(rownames(re_embed_interesting_cells), full_consensus$gene)
+
+length(rownames(re_embed_interesting_cells))
+length(genes_to_keep)
+
+re_embed_no_cc <- subset(re_embed_interesting_cells, features = genes_to_keep)
+
+# sanity check - none of the excluded genes should remain
+stopifnot(!any(full_consensus %in% rownames(re_embed_no_cc)))
+```
+
+## 2.2 Standard re-processing on the reduced gene set
+
+Note: `NormalizeData()` is not re-run here, since the log-normalization
+factors were computed from total counts across all genes in the original
+object and removing a small gene subset shouldn't require renormalizing
+from raw counts. If you'd prefer to renormalize from scratch (e.g. if the
+excluded gene set is large enough to meaningfully shift per-cell size
+factors), swap in `NormalizeData()` as the first step below.
+
+```{r reprocess}
+re_embed_no_cc <- FindVariableFeatures(re_embed_no_cc,
+                                        selection.method = "vst",
+                                        nfeatures = 2000)
+
+re_embed_no_cc <- ScaleData(re_embed_no_cc,
+                             features = rownames(re_embed_no_cc))
+
+re_embed_no_cc <- RunPCA(re_embed_no_cc,
+                          features = VariableFeatures(re_embed_no_cc),
+                          npcs = 30)
+
+ElbowPlot(re_embed_no_cc, ndims = 30)
+```
+
+```{r neighbours-clusters-umap}
+# adjust dims if the elbow plot above suggests a different cutoff
+n_pcs <- 20
+
+re_embed_no_cc <- FindNeighbors(re_embed_no_cc, dims = 1:n_pcs)
+re_embed_no_cc <- FindClusters(re_embed_no_cc, resolution = 0.6)
+re_embed_no_cc <- RunUMAP(re_embed_no_cc, dims = 1:n_pcs)
+
+# preserve the new clustering separately from the original seurat_clusters
+re_embed_no_cc$seurat_clusters_no_cc <- Idents(re_embed_no_cc)
+```
+
+```{r save-reduced-object}
+saveRDS(re_embed_no_cc, file.path(out_dir, "re_embed_no_cellcycle_genes.rds"))
+```
+
+---
+
+# 3. Post-removal UMAPs
+
+```{r post-removal-umaps, fig.width=14, fig.height=10}
+p1_new <- DimPlot(re_embed_no_cc,
+                   reduction = "umap",
+                   group.by = "seurat_clusters_no_cc",
+                   label = TRUE,
+                   label.size = 5) +
+  NoLegend() +
+  labs(title = "Seurat clusters (re-clustered, no CC genes)")
+
+p2_new <- DimPlot(re_embed_no_cc,
+                   reduction = "umap",
+                   group.by = "Phase") +
+  labs(title = "Cell cycle phase")
+
+p3_new <- DimPlot(re_embed_no_cc,
+                   reduction = "umap",
+                   group.by = "cycling") +
+  labs(title = "Cycling status")
+
+p4_new <- DimPlot(re_embed_no_cc,
+                   reduction = "umap",
+                   group.by = "new_celltypes") +
+  labs(title = "Cell type (original annotation)")
+
+post_removal_umaps <- (p1_new | p2_new) / (p3_new | p4_new) +
+  plot_annotation(title = "Post-removal UMAPs (consensus cell-cycle genes excluded)")
+
+post_removal_umaps
+
+(p1 | p2) / (p1_new | p2_new) +
+  plot_annotation(title = "Pre-(top) and Post-removal (bottom) UMAPs (consensus cell-cycle genes excluded)")
+
+(p3 | p4) / (p3_new | p4_new) +
+  plot_annotation(title = "Pre-(top) and Post-removal (bottom) UMAPs (consensus cell-cycle genes excluded)")
+```
+
+```{r save-post-removal-umaps}
+ggsave(file.path(out_dir, "post_removal_umaps.pdf"), post_removal_umaps, width = 14, height = 10)
+```
+
+---
+
+# 4. Side-by-side comparison
+
+```{r comparison, fig.width=14, fig.height=14}
+comparison_phase <- (p2 + labs(title = "Phase: before")) |
+  (p2_new + labs(title = "Phase: after"))
+
+comparison_cycling <- (p3 + labs(title = "Cycling: before")) |
+  (p3_new + labs(title = "Cycling: after"))
+
+comparison_celltype <- (p4 + labs(title = "Cell type: before")) |
+  (p4_new + labs(title = "Cell type: after"))
+
+full_comparison <- comparison_phase / comparison_cycling / comparison_celltype +
+  plot_annotation(title = "Before vs after consensus cell-cycle gene removal")
+
+full_comparison
+```
+
+```{r save-comparison}
+ggsave(file.path(out_dir, "before_after_comparison.pdf"), full_comparison, width = 14, height = 16)
+```
+
+## What to look for
+
+- **Phase / cycling panels**: if cell-cycle-driven structure was
+  contributing meaningfully to the original embedding, the "before" panels
+  should show cycling cells forming a distinguishable arm/cluster
+  independent of cell type, while the "after" panels should show cycling
+  status distributed more evenly *within* each cell-type region rather than
+  forming its own separate structure.
+- **Cell type panel**: this is the sanity check — cell-type separation
+  should be preserved (ideally as clean or cleaner) after removal. If cell
+  types that were previously well-separated become mixed together after
+  removing the consensus genes, that's a signal some of the excluded genes
+  may have been carrying real developmental/cell-type signal alongside
+  cell-cycle signal, and the exclusion threshold (Section 10 of the 08
+  script) may be worth revisiting.
+- **Cluster count/structure**: a reduced number of clusters, or clusters
+  that no longer split by cycling status, is the expected and desired
+  outcome if cell-cycle genes were previously driving spurious
+  subclustering within a single biological cell type.
+
+---
+
+# Session info
+
+```{r session-info}
+sessionInfo()
+```
