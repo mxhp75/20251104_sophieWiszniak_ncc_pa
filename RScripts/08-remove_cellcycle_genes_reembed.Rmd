@@ -288,7 +288,127 @@ ggsave(file.path(out_dir, "before_after_comparison.pdf"), full_comparison, width
   outcome if cell-cycle genes were previously driving spurious
   subclustering within a single biological cell type.
 
----
+# ============================================================
+# Does residual "cell-cycle" signal track cell type / cell state,
+# or does it look like leftover proliferation noise?
+# ============================================================
+
+```{r}
+# original UMAP - split by cell type
+DimPlot(re_embed_interesting_cells,
+        reduction = "umap",
+        group.by = "Phase",
+        split.by = "new_celltypes",
+        label = TRUE,
+        label.size = 5) +
+  NoLegend() +
+  labs(title = "Cell cycle phase - pre cell cycle gene removal (split by cell type)")
+
+DimPlot(re_embed_interesting_cells,
+        reduction = "pca",
+        dims = c(3, 4),
+        group.by = "Phase",
+        split.by = "new_celltypes",
+        label = TRUE,
+        label.size = 5) +
+  NoLegend() +
+  labs(title = "Cell cycle phase - pre cell cycle gene removal (split by cell type)")
+
+# subset UMAP - split by cell type
+DimPlot(re_embed_no_cc,
+        reduction = "umap",
+        group.by = "Phase",
+        split.by = "new_celltypes",
+        label = TRUE,
+        label.size = 5) +
+  NoLegend() +
+  labs(title = "Cell cycle phase - re-clustered, no CC genes (split by cell type)")
+
+DimPlot(re_embed_no_cc,
+        reduction = "pca",
+        dims = c(3, 4),
+        group.by = "Phase",
+        split.by = "new_celltypes",
+        label = TRUE,
+        label.size = 5) +
+  NoLegend() +
+  labs(title = "Cell cycle phase - re-clustered, no CC genes (split by cell type)")
+
+
+celltypes <- levels(re_embed_no_cc$new_celltypes)
+
+phase_umaps_by_celltype_pre <- list()
+
+for (ct in celltypes) {
+
+  cells_ct <- WhichCells(re_embed_interesting_cells, expression = new_celltypes == ct)
+
+  p <- DimPlot(re_embed_interesting_cells,
+               reduction = "umap",
+               group.by = "Phase",
+               cells = cells_ct,
+               label = FALSE) +
+    labs(title = ct)
+
+  phase_umaps_by_celltype_pre[[ct]] <- p
+}
+
+wrap_plots(phase_umaps_by_celltype_pre, ncol = 3)  +
+  plot_annotation(title = "Pre subset cell cycle genes")
+
+
+
+phase_umaps_by_celltype <- list()
+
+for (ct in celltypes) {
+
+  cells_ct <- WhichCells(re_embed_no_cc, expression = new_celltypes == ct)
+
+  p <- DimPlot(re_embed_no_cc,
+               reduction = "umap",
+               group.by = "Phase",
+               cells = cells_ct,
+               label = FALSE) +
+    labs(title = ct)
+
+  phase_umaps_by_celltype[[ct]] <- p
+}
+
+wrap_plots(phase_umaps_by_celltype, ncol = 3)  +
+  plot_annotation(title = "Post subset cell cycle genes")
+
+```
+
+```{r}
+
+celltypes <- levels(re_embed_interesting_cells$new_celltypes)
+
+phase_umaps_by_celltype <- list()
+
+for (ct in celltypes) {
+
+  cells_ct <- WhichCells(re_embed_interesting_cells, expression = new_celltypes == ct)
+
+  p <- DimPlot(re_embed_interesting_cells,
+               reduction = "umap",
+               group.by = "Phase",
+               cells = cells_ct,
+               label = FALSE) +
+    labs(title = ct)
+
+  phase_umaps_by_celltype[[ct]] <- p
+}
+
+wrap_plots(phase_umaps_by_celltype, ncol = 3)
+```
+
+# Save the subset and re-embedded Seurat object
+
+```{r}
+write_rds(re_embed_no_cc,
+          file = file.path(out_dir, "re_embed_no_cc.rds"))
+```
+
 
 # Session info
 
