@@ -1,0 +1,101 @@
+---
+title: "Subset Seurat object and re-embed"
+author: "Melanie Smith"
+date: "2026-08-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+- This short markdown file takes in my full Seurat object and subsets it into 4 objects, 1 for each sample in the current analysis.  
+- We need to perform this step before we move through to RNA Velocity
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+
+# Plotting
+library(patchwork)
+```
+
+# Set project directories
+
+```{r}
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+out_dir <- file.path(project_repo_dir, "outDir", "10-rna_velocity")
+
+# Create directory if it doesn't exist
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir,
+             recursive = TRUE)
+}
+
+```
+
+# Load required Seurat object
+
+```{r}
+# read in the Seurat object
+re_embed_no_cc <- readRDS(file.path(project_repo_dir, "outDir/08-regress-cell-cycle/re_embed_no_cc.rds"))
+
+stopifnot(inherits(re_embed_no_cc, "Seurat"))
+
+Idents(re_embed_no_cc) <- "seurat_clusters"
+Idents(re_embed_no_cc) <- factor(Idents(re_embed_no_cc))
+DefaultAssay(re_embed_no_cc) <- "RNA"
+
+# Save the existing Seurat clusters
+re_embed_no_cc$full_dataset_clusters_no_cc <- re_embed_no_cc$seurat_clusters
+
+```
+
+# Split Seurat object
+
+```{r}
+# split the existing Seurat object into a names list
+seurat_list <- SplitObject(re_embed_no_cc,
+                           split.by = "orig.ident")
+
+e11_control <- seurat_list[["e11_control"]]
+e12_control <- seurat_list[["e12_control"]]
+e11_ko <- seurat_list[["e11_ko"]]
+e12_ko <- seurat_list[["e12_ko"]]
+
+```
+
+# Save new Seurat objects before re-embedding
+
+```{r}
+# let's save here and reload in a new session
+write_rds(x = e11_control,
+          file = file.path(out_dir, "e11_control.rds"))
+
+write_rds(x = e11_ko,
+          file = file.path(out_dir, "e11_ko.rds"))
+
+write_rds(x = e12_control,
+          file = file.path(out_dir, "e12_control.rds"))
+
+write_rds(x = e12_ko,
+          file = file.path(out_dir, "e12_ko.rds"))
+```
