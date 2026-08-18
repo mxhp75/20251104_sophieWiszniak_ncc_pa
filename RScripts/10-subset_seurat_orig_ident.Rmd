@@ -1,5 +1,5 @@
 ---
-title: "Subset Seurat object and re-embed"
+title: "Subset Seurat object and save"
 author: "Melanie Smith"
 date: "2026-08-17"
 output: html_document
@@ -20,7 +20,7 @@ set.seed(42) # set seed for reproducibility
 ```
 
 - This short markdown file takes in my full Seurat object and subsets it into 4 objects, 1 for each sample in the current analysis.  
-- We need to perform this step before we move through to RNA Velocity
+- This markdown only splits the Seurat object into smaller objects and saves them, it does not refactor or re-embed anything.  
 
 # Load Libraries
 
