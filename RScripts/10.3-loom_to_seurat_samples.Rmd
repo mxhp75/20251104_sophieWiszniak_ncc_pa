@@ -57,7 +57,7 @@ loom_colname <- "possorted_genome_bam_5Q1UF:"
 
 # sample_ID <- "e12_control"
 # loom_colname <- "possorted_genome_bam_YIL7N:"
-
+# 
 # sample_ID <- "e12_ko"
 # loom_colname <- "possorted_genome_bam_0YX73:"
 
@@ -107,48 +107,69 @@ head(rownames(seurat_obj@meta.data))
 dt_spliced <- fread(spliced_obj_file)
 # save the cell barcodes
 barcodes <- dt_spliced[[1]]
-# clean up the cell barcodes
-clean_barcodes <- gsub(loom_colname, "", barcodes)
-clean_barcodes <- gsub("x$", "", clean_barcodes)
-# drop the barcodes from column 1
-spliced_mat <- as.matrix(dt_spliced[, -1])
+# The barcodes from the splced count file are in the forma "possorted_genome_bam_5Q1UF:TTTGGTTGTCAACATCx"
+# with the bam file name as prefix and an "x" as suffix
+# before we can combined these with our original counts we need to clean up the cell barcodes
+# first, replace the loom_colname prefix with "" (aka nothing) from `barcodes`
+spliced_barcodes <- gsub(loom_colname, "", barcodes)
+# take the new prefix free barcode and remove the "x" suffix
+spliced_barcodes <- gsub("x$", "", spliced_barcodes)
+
+# the barcodes are stored in column 1 of the count martrix so let's drop the barcodes from column 1 "CellID"
+spliced_mat <- as.matrix(dt_spliced[, -"CellID"])
+
 # ensure the counts are double -> not character
 storage.mode(spliced_mat) <- "double"
-# add the cell barcodes into the rownames
-rownames(spliced_mat) <- clean_barcodes
+
+# add the cleaned cell barcodes into the rownamesof the count matrix
+rownames(spliced_mat) <- spliced_barcodes
+
 # transform the matrix (seurat expects rows=genes and columns=cells)
 spliced_mat <- t(spliced_mat)
-# ensure our object is a matrix
+
+# quick check to ensure our object is a matrix
 spliced_mat <- Matrix(spliced_mat, sparse = TRUE)
+
 # create the assay object
 spliced_assay <- CreateAssayObject(counts = spliced_mat)
+
 # quick sanity check of the row and column names
 rownames(spliced_assay) %>% head()
 colnames(spliced_assay) %>% head()
 
 ```
 
-- then we import the unspliced counts
+- then we import the unspliced counts and perform the same barcode cleaning  
+
 ```{r}
 # import the spliced counts
 dt_unspliced <- fread(unspliced_obj_file)
+
 # save the cell barcodes
 barcodes <- dt_unspliced[[1]]
+
 # clean up the cell barcodes
-clean_barcodes <- gsub(loom_colname, "", barcodes)
-clean_barcodes <- gsub("x$", "", clean_barcodes)
+unspliced_barcodes <- gsub(loom_colname, "", barcodes)
+unspliced_barcodes <- gsub("x$", "", unspliced_barcodes)
+
 # drop the barcodes from column 1
-unspliced_mat <- as.matrix(dt_unspliced[, -1])
+unspliced_mat <- as.matrix(dt_unspliced[, -"CellID"])
+
 # ensure the counts are double -> not character
 storage.mode(unspliced_mat) <- "double"
-# add the cell barcodes into the rownames
-rownames(unspliced_mat) <- clean_barcodes
+
+# add the clean cell barcodes into the rownames
+rownames(unspliced_mat) <- unspliced_barcodes
+
 # transform the matrix (seurat expects rows=genes and columns=cells)
 unspliced_mat <- t(unspliced_mat)
+
 # ensure our object is a matrix
 unspliced_mat <- Matrix(unspliced_mat, sparse = TRUE)
+
 # create the assay object
 unspliced_assay <- CreateAssayObject(counts = unspliced_mat)
+
 # quick sanity check of the row and column names
 rownames(unspliced_assay) %>% head()
 colnames(unspliced_assay) %>% head()
@@ -158,58 +179,141 @@ colnames(unspliced_assay) %>% head()
 # Subset the new objects to retain only high quality cells and non-filtered genes
 
 ```{r}
+# Subset the new objects to retain only high quality cells and non-filtered genes
 
-# add the expected suffix back onto the cell barcodes
-# add suffix to spliced
-colnames(spliced_assay) <- paste0(colnames(spliced_assay), "-1_1_1")
-# add suffix to unspliced
-colnames(unspliced_assay) <- paste0(colnames(unspliced_assay), "-1_1_1")
-
+# Grab the gene and cell names/IDs from the Seurat object
 target_genes <- rownames(seurat_obj)
 target_cells <- colnames(seurat_obj)
 
-# pull counts
+# ------------------------------------------------------------
+# Dynamically determine the Seurat barcode suffix
+# ------------------------------------------------------------
+
+# Take one cleaned Velocyto barcode as an example
+example_barcode <- spliced_barcodes[1]
+
+# Find the corresponding Seurat barcode
+matching_seurat <- target_cells[
+  startsWith(target_cells, paste0(example_barcode, "-"))
+]
+
+# There should be exactly one matching Seurat barcode
+stopifnot(length(matching_seurat) == 1)
+
+# Extract the suffix used by the Seurat object
+seurat_suffix <- sub(
+  paste0("^", example_barcode),
+  "",
+  matching_seurat
+)
+
+# ------------------------------------------------------------
+# Add the dynamically detected suffix
+# ------------------------------------------------------------
+
+# Add suffix to spliced and unspliced barcodes
+spliced_cells <- paste0(spliced_barcodes, seurat_suffix)
+unspliced_cells <- paste0(unspliced_barcodes, seurat_suffix)
+
+# Verify that all QC-filtered Seurat cells are present
+# in both the spliced and unspliced Velocyto matrices
+stopifnot(all(target_cells %in% spliced_cells))
+stopifnot(all(target_cells %in% unspliced_cells))
+
+# Verify that spliced and unspliced contain the same cells
+stopifnot(setequal(spliced_cells, unspliced_cells))
+
+# Verify that there are no duplicate cell barcodes
+stopifnot(length(spliced_cells) == length(unique(spliced_cells)))
+stopifnot(length(unspliced_cells) == length(unique(unspliced_cells)))
+
+# Apply the corrected cell names
+colnames(spliced_assay) <- spliced_cells
+colnames(unspliced_assay) <- unspliced_cells
+
+# ------------------------------------------------------------
+# Extract and validate counts
+# ------------------------------------------------------------
+
 spliced_counts <- spliced_assay@counts
 unspliced_counts <- unspliced_assay@counts
 
-# clean up objects no longer needed
-rm(dt_spliced, spliced_mat, spliced_assay,
-   dt_unspliced, unspliced_mat, unspliced_assay)
-gc()
-
-# make sure all cells and genes are present
+# Verify that all target genes are present
 stopifnot(all(target_genes %in% rownames(spliced_counts)))
 stopifnot(all(target_genes %in% rownames(unspliced_counts)))
 
-# NOW subset strictly and reorder
-spliced_counts <- spliced_counts[target_genes, target_cells]
-
-# make sure all cells and genes are present
+# Verify that all target cells are present
 stopifnot(all(target_cells %in% colnames(spliced_counts)))
 stopifnot(all(target_cells %in% colnames(unspliced_counts)))
 
-# NOW subset strictly and reorder
+# ------------------------------------------------------------
+# Subset and reorder to exactly match the QC-filtered Seurat object
+# ------------------------------------------------------------
+
+spliced_counts <- spliced_counts[target_genes, target_cells]
 unspliced_counts <- unspliced_counts[target_genes, target_cells]
 
-# add suffix to the gene names so I can rbind the matrices
+# Verify exact ordering
+stopifnot(identical(colnames(spliced_counts), target_cells))
+stopifnot(identical(colnames(unspliced_counts), target_cells))
+
+stopifnot(identical(rownames(spliced_counts), target_genes))
+stopifnot(identical(rownames(unspliced_counts), target_genes))
+
+# ------------------------------------------------------------
+# Clean up large intermediate objects
+# ------------------------------------------------------------
+
+rm(
+  dt_spliced, spliced_mat, spliced_assay,
+  dt_unspliced, unspliced_mat, unspliced_assay
+)
+gc()
+
+# ------------------------------------------------------------
+# Combine spliced and unspliced counts
+# ------------------------------------------------------------
+
+# Add suffix to gene names so the matrices can be combined
 rownames(spliced_counts) <- paste0(rownames(spliced_counts), "-spliced")
 rownames(unspliced_counts) <- paste0(rownames(unspliced_counts), "-unspliced")
 
-combined_counts <- rbind(spliced_counts, unspliced_counts)
-
-# double check the cell barcodes are in the same order before adding metadata
-identical(
-  colnames(combined_counts),
-  colnames(seurat_obj)
+combined_counts <- rbind(
+  spliced_counts,
+  unspliced_counts
 )
-# [1] TRUE
 
-# Create a new Seurat object from the count matrix
-new_seurat <- CreateSeuratObject(counts = combined_counts)
+# Double check the cell barcodes are in the same order
+# as the original Seurat object
+stopifnot(
+  identical(
+    colnames(combined_counts),
+    colnames(seurat_obj)
+  )
+)
 
-# Add the metadata from the existing Seurat object
-new_seurat <- AddMetaData(new_seurat,
-                          metadata = seurat_obj@meta.data[, c("orig.ident", "genotype", "stage", "predicted_sex", "new_celltypes", "full_dataset_clusters_no_cc", "G2M.Score", "S.Score")])
+# ------------------------------------------------------------
+# Create new Seurat object
+# ------------------------------------------------------------
+
+new_seurat <- CreateSeuratObject(
+  counts = combined_counts
+)
+
+# Add metadata from the existing Seurat object
+new_seurat <- AddMetaData(
+  new_seurat,
+  metadata = seurat_obj@meta.data[, c(
+    "orig.ident",
+    "genotype",
+    "stage",
+    "predicted_sex",
+    "new_celltypes",
+    "full_dataset_clusters_no_cc",
+    "G2M.Score",
+    "S.Score"
+  )]
+)
 
 # Verify the new object
 print(new_seurat)
