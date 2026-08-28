@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
 gc() # free up memory and report the memory usage
 options(max.print = .Machine$integer.max,
         scipen = 999,
@@ -19,7 +19,7 @@ options(max.print = .Machine$integer.max,
 set.seed(42) # set seed for reproducibility
 ```
 
-- This short markdown file takes in my full Seurat object and subsets it into 4 objects, 1 for each sample in the current analysis.  
+- This short markdown file takes in my full Seurat object and subsets it into 4 independent objects, 1 for each sample in the current analysis.  
 - This markdown only splits the Seurat object into smaller objects and saves them, it does not refactor or re-embed anything.  
 
 # Load Libraries
@@ -41,13 +41,25 @@ library(patchwork)
 # Set project directories
 
 ```{r}
+# set the prject directory
 project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+# set the output directory -> this is where the new Seurat objects will be stored.
 out_dir <- file.path(project_repo_dir, "outDir", "10-rna_velocity")
 
-# Create directory if it doesn't exist
-if (!dir.exists(out_dir)) {
-  dir.create(out_dir,
-             recursive = TRUE)
+# Set sample-level output directories
+out_dir_e11_control <- file.path(out_dir, "e11_control")
+out_dir_e11_ko      <- file.path(out_dir, "e11_ko")
+out_dir_e12_control <- file.path(out_dir, "e12_control")
+out_dir_e12_ko      <- file.path(out_dir, "e12_ko")
+
+# Create directories if they don't exist
+for (dir in c(
+  out_dir_e11_control,
+  out_dir_e11_ko,
+  out_dir_e12_control,
+  out_dir_e12_ko
+)) {
+  dir.create(dir, recursive = TRUE, showWarnings = FALSE)
 }
 
 ```
@@ -65,6 +77,7 @@ Idents(re_embed_no_cc) <- factor(Idents(re_embed_no_cc))
 DefaultAssay(re_embed_no_cc) <- "RNA"
 
 # Save the existing Seurat clusters
+# these clusters were identified when analysing the merged data
 re_embed_no_cc$full_dataset_clusters_no_cc <- re_embed_no_cc$seurat_clusters
 
 ```
@@ -72,7 +85,7 @@ re_embed_no_cc$full_dataset_clusters_no_cc <- re_embed_no_cc$seurat_clusters
 # Split Seurat object
 
 ```{r}
-# split the existing Seurat object into a names list
+# split the existing Seurat object into a named list based on the sample identifier "orig.ident"
 seurat_list <- SplitObject(re_embed_no_cc,
                            split.by = "orig.ident")
 
@@ -86,16 +99,14 @@ e12_ko <- seurat_list[["e12_ko"]]
 # Save new Seurat objects before re-embedding
 
 ```{r}
-# let's save here and reload in a new session
-write_rds(x = e11_control,
-          file = file.path(out_dir, "e11_control.rds"))
+sample_names <- c("e11_control", "e11_ko", "e12_control", "e12_ko")
 
-write_rds(x = e11_ko,
-          file = file.path(out_dir, "e11_ko.rds"))
+samples <- mget(sample_names)
 
-write_rds(x = e12_control,
-          file = file.path(out_dir, "e12_control.rds"))
-
-write_rds(x = e12_ko,
-          file = file.path(out_dir, "e12_ko.rds"))
+for (sample in sample_names) {
+  write_rds(
+    x = samples[[sample]],
+    file = file.path(out_dir, sample, paste0(sample, "_no_cc.rds"))
+  )
+}
 ```
