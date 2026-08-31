@@ -82,6 +82,20 @@ re_embed_no_cc$full_dataset_clusters_no_cc <- re_embed_no_cc$seurat_clusters
 
 ```
 
+```{r}
+DimPlot(re_embed_no_cc,
+        reduction = "pca_original",
+        dims = c(3:4),
+        split.by = "new_celltypes",
+        group.by = "Phase",
+        label = TRUE,
+        label.size = 6
+        ) +
+      ggtitle(
+        paste0("Full data object - reduction = PCA_original - cc genes removed - re-embed etc - Phase")
+      )
+```
+
 # Split Seurat object
 
 ```{r}
