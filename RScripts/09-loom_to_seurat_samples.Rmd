@@ -26,20 +26,21 @@ Finally, we transfer the spliced-based UMAP embeddings (and any related reductio
 # Load Libraries
 
 ```{r}
+# Python environment constraint — must run before anything touches reticulate/Python
+reticulate::py_require(c("anndata==0.10.9", "pandas<3.0"))
+
 # Core tidyverse
 library(tidyverse)
-
 # Single cell
 library(Seurat)
 # library(SeuratDisk)
 library(Matrix)
 library(data.table)
-
 # plotting
 library(ggokabeito)
-
-library(sceasy)
+# Python stuff
 library(reticulate)
+library(sceasy)
 library(anndata)
 library(scCustomize)
 
@@ -49,13 +50,15 @@ library(scCustomize)
 
 ```{r}
 # Set sample ID -> Which sample do you want to run the script for?
-# sample_ID <- "e11_control"
+sample_ID <- "e11_control"
+loom_colname <- "possorted_genome_bam_5Q1UF:"
+
 # sample_ID <- "e11_ko"
 # loom_colname <- "possorted_genome_bam_LZRTJ:"
 # sample_ID <- "e12_control"
 # loom_colname <- "possorted_genome_bam_YIL7N:"
-sample_ID <- "e12_ko"
-loom_colname <- "possorted_genome_bam_0YX73:"
+# sample_ID <- "e12_ko"
+# loom_colname <- "possorted_genome_bam_0YX73:"
 
 # Set directories
 project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
@@ -162,9 +165,9 @@ colnames(unspliced_assay) %>% head()
 
 # add the expected suffix back onto the cell barcodes
 # add suffix to spliced
-colnames(spliced_assay) <- paste0(colnames(spliced_assay), "-1_2")
+colnames(spliced_assay) <- paste0(colnames(spliced_assay), "-1_1_1")
 # add suffix to unspliced
-colnames(unspliced_assay) <- paste0(colnames(unspliced_assay), "-1_2")
+colnames(unspliced_assay) <- paste0(colnames(unspliced_assay), "-1_1_1")
 
 target_genes <- rownames(seurat_obj)
 target_cells <- colnames(seurat_obj)

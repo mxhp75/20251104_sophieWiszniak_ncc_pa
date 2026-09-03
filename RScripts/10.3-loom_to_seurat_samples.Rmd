@@ -38,6 +38,7 @@ library(data.table)
 # Plotting
 library(ggokabeito)
 library(cowplot)
+library(patchwork)  # required for plot_annotation()
 # Python interop
 library(reticulate)
 library(sceasy)
@@ -277,7 +278,7 @@ process_loom_sample <- function(seurat_obj,
   }
 
   # ----------------------------------------------------------
-  # Transfer spliced/unspliced UMAP embeddings to original Seurat object
+  # Transfer spliced/unspliced UMAP and PCA embeddings to original Seurat object
   # ----------------------------------------------------------
 
   umap_embed <- Embeddings(re_embed_new_seurat, reduction = "umap")
@@ -286,6 +287,20 @@ process_loom_sample <- function(seurat_obj,
   seurat_obj[["umap_spliced"]] <- CreateDimReducObject(
     embeddings = umap_embed,
     key = "UMAPspliced_",
+    assay = DefaultAssay(seurat_obj)
+  )
+
+  # Transfer the spliced/unspliced PCA embeddings
+  # This is the PCA computed from the combined spliced/unspliced counts and is
+  # the appropriate embedding to use in the scanpy PAGA/FDG workflow when
+  # count_level = "spliced_unspliced" (as opposed to X_pca_no_cc_sample which
+  # should be used when count_level = "gene")
+  pca_embed <- Embeddings(re_embed_new_seurat, reduction = "pca")
+  pca_embed <- pca_embed[colnames(seurat_obj), ]
+
+  seurat_obj[["pca_spliced"]] <- CreateDimReducObject(
+    embeddings = pca_embed,
+    key = "PCAspliced_",
     assay = DefaultAssay(seurat_obj)
   )
 

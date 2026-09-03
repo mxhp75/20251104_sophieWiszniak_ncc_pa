@@ -62,6 +62,27 @@ if (!dir.exists(out_dir)) {
 }
 ```
 
+# Cell cycle gene sets (mouse)
+
+Cell cycle gene lists are re-derived here from `cc.genes.updated.2019` via
+human → mouse ortholog conversion. This is the same conversion used in the
+upstream pre-processing script.
+
+```{r cc-gene-sets}
+human_genes_to_mouse <- function(human_genes) {
+  hom_data <- homologene::homologene(human_genes, inTax = 9606, outTax = 10090)
+  setNames(hom_data$`10090`, hom_data$`9606`)
+}
+
+s_genes   <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$s.genes)
+g2m_genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$g2m.genes)
+cc_genes  <- c(s_genes, g2m_genes)
+
+cat("S-phase genes retained: ",   length(s_genes),   "\n")
+cat("G2M-phase genes retained: ", length(g2m_genes), "\n")
+cat("Total CC genes: ",           length(cc_genes),  "\n")
+```
+
 # Load required Seurat object
 - Load the final Seurat object as created in `06-cellType_filter.Rmd`. This object is post-QC, post-filtering and has layers for PCA, UMAP etc.  
 - This object contains all 4 samples and has all layers merged.  
@@ -79,6 +100,17 @@ Idents(re_embed_interesting_cells) <- factor(Idents(re_embed_interesting_cells))
 
 # ensure "RNA" is the default assay
 DefaultAssay(re_embed_interesting_cells) <- "RNA"
+
+# add collapsed cycling phase to the metadata
+re_embed_interesting_cells <- AddMetaData(
+  re_embed_interesting_cells,
+  metadata = ifelse(no
+    re_embed_interesting_cells@meta.data$Phase %in% c("S", "G2M"),
+    "cycling",
+    "not_cycling"
+  ),
+  col.name = "cycling"
+  )
 ```
 
 # Convert Seurat object to single cell experiment object
@@ -94,7 +126,7 @@ cc_means <- aggregate(
   cbind(S.Score, G2M.Score) ~ orig.ident,
   data = as.data.frame(colData(sce)),
   FUN = mean
-)
+  )
 rownames(cc_means) <- cc_means$orig.ident
 
 # remove the large Seurat object, we don't need it anymore
@@ -120,7 +152,7 @@ pb <- aggregateToPseudoBulk(sce,
   cluster_id = "new_celltypes",
   sample_id = "orig.ident",
   verbose = FALSE
-)
+  )
 
 # one 'assay' per cell type
 assayNames(pb)
@@ -165,7 +197,7 @@ details(res.proc)
 plotVoom(res.proc)
 ```
 
-# Variance partitioning by cell cycle score
+# Variance partitioning by cell cycle score (S.Score + G2M.Score)
 - What fraction of gene-expression variation is due to cell cycle?
 
 ```{r}
@@ -193,6 +225,28 @@ plotPercentBars(vp.res[
 # Sort by SScore variance (or G2MScore — whichever is of primary interest)
 top_genes_g2m <- rownames(vp.res)[order(vp.res$G2MScore, decreasing = TRUE)][1:20]
 plotPercentBars(vp.res[top_genes_g2m, ])
+
+plotPercentBars(vp.res[rownames(vp.res)[order(vp.res$G2MScore, decreasing = TRUE)][21:40], ])
+
+
+plotPercentBars(vp.res[g2m_genes])
+```
+
+# Variance partitioning by cell cycle phase
+- What fraction of gene-expression variation is due to cell cycle?
+
+```{r}
+
+# # Fit variance partition model for cycling phase
+# vp.cc <- fitVarPart(res.proc, ~cycling)
+# 
+# # Plot genome-wide variance fractions
+# plotVarPart(vp.cc, label.angle = 60)
+# 
+# # Plot per-gene percent bars for the top 5 genes
+# # Sort by genotype variance
+# top_genes_cc <- rownames(vp.cc)[order(vp.cc$genotype, decreasing = TRUE)][1:20]
+# plotPercentBars(vp.cc[top_genes_cc, ])
 
 ```
 

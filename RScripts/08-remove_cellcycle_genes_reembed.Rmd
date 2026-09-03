@@ -94,6 +94,72 @@ re_embed_interesting_cells@meta.data$cycling <- factor(
 )
 ```
 
+```{r}
+DimPlot(re_embed_interesting_cells,
+        reduction = "pca",
+        dims = c(3:4),
+        split.by = "new_celltypes",
+        group.by = "Phase",
+        label = TRUE,
+        label.size = 6
+        ) +
+      ggtitle(
+        paste0("Full data object - reduction = PCA - Phase")
+      )
+```
+
+
+# Preserve the original PCA and UMAP structures
+- I'd like to preserve these here so when I split the object and re-embed after removing the cell cycle genes I can still plot the old structure and compare
+
+```{r}
+# ----------------------------------------------------------
+# Preserve original PCA and UMAP before splitting samples
+# ----------------------------------------------------------
+
+if ("pca" %in% Reductions(re_embed_interesting_cells)) {
+  re_embed_interesting_cells[["pca_original"]] <-
+    re_embed_interesting_cells[["pca"]]
+  
+  Key(re_embed_interesting_cells[["pca_original"]]) <- "PCAOrig_"
+}
+
+if ("umap" %in% Reductions(re_embed_interesting_cells)) {
+  re_embed_interesting_cells[["umap_original"]] <-
+    re_embed_interesting_cells[["umap"]]
+  
+  Key(re_embed_interesting_cells[["umap_original"]]) <- "UMAPOrig_"
+}
+```
+
+```{r}
+# let's double check the PCAs, they should be identical
+p1 <- DimPlot(re_embed_interesting_cells,
+        reduction = "pca",
+        dims = c(3:4),
+        split.by = "new_celltypes",
+        group.by = "Phase",
+        label = TRUE,
+        label.size = 6
+        ) +
+      ggtitle(
+        paste0("Full data object - reduction = pca - Phase")
+      )
+
+p2 <- DimPlot(re_embed_interesting_cells,
+        reduction = "pca_original",
+        dims = c(3:4),
+        split.by = "new_celltypes",
+        group.by = "Phase",
+        label = TRUE,
+        label.size = 6
+        ) +
+      ggtitle(
+        paste0("Full data object - reduction = pca_original - Phase")
+      )
+p1 + p2
+```
+
 # Load the consensus cell-cycle gene set
 
 - This is the `full_consensus` gene vector built in `08-...Rmd`
@@ -160,6 +226,33 @@ re_embed_no_cc <- subset(re_embed_interesting_cells, features = genes_to_keep)
 stopifnot(!any(full_consensus %in% rownames(re_embed_no_cc)))
 ```
 
+```{r}
+p3 <- DimPlot(re_embed_interesting_cells,
+        reduction = "pca",
+        dims = c(3:4),
+        split.by = "new_celltypes",
+        group.by = "Phase",
+        label = TRUE,
+        label.size = 6
+        ) +
+      ggtitle(
+        paste0("Full data object - reduction = pca - cc genes removed - Phase")
+      )
+
+p4 <- DimPlot(re_embed_interesting_cells,
+        reduction = "pca_original",
+        dims = c(3:4),
+        split.by = "new_celltypes",
+        group.by = "Phase",
+        label = TRUE,
+        label.size = 6
+        ) +
+      ggtitle(
+        paste0("Full data object - reduction = pca_original - cc genes removed - Phase")
+      )
+p3 + p4
+```
+
 ## 2.2 Standard re-processing on the reduced gene set
 
 Note: `NormalizeData()` is not re-run here, since the log-normalization
@@ -171,15 +264,17 @@ factors), swap in `NormalizeData()` as the first step below.
 
 ```{r reprocess}
 re_embed_no_cc <- FindVariableFeatures(re_embed_no_cc,
-                                        selection.method = "vst",
-                                        nfeatures = 2000)
+                                       selection.method = "vst",
+                                       nfeatures = 2000)
 
 re_embed_no_cc <- ScaleData(re_embed_no_cc,
-                             features = rownames(re_embed_no_cc))
+                            features = rownames(re_embed_no_cc))
 
 re_embed_no_cc <- RunPCA(re_embed_no_cc,
-                          features = VariableFeatures(re_embed_no_cc),
-                          npcs = 30)
+                         reduction.name = "pca_no_cc",
+                         reduction.key = "PCNoCC_",
+                         features = VariableFeatures(re_embed_no_cc),
+                         npcs = 30)
 
 ElbowPlot(re_embed_no_cc, ndims = 30)
 ```
@@ -188,12 +283,55 @@ ElbowPlot(re_embed_no_cc, ndims = 30)
 # adjust dims if the elbow plot above suggests a different cutoff
 n_pcs <- 20
 
-re_embed_no_cc <- FindNeighbors(re_embed_no_cc, dims = 1:n_pcs)
+re_embed_no_cc <- FindNeighbors(re_embed_no_cc,
+                                reduction = "pca_no_cc",
+                                dims = 1:n_pcs)
 re_embed_no_cc <- FindClusters(re_embed_no_cc, resolution = 0.6)
-re_embed_no_cc <- RunUMAP(re_embed_no_cc, dims = 1:n_pcs)
+re_embed_no_cc <- RunUMAP(re_embed_no_cc,
+                          reduction = "pca_no_cc",
+                          reduction.name = "umap_no_cc",
+                          reduction.key = "UMAPNoCC_",
+                          dims = 1:n_pcs)
 
 # preserve the new clustering separately from the original seurat_clusters
 re_embed_no_cc$seurat_clusters_no_cc <- Idents(re_embed_no_cc)
+```
+
+```{r}
+p5 <- DimPlot(re_embed_no_cc,
+        reduction = "pca",
+        dims = c(3:4),
+        split.by = "new_celltypes",
+        group.by = "Phase",
+        label = TRUE,
+        label.size = 6
+        ) +
+      ggtitle(
+        paste0("Full data object - reduction = pca - cc genes removed - re-embed etc - Phase")
+      )
+p6 <- DimPlot(re_embed_no_cc,
+        reduction = "pca_original",
+        dims = c(3:4),
+        split.by = "new_celltypes",
+        group.by = "Phase",
+        label = TRUE,
+        label.size = 6
+        ) +
+      ggtitle(
+        paste0("Full data object - reduction = pca_original - cc genes removed - re-embed etc - Phase")
+      )
+p7 <- DimPlot(re_embed_no_cc,
+        reduction = "pca_no_cc",
+        dims = c(3:4),
+        split.by = "new_celltypes",
+        group.by = "Phase",
+        label = TRUE,
+        label.size = 6
+        ) +
+      ggtitle(
+        paste0("Full data object - reduction = pca_no_cc - cc genes removed - re-embed etc - Phase")
+      )
+p5 + p6 + p7
 ```
 
 ```{r save-reduced-object}
