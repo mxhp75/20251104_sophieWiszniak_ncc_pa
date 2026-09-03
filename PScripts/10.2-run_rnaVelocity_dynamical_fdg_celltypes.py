@@ -42,11 +42,8 @@ import os
 # set PAGA group — matches the grouping used in 10_1
 paga_group = "celltypes"
 
-# set the sample ID
-sample_id = "e11_control"
-# sample_id = "e11_ko"
-# sample_id = "e12_control"
-# sample_id = "e12_ko"
+# set the sample IDs to loop over
+sample_names = ["e11_control", "e11_ko", "e12_control", "e12_ko"]
 
 # set the PC and neighbour combination to use
 # these must match one of the permutations run in 10_1
@@ -80,360 +77,363 @@ loom_filenames = {
 
 project_dir = "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
 
-# Input .h5ad — output from 10_1-run_scanpy_paga_fdg_cell.py
-h5ad_file_input = os.path.join(
-    project_dir,
-    "outDir",
-    "10-rna_velocity",
-    sample_id,
-    "scanpy_output",
-    paga_group,
-    f"{sample_id}_fdg_pcs{n_pcs}_neighbours{n_neighbours}_counts_{count_level}_{paga_group}.h5ad"
-)
+for sample_id in sample_names:
+    print(f"\n{'='*60}\nProcessing: {sample_id}\n{'='*60}")
 
-# Input .loom — per-sample Velocyto output
-loom_file = os.path.join(
-    project_dir,
-    "outDir",
-    "09-rna_velocity",
-    sample_id,
-    "velocyto_output",
-    loom_filenames[sample_id]
-)
-
-# Output directory
-out_dir = os.path.join(
-    project_dir,
-    "outDir",
-    "10-rna_velocity",
-    sample_id,
-    "velocity_output_dynamical",
-    paga_group
-)
-os.makedirs(out_dir, exist_ok=True)
-
-#-----------------------------------------------------------------------------------
-#   Import the .h5ad and .loom files
-#-----------------------------------------------------------------------------------
-
-print(f"\n--- Loading .h5ad: {h5ad_file_input}")
-adata = sc.read_h5ad(h5ad_file_input)
-print(adata)
-
-print(f"\n--- Loading .loom: {loom_file}")
-vlm = sc.read_loom(loom_file)
-
-#-----------------------------------------------------------------------------------
-#   Align cell barcodes between .h5ad and .loom
-#-----------------------------------------------------------------------------------
-
-print("\n--- Aligning barcodes")
-print("adata examples:", adata.obs_names[:5].tolist())
-print("loom raw examples:", vlm.obs_names[:5].tolist())
-
-# loom raw format: "possorted_genome_bam_5Q1UF:AAATGGATCGATACGTx"
-# adata format:    "AAATGGATCGATACGT-1_1_1"
-# Steps:
-#   1. Strip everything up to and including ":"
-#   2. Detect the Seurat multi-sample suffix from adata (everything after the first "-1")
-#   3. Replace trailing "x" with "-1{suffix}"
-
-# Step 1: strip Velocyto prefix
-vlm.obs_names = vlm.obs_names.str.split(":").str[1]
-
-# Step 2: detect suffix from adata barcodes
-example_bc = adata.obs_names[0]          # e.g. "AAATGGATCGATACGT-1_1_1"
-barcode_suffix = example_bc[example_bc.index("-1") + 2:]  # e.g. "_1_1"
-print(f"Detected adata barcode suffix: '{barcode_suffix}'")
-
-# Step 3: swap trailing "x" for "-1{suffix}"
-vlm.obs_names = vlm.obs_names.str[:-1] + "-1" + barcode_suffix
-
-print("loom cleaned examples:", vlm.obs_names[:5].tolist())
-
-# Check overlap
-common = adata.obs_names.intersection(vlm.obs_names)
-print(f"adata cells: {len(adata)}")
-print(f"loom cells:  {len(vlm)}")
-print(f"common:      {len(common)}")
-
-if len(common) == 0:
-    raise ValueError(
-        "No common barcodes found between .h5ad and .loom after cleaning. "
-        "Print adata.obs_names[:5] and vlm.obs_names[:5] and compare carefully."
+    # Input .h5ad — output from 10_1-run_scanpy_paga_fdg_cell.py
+    h5ad_file_input = os.path.join(
+        project_dir,
+        "outDir",
+        "10-rna_velocity",
+        sample_id,
+        "scanpy_output",
+        paga_group,
+        f"{sample_id}_fdg_pcs{n_pcs}_neighbours{n_neighbours}_counts_{count_level}_{paga_group}.h5ad"
     )
 
-# Subset loom to cells present in adata, in adata cell order
-vlm = vlm[adata.obs_names].copy()
-
-# Check barcode overlap
-common = adata.obs_names.intersection(vlm.obs_names)
-print(f"adata cells: {len(adata)}")
-print(f"loom cells:  {len(vlm)}")
-print(f"common:      {len(common)}")
-
-if len(common) == 0:
-    raise ValueError(
-        "No common barcodes found between .h5ad and .loom. "
-        "Check loom_colnames and loom_filenames for this sample."
+    # Input .loom — per-sample Velocyto output
+    loom_file = os.path.join(
+        project_dir,
+        "outDir",
+        "09-rna_velocity",
+        sample_id,
+        "velocyto_output",
+        loom_filenames[sample_id]
     )
 
-# Subset loom to cells present in adata, in adata cell order
-vlm = vlm[adata.obs_names].copy()
+    # Output directory
+    out_dir = os.path.join(
+        project_dir,
+        "outDir",
+        "10-rna_velocity",
+        sample_id,
+        "velocity_output_dynamical",
+        paga_group
+    )
+    os.makedirs(out_dir, exist_ok=True)
 
-#-----------------------------------------------------------------------------------
-#   Merge adata and loom (vlm) objects
-#-----------------------------------------------------------------------------------
+    #-----------------------------------------------------------------------------------
+    #   Import the .h5ad and .loom files
+    #-----------------------------------------------------------------------------------
 
-print("\n--- Merging adata and loom")
-adata = scv.utils.merge(adata, vlm)
+    print(f"\n--- Loading .h5ad: {h5ad_file_input}")
+    adata = sc.read_h5ad(h5ad_file_input)
+    print(adata)
 
-print("Layers after merge:", list(adata.layers.keys()))
+    print(f"\n--- Loading .loom: {loom_file}")
+    vlm = sc.read_loom(loom_file)
 
-#-----------------------------------------------------------------------------------
-#   Proportion of spliced and unspliced reads (QC)
-#-----------------------------------------------------------------------------------
+    #-----------------------------------------------------------------------------------
+    #   Align cell barcodes between .h5ad and .loom
+    #-----------------------------------------------------------------------------------
 
-print("\n--- Plotting spliced/unspliced proportions")
-scv.pl.proportions(adata, show=False)
-plt.savefig(
-    os.path.join(out_dir, f"{sample_id}_proportions_{paga_group}.png"),
-    dpi=150,
-    bbox_inches="tight"
-)
-plt.close()
+    print("\n--- Aligning barcodes")
+    print("adata examples:", adata.obs_names[:5].tolist())
+    print("loom raw examples:", vlm.obs_names[:5].tolist())
 
-#-----------------------------------------------------------------------------------
-#   Pre-processing
-#-----------------------------------------------------------------------------------
+    # loom raw format: "possorted_genome_bam_5Q1UF:AAATGGATCGATACGTx"
+    # adata format:    "AAATGGATCGATACGT-1_1_1"
+    # Steps:
+    #   1. Strip everything up to and including ":"
+    #   2. Detect the Seurat multi-sample suffix from adata (everything after the first "-1")
+    #   3. Replace trailing "x" with "-1{suffix}"
 
-print("\n--- Pre-processing")
+    # Step 1: strip Velocyto prefix
+    vlm.obs_names = vlm.obs_names.str.split(":").str[1]
 
-# Remove any stale moment layers from previous runs
-for key in ["Ms", "Mu"]:
-    adata.layers.pop(key, None)
-adata.uns.pop("neighbors", None)
+    # Step 2: detect suffix from adata barcodes
+    example_bc = adata.obs_names[0]          # e.g. "AAATGGATCGATACGT-1_1_1"
+    barcode_suffix = example_bc[example_bc.index("-1") + 2:]  # e.g. "_1_1"
+    print(f"Detected adata barcode suffix: '{barcode_suffix}'")
 
-# Filter and normalise
-scv.pp.filter_and_normalize(adata)
+    # Step 3: swap trailing "x" for "-1{suffix}"
+    vlm.obs_names = vlm.obs_names.str[:-1] + "-1" + barcode_suffix
 
-# Compute moments (means and uncentred variances) in PCA space
-scv.pp.moments(adata)
+    print("loom cleaned examples:", vlm.obs_names[:5].tolist())
 
-#-----------------------------------------------------------------------------------
-#   Gene filtering for dynamical model
-#-----------------------------------------------------------------------------------
+    # Check overlap
+    common = adata.obs_names.intersection(vlm.obs_names)
+    print(f"adata cells: {len(adata)}")
+    print(f"loom cells:  {len(vlm)}")
+    print(f"common:      {len(common)}")
 
-print("\n--- Filtering genes for dynamical model")
-scv.pp.filter_genes(adata, min_shared_counts=20)
-scv.pp.filter_genes_dispersion(adata, n_top_genes=2000)
+    if len(common) == 0:
+        raise ValueError(
+            "No common barcodes found between .h5ad and .loom after cleaning. "
+            "Print adata.obs_names[:5] and vlm.obs_names[:5] and compare carefully."
+        )
 
-#-----------------------------------------------------------------------------------
-#   Dynamical model — recover dynamics and compute velocities
-#-----------------------------------------------------------------------------------
+    # Subset loom to cells present in adata, in adata cell order
+    vlm = vlm[adata.obs_names].copy()
 
-# Note: n_jobs > 1 causes BrokenPipeError in interactive IPython sessions.
-# Run this script from the terminal to safely use n_jobs=4:
-# python 10_2-run_rnaVelocity_dynamical_fdg_celltypes.py
-print("\n--- Recovering dynamics (this may take a while)")
-scv.tl.recover_dynamics(adata, n_jobs=1, show_progress_bar=False)
+    # Check barcode overlap
+    common = adata.obs_names.intersection(vlm.obs_names)
+    print(f"adata cells: {len(adata)}")
+    print(f"loom cells:  {len(vlm)}")
+    print(f"common:      {len(common)}")
 
-print("\n--- Computing velocities (dynamical mode)")
-scv.tl.velocity(adata, mode="dynamical")
+    if len(common) == 0:
+        raise ValueError(
+            "No common barcodes found between .h5ad and .loom. "
+            "Check loom_colnames and loom_filenames for this sample."
+        )
 
-#-----------------------------------------------------------------------------------
-#   Velocity graph
-#-----------------------------------------------------------------------------------
+    # Subset loom to cells present in adata, in adata cell order
+    vlm = vlm[adata.obs_names].copy()
 
-print("\n--- Computing velocity graph")
-scv.tl.velocity_graph(adata)
+    #-----------------------------------------------------------------------------------
+    #   Merge adata and loom (vlm) objects
+    #-----------------------------------------------------------------------------------
 
-#-----------------------------------------------------------------------------------
-#   Latent time
-#-----------------------------------------------------------------------------------
+    print("\n--- Merging adata and loom")
+    adata = scv.utils.merge(adata, vlm)
 
-print("\n--- Computing latent time")
-scv.tl.latent_time(adata)
+    print("Layers after merge:", list(adata.layers.keys()))
 
-#-----------------------------------------------------------------------------------
-#   Velocity embedding plots
-#-----------------------------------------------------------------------------------
+    #-----------------------------------------------------------------------------------
+    #   Proportion of spliced and unspliced reads (QC)
+    #-----------------------------------------------------------------------------------
 
-print("\n--- Saving velocity embedding plots")
+    print("\n--- Plotting spliced/unspliced proportions")
+    scv.pl.proportions(adata, show=False)
+    plt.savefig(
+        os.path.join(out_dir, f"{sample_id}_proportions_{paga_group}.png"),
+        dpi=150,
+        bbox_inches="tight"
+    )
+    plt.close()
 
-# Helper: shared plot kwargs
-embed_kwargs = dict(
-    color      = "new_celltypes",
-    arrow_length = 3,
-    arrow_size   = 2,
-    dpi          = 120,
-    show         = False,
-    legend_loc   = "right margin"
-)
+    #-----------------------------------------------------------------------------------
+    #   Pre-processing
+    #-----------------------------------------------------------------------------------
 
-# --- UMAP (gene-level embedding, from original Seurat processing) ---
-scv.pl.velocity_embedding(
-    adata,
-    basis  = "umap",
-    title  = f"UMAP (gene level) — dynamical — {sample_id}",
-    **embed_kwargs
-)
-plt.savefig(
-    os.path.join(out_dir, f"{sample_id}_velocity_umap_{paga_group}.png"),
-    dpi=300, bbox_inches="tight"
-)
-plt.close()
+    print("\n--- Pre-processing")
 
-# --- UMAP spliced (spliced/unspliced embedding from 10.3) ---
-scv.pl.velocity_embedding(
-    adata,
-    basis  = "umap_spliced",
-    title  = f"UMAP spliced — dynamical — {sample_id}",
-    **embed_kwargs
-)
-plt.savefig(
-    os.path.join(out_dir, f"{sample_id}_velocity_umap_{count_level}_{paga_group}.png"),
-    dpi=300, bbox_inches="tight"
-)
-plt.close()
+    # Remove any stale moment layers from previous runs
+    for key in ["Ms", "Mu"]:
+        adata.layers.pop(key, None)
+    adata.uns.pop("neighbors", None)
 
-# --- FDG (PAGA-informed Force Directed Graph, from 10_1) ---
-scv.pl.velocity_embedding(
-    adata,
-    basis  = "draw_graph_fa",
-    title  = (
-        f"FDG — pcs={n_pcs}, neighbours={n_neighbours} "
-        f"— {count_level} — dynamical — {sample_id}"
-    ),
-    **embed_kwargs
-)
-plt.savefig(
-    os.path.join(
-        out_dir,
-        f"{sample_id}_velocity_fdg_pcs{n_pcs}_neighbours{n_neighbours}_{count_level}_{paga_group}.png"
-    ),
-    dpi=300, bbox_inches="tight"
-)
-plt.close()
+    # Filter and normalise
+    scv.pp.filter_and_normalize(adata)
 
-# --- Velocity embedding plots coloured by cell cycle Phase ---
+    # Compute moments (means and uncentred variances) in PCA space
+    scv.pp.moments(adata)
 
-embed_kwargs_phase = dict(
-    color        = "Phase",
-    arrow_length = 3,
-    arrow_size   = 2,
-    dpi          = 120,
-    show         = False,
-    legend_loc   = "right margin"
-)
+    #-----------------------------------------------------------------------------------
+    #   Gene filtering for dynamical model
+    #-----------------------------------------------------------------------------------
 
-# UMAP
-scv.pl.velocity_embedding(
-    adata,
-    basis  = "umap",
-    title  = f"UMAP (gene level) — dynamical — Phase — {sample_id}",
-    **embed_kwargs_phase
-)
-plt.savefig(
-    os.path.join(out_dir, f"{sample_id}_velocity_umap_Phase_{paga_group}.png"),
-    dpi=300, bbox_inches="tight"
-)
-plt.close()
+    print("\n--- Filtering genes for dynamical model")
+    scv.pp.filter_genes(adata, min_shared_counts=20)
+    scv.pp.filter_genes_dispersion(adata, n_top_genes=2000)
 
-# UMAP spliced
-scv.pl.velocity_embedding(
-    adata,
-    basis  = "umap_spliced",
-    title  = f"UMAP spliced — dynamical — Phase — {sample_id}",
-    **embed_kwargs_phase
-)
-plt.savefig(
-    os.path.join(out_dir, f"{sample_id}_velocity_umap_{count_level}_Phase_{paga_group}.png"),
-    dpi=300, bbox_inches="tight"
-)
-plt.close()
+    #-----------------------------------------------------------------------------------
+    #   Dynamical model — recover dynamics and compute velocities
+    #-----------------------------------------------------------------------------------
 
-# FDG
-scv.pl.velocity_embedding(
-    adata,
-    basis  = "draw_graph_fa",
-    title  = (
-        f"FDG — pcs={n_pcs}, neighbours={n_neighbours} "
-        f"— {count_level} — dynamical — Phase — {sample_id}"
-    ),
-    **embed_kwargs_phase
-)
-plt.savefig(
-    os.path.join(
-        out_dir,
-        f"{sample_id}_velocity_fdg_pcs{n_pcs}_neighbours{n_neighbours}_{count_level}_Phase_{paga_group}.png"
-    ),
-    dpi=300, bbox_inches="tight"
-)
-plt.close()
+    # Note: n_jobs > 1 causes BrokenPipeError in interactive IPython sessions.
+    # Run this script from the terminal to safely use n_jobs=4:
+    # python 10_2-run_rnaVelocity_dynamical_fdg_celltypes.py
+    print("\n--- Recovering dynamics (this may take a while)")
+    scv.tl.recover_dynamics(adata, n_jobs=1, show_progress_bar=False)
 
-#-----------------------------------------------------------------------------------
-#   Velocity embedding stream plots (smoother summary view)
-#-----------------------------------------------------------------------------------
+    print("\n--- Computing velocities (dynamical mode)")
+    scv.tl.velocity(adata, mode="dynamical")
 
-for basis, label in [("umap", "umap"), ("umap_spliced", "umap_spliced"), ("draw_graph_fa", "fdg")]:
-    scv.pl.velocity_embedding_stream(
+    #-----------------------------------------------------------------------------------
+    #   Velocity graph
+    #-----------------------------------------------------------------------------------
+
+    print("\n--- Computing velocity graph")
+    scv.tl.velocity_graph(adata)
+
+    #-----------------------------------------------------------------------------------
+    #   Latent time
+    #-----------------------------------------------------------------------------------
+
+    print("\n--- Computing latent time")
+    scv.tl.latent_time(adata)
+
+    #-----------------------------------------------------------------------------------
+    #   Velocity embedding plots
+    #-----------------------------------------------------------------------------------
+
+    print("\n--- Saving velocity embedding plots")
+
+    # Helper: shared plot kwargs
+    embed_kwargs = dict(
+        color      = "new_celltypes",
+        arrow_length = 3,
+        arrow_size   = 2,
+        dpi          = 120,
+        show         = False,
+        legend_loc   = "right margin"
+    )
+
+    # --- UMAP (gene-level embedding, from original Seurat processing) ---
+    scv.pl.velocity_embedding(
         adata,
-        basis  = basis,
-        color  = "new_celltypes",
-        title  = f"{label} — stream — {sample_id}",
-        show   = False,
-        legend_loc = "right margin"
+        basis  = "umap",
+        title  = f"UMAP (gene level) — dynamical — {sample_id}",
+        **embed_kwargs
+    )
+    plt.savefig(
+        os.path.join(out_dir, f"{sample_id}_velocity_umap_{paga_group}.png"),
+        dpi=300, bbox_inches="tight"
+    )
+    plt.close()
+
+    # --- UMAP spliced (spliced/unspliced embedding from 10.3) ---
+    scv.pl.velocity_embedding(
+        adata,
+        basis  = "umap_spliced",
+        title  = f"UMAP spliced — dynamical — {sample_id}",
+        **embed_kwargs
+    )
+    plt.savefig(
+        os.path.join(out_dir, f"{sample_id}_velocity_umap_{count_level}_{paga_group}.png"),
+        dpi=300, bbox_inches="tight"
+    )
+    plt.close()
+
+    # --- FDG (PAGA-informed Force Directed Graph, from 10_1) ---
+    scv.pl.velocity_embedding(
+        adata,
+        basis  = "draw_graph_fa",
+        title  = (
+            f"FDG — pcs={n_pcs}, neighbours={n_neighbours} "
+            f"— {count_level} — dynamical — {sample_id}"
+        ),
+        **embed_kwargs
     )
     plt.savefig(
         os.path.join(
             out_dir,
-            f"{sample_id}_velocity_stream_{label}_pcs{n_pcs}_neighbours{n_neighbours}_{count_level}_{paga_group}.png"
+            f"{sample_id}_velocity_fdg_pcs{n_pcs}_neighbours{n_neighbours}_{count_level}_{paga_group}.png"
         ),
         dpi=300, bbox_inches="tight"
     )
     plt.close()
 
-#-----------------------------------------------------------------------------------
-#   QC scatter plots on FDG
-#-----------------------------------------------------------------------------------
+    # --- Velocity embedding plots coloured by cell cycle Phase ---
 
-print("\n--- Saving QC scatter plots")
+    embed_kwargs_phase = dict(
+        color        = "Phase",
+        arrow_length = 3,
+        arrow_size   = 2,
+        dpi          = 120,
+        show         = False,
+        legend_loc   = "right margin"
+    )
 
-qc_plots = {
-    "celltypes":                 ("new_celltypes",               "Celltypes on FDG"),
-    "clusters":                  ("full_dataset_clusters_no_cc", "Clusters on FDG"),
-    "latent_time":               ("latent_time",                 "Latent time on FDG"),
-}
-
-for fname_tag, (color_key, title_str) in qc_plots.items():
-    kwargs = dict(cmap="gnuplot") if color_key == "latent_time" else {}
-    scv.pl.scatter(
+    # UMAP
+    scv.pl.velocity_embedding(
         adata,
-        color = color_key,
-        basis = "draw_graph_fa",
-        title = title_str,
-        show  = False,
-        **kwargs
+        basis  = "umap",
+        title  = f"UMAP (gene level) — dynamical — Phase — {sample_id}",
+        **embed_kwargs_phase
+    )
+    plt.savefig(
+        os.path.join(out_dir, f"{sample_id}_velocity_umap_Phase_{paga_group}.png"),
+        dpi=300, bbox_inches="tight"
+    )
+    plt.close()
+
+    # UMAP spliced
+    scv.pl.velocity_embedding(
+        adata,
+        basis  = "umap_spliced",
+        title  = f"UMAP spliced — dynamical — Phase — {sample_id}",
+        **embed_kwargs_phase
+    )
+    plt.savefig(
+        os.path.join(out_dir, f"{sample_id}_velocity_umap_{count_level}_Phase_{paga_group}.png"),
+        dpi=300, bbox_inches="tight"
+    )
+    plt.close()
+
+    # FDG
+    scv.pl.velocity_embedding(
+        adata,
+        basis  = "draw_graph_fa",
+        title  = (
+            f"FDG — pcs={n_pcs}, neighbours={n_neighbours} "
+            f"— {count_level} — dynamical — Phase — {sample_id}"
+        ),
+        **embed_kwargs_phase
     )
     plt.savefig(
         os.path.join(
             out_dir,
-            f"{sample_id}_qc_{fname_tag}_fdg_pcs{n_pcs}_neighbours{n_neighbours}_{count_level}_{paga_group}.png"
+            f"{sample_id}_velocity_fdg_pcs{n_pcs}_neighbours{n_neighbours}_{count_level}_Phase_{paga_group}.png"
         ),
         dpi=300, bbox_inches="tight"
     )
     plt.close()
 
-#-----------------------------------------------------------------------------------
-#   Save the final adata object
-#-----------------------------------------------------------------------------------
+    #-----------------------------------------------------------------------------------
+    #   Velocity embedding stream plots (smoother summary view)
+    #-----------------------------------------------------------------------------------
 
-out_h5ad = os.path.join(
-    out_dir,
-    f"{sample_id}_velocity_dynamical_pcs{n_pcs}_neighbours{n_neighbours}_{count_level}_{paga_group}.h5ad"
-)
-print(f"\n--- Saving final adata to: {out_h5ad}")
-adata.write_h5ad(out_h5ad, compression="gzip")
+    for basis, label in [("umap", "umap"), ("umap_spliced", "umap_spliced"), ("draw_graph_fa", "fdg")]:
+        scv.pl.velocity_embedding_stream(
+            adata,
+            basis  = basis,
+            color  = "new_celltypes",
+            title  = f"{label} — stream — {sample_id}",
+            show   = False,
+            legend_loc = "right margin"
+        )
+        plt.savefig(
+            os.path.join(
+                out_dir,
+                f"{sample_id}_velocity_stream_{label}_pcs{n_pcs}_neighbours{n_neighbours}_{count_level}_{paga_group}.png"
+            ),
+            dpi=300, bbox_inches="tight"
+        )
+        plt.close()
 
-print("\n--- Done.")
+    #-----------------------------------------------------------------------------------
+    #   QC scatter plots on FDG
+    #-----------------------------------------------------------------------------------
+
+    print("\n--- Saving QC scatter plots")
+
+    qc_plots = {
+        "celltypes":                 ("new_celltypes",               "Celltypes on FDG"),
+        "clusters":                  ("full_dataset_clusters_no_cc", "Clusters on FDG"),
+        "latent_time":               ("latent_time",                 "Latent time on FDG"),
+    }
+
+    for fname_tag, (color_key, title_str) in qc_plots.items():
+        kwargs = dict(cmap="gnuplot") if color_key == "latent_time" else {}
+        scv.pl.scatter(
+            adata,
+            color = color_key,
+            basis = "draw_graph_fa",
+            title = title_str,
+            show  = False,
+            **kwargs
+        )
+        plt.savefig(
+            os.path.join(
+                out_dir,
+                f"{sample_id}_qc_{fname_tag}_fdg_pcs{n_pcs}_neighbours{n_neighbours}_{count_level}_{paga_group}.png"
+            ),
+            dpi=300, bbox_inches="tight"
+        )
+        plt.close()
+
+    #-----------------------------------------------------------------------------------
+    #   Save the final adata object
+    #-----------------------------------------------------------------------------------
+
+    out_h5ad = os.path.join(
+        out_dir,
+        f"{sample_id}_velocity_dynamical_pcs{n_pcs}_neighbours{n_neighbours}_{count_level}_{paga_group}.h5ad"
+    )
+    print(f"\n--- Saving final adata to: {out_h5ad}")
+    adata.write_h5ad(out_h5ad, compression="gzip")
+
+    print("\n--- Done.")
