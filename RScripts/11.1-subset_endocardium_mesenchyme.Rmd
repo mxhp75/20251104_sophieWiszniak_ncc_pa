@@ -155,109 +155,67 @@ for (sample_ID in sample_names) {
 re_embed_subset <- function(seurat_obj,
                              sample_ID,
                              n_dims = 30,
-                             nfeatures = 3000,
-                             resolution = 0.5) {
+                             nfeatures = 3000) {
 
   message("Processing: ", sample_ID)
 
   # ----------------------------------------------------------
   # Set default assay and reset idents
   # ----------------------------------------------------------
-
   DefaultAssay(seurat_obj) <- "RNA"
   Idents(seurat_obj) <- seurat_obj$new_celltypes
 
   # ----------------------------------------------------------
   # Recalculate variable features
   # ----------------------------------------------------------
-
   re_embed_seurat_obj <- FindVariableFeatures(
     seurat_obj,
     selection.method = "vst",
-    nfeatures = nfeatures,
-    verbose = FALSE
+    nfeatures        = nfeatures,
+    verbose          = FALSE
   )
-
 
   # ----------------------------------------------------------
   # Scale data and calculate new PCA
   # ----------------------------------------------------------
-
   re_embed_seurat_obj <- ScaleData(
     re_embed_seurat_obj,
     features = rownames(re_embed_seurat_obj),
-    verbose = FALSE
+    verbose  = FALSE
   )
 
   re_embed_seurat_obj <- RunPCA(
     re_embed_seurat_obj,
     reduction.name = "pca_endo_mesen",
-    reduction.key = "PCEndoMesen_",
-    verbose = FALSE
+    reduction.key  = "PCEndoMesen_",
+    verbose        = FALSE
   )
 
-
   # ----------------------------------------------------------
-  # Calculate new neighbour graph
+  # Calculate neighbour graph
   # ----------------------------------------------------------
-
   re_embed_seurat_obj <- FindNeighbors(
     re_embed_seurat_obj,
     reduction = "pca_endo_mesen",
-    dims = 1:n_dims,
-    verbose = FALSE
+    dims      = 1:n_dims,
+    verbose   = FALSE
   )
 
-
   # ----------------------------------------------------------
-  # Resolution sweep (inspection only, not stored permanently)
+  # Calculate UMAP
   # ----------------------------------------------------------
-
-  for (res in c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6)) {
-
-    sweep_clusters <- FindClusters(
-      re_embed_seurat_obj,
-      resolution = res,
-      verbose = FALSE
-    )
-
-    message(
-      "Resolution ", res, ": ",
-      length(unique(sweep_clusters$seurat_clusters)), " clusters"
-    )
-    }
-
-
-  # ----------------------------------------------------------
-  # Calculate new clusters at the supplied resolution
-  # ----------------------------------------------------------
-
-  re_embed_seurat_obj <- FindClusters(
-    re_embed_seurat_obj,
-    resolution = resolution,
-    cluster.name = "seurat_clusters_endo_mesen",
-    verbose = FALSE
-  )
-
-
-  # ----------------------------------------------------------
-  # Calculate new UMAP
-  # ----------------------------------------------------------
-
   re_embed_seurat_obj <- RunUMAP(
     re_embed_seurat_obj,
-    reduction = "pca_endo_mesen",
-    dims = 1:n_dims,
+    reduction      = "pca_endo_mesen",
+    dims           = 1:n_dims,
     reduction.name = "umap_endo_mesen",
-    reduction.key = "UMAPEndoMesen_",
-    verbose = FALSE
+    reduction.key  = "UMAPEndoMesen_",
+    verbose        = FALSE
   )
 
-
   message("Finished: ", sample_ID)
-
   return(re_embed_seurat_obj)
-  }
+}
 ```
 
 # Run re-embedding on all subset samples
@@ -287,14 +245,81 @@ lapply(
   re_embed_subset_samples,
   Reductions
   )
+```
 
-# Check cluster numbers
-lapply(
-  re_embed_subset_samples,
-  function(x) {
-    length(unique(x$seurat_clusters_endo_mesen))
-    }
+# Resolution sweep
+- Run this chunk and inspect the plots for each sample before proceeding.
+- Choose a resolution per sample based on the plots below.
+- Enter your choices in the **next chunk** before running it.
+
+```{r}
+for (sample_ID in sample_names) {
+
+  obj <- re_embed_subset_samples[[sample_ID]]
+
+  for (res in c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6)) {
+
+    sweep_obj  <- FindClusters(
+      obj,
+      resolution = res,
+      verbose    = FALSE
+    )
+
+    n_clusters <- length(unique(sweep_obj$seurat_clusters))
+    message(sample_ID, " — resolution ", res, ": ", n_clusters, " clusters")
+
+    print(
+      DimPlot(
+        sweep_obj,
+        reduction  = "umap_endo_mesen",
+        group.by   = "seurat_clusters",
+        label      = TRUE,
+        label.size = 6
+      ) +
+        labs(
+          title    = paste0(sample_ID, " — resolution: ", res),
+          subtitle = paste0(n_clusters, " clusters"),
+          caption  = "Endocardium + Mesenchyme subset"
+        ) +
+        NoLegend()
+    )
+  }
+}
+```
+
+# Final clustering — supervised resolution choice
+- Inspect the resolution sweep plots above before running this chunk.
+- Enter your per-sample resolution choices in the `chosen_resolutions` vector below.
+- Then run this chunk to apply `FindClusters` at the chosen resolution for each sample.
+
+```{r}
+# ============================================================
+# Enter your chosen resolution per sample after inspecting
+# the sweep plots above. Run this chunk only after reviewing.
+# ============================================================
+
+chosen_resolutions <- c(
+  "e11_control" = 0.2,
+  "e11_ko"      = 0.3,
+  "e12_control" = 0.2,
+  "e12_ko"      = 0.3
+)
+
+for (sample_ID in sample_names) {
+
+  res <- chosen_resolutions[[sample_ID]]
+  message("Applying resolution ", res, " to ", sample_ID)
+
+  re_embed_subset_samples[[sample_ID]] <- FindClusters(
+    re_embed_subset_samples[[sample_ID]],
+    resolution   = res,
+    cluster.name = "seurat_clusters_endo_mesen",
+    verbose      = FALSE
   )
+
+  n_clusters <- length(unique(re_embed_subset_samples[[sample_ID]]$seurat_clusters_endo_mesen))
+  message("  ", sample_ID, ": ", n_clusters, " clusters at resolution ", res)
+}
 ```
 
 # UMAP coloured by cell type
