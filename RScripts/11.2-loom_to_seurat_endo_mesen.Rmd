@@ -1,0 +1,1183 @@
+---
+title: "Import Velocyto spliced/unspliced counts for Endocardium and Mesenchyme subset"
+author: "Melanie Smith"
+date: "2026-09-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr's "grouped output" informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+- This script imports the Velocyto spliced/unspliced counts for the Endocardium/Mesenchyme subset created in 11.1, subsets them to the cells and genes retained in that subset, re-embeds, and exports the combined object as an .h5ad for scVelo/PAGA.
+
+# Load Libraries
+
+```{r}
+reticulate::py_require(c("anndata==0.10.9", "pandas<3.0"))
+
+library(tidyverse)
+library(Seurat)
+library(Matrix)
+library(data.table)
+library(ggokabeito)
+library(cowplot)
+library(patchwork)
+library(reticulate)
+library(sceasy)
+library(anndata)
+library(scCustomize)
+library(clustree)
+
+```
+
+# Set project directories and parameters
+
+```{r}
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+out_dir <- file.path(project_repo_dir, "outDir", "11-rna_velocity")
+in_dir  <- file.path(project_repo_dir, "outDir", "10-rna_velocity")
+
+sample_names <- c("e11_control", "e11_ko", "e12_control", "e12_ko")
+
+# Named vector mapping each sample to its Velocyto loom column prefix
+loom_colnames <- c(
+  "e11_control" = "possorted_genome_bam_5Q1UF:",
+  "e11_ko"      = "possorted_genome_bam_LZRTJ:",
+  "e12_control" = "possorted_genome_bam_YIL7N:",
+  "e12_ko"      = "possorted_genome_bam_0YX73:"
+)
+```
+
+## Set up the cell-type colours and marker genes
+
+```{r}
+celltype_cols <- c("Myocardium"    = "#E41A1C",
+                   "VSMC"          = "#984EA3",
+                   "Endocardium"   = "#377EB8",
+                   "Epicardium"    = "#FF7F00",
+                   "Mesenchyme"    = "#4DAF4A",
+                   "Other/Unknown" = "grey70")
+
+endocardial_genes <- c("Ecscr", "Cdh5", "Tie1", "Rasip1", "Plxnd1")
+mesenchymal_genes <- c("Postn", "Cthrc1", "Col1a1", "Fn1")
+```
+
+# Helper functions
+
+```{r}
+save_if <- function(plot_object, filename, width, height, ...) {
+  if (save_plots) {
+    ggsave(plot = plot_object, filename = filename,
+           width = width, height = height, dpi = 300, ...)
+  }
+}
+save_plots <- TRUE
+```
+
+# Load Endocardium and Mesenchyme subset Seurat objects
+- These are the per-sample objects saved by 11.1
+- They contain gene-level counts, metadata, and the `umap_endo_mesen` and `pca_endo_mesen` reductions
+- Cell barcodes here define which cells are retained from the loom (spliced/unspliced) data
+
+```{r}
+for (sample in sample_names) {
+  assign(
+    sample,
+    read_rds(
+      file = file.path(out_dir, sample, paste0(sample, "_endo_mesen_no_cc_re_embed.rds"))
+    )
+    )
+  }
+
+# ------------------------------------------------------------
+# Path verified against 11.1's write_rds() call ("Write out the
+# re-embedded subset objects" chunk) - the file.path pattern above
+# already matches it exactly. The loop above only creates loose
+# global variables (e11_control, e11_ko, ...), but tasks further
+# down this script expect a named list, matching the structure
+# used throughout 11.1: re_embed_subset_samples[[sample_ID]].
+# Built here from the same objects (no re-read from disk); the
+# loose globals are left in place since the "Run loom processing"
+# chunks below still collect them via mget().
+# ------------------------------------------------------------
+re_embed_subset_samples <- mget(sample_names)
+```
+
+# User defined functions
+
+```{r resolution-sweep}
+# ============================================================
+# Function to import loom counts and re-embed one subset sample
+# ============================================================
+
+process_loom_endo_mesen <- function(seurat_obj,
+                                     sample_ID,
+                                     loom_colname,
+                                     n_dims = 30,
+                                     nfeatures = 3000) {
+
+  message("Processing: ", sample_ID)
+
+  # ----------------------------------------------------------
+  # Validate input and set defaults
+  # ----------------------------------------------------------
+
+  stopifnot(inherits(seurat_obj, "Seurat"))
+  DefaultAssay(seurat_obj) <- "RNA"
+  Idents(seurat_obj) <- seurat_obj$new_celltypes
+
+  # ----------------------------------------------------------
+  # Import spliced counts
+  # ----------------------------------------------------------
+
+  velocyto_dir     <- file.path(project_repo_dir, "outDir", "09-rna_velocity", sample_ID, "velocyto_output")
+  spliced_obj_file <- file.path(velocyto_dir, "spliced_counts.tsv.gz")
+
+  dt_spliced     <- fread(spliced_obj_file)
+  barcodes       <- dt_spliced[[1]]
+  clean_barcodes <- gsub(loom_colname, "", barcodes)
+  clean_barcodes <- gsub("x$", "", clean_barcodes)
+  spliced_mat    <- as.matrix(dt_spliced[, -1])
+  storage.mode(spliced_mat) <- "double"
+  rownames(spliced_mat) <- clean_barcodes
+  spliced_mat    <- Matrix(t(spliced_mat), sparse = TRUE)
+  spliced_assay  <- CreateAssayObject(counts = spliced_mat)
+
+  # ----------------------------------------------------------
+  # Import unspliced counts
+  # ----------------------------------------------------------
+
+  unspliced_obj_file <- file.path(velocyto_dir, "unspliced_counts.tsv.gz")
+
+  dt_unspliced     <- fread(unspliced_obj_file)
+  barcodes         <- dt_unspliced[[1]]
+  clean_barcodes   <- gsub(loom_colname, "", barcodes)
+  clean_barcodes   <- gsub("x$", "", clean_barcodes)
+  unspliced_mat    <- as.matrix(dt_unspliced[, -1])
+  storage.mode(unspliced_mat) <- "double"
+  rownames(unspliced_mat) <- clean_barcodes
+  unspliced_mat    <- Matrix(t(unspliced_mat), sparse = TRUE)
+  unspliced_assay  <- CreateAssayObject(counts = unspliced_mat)
+
+  # ----------------------------------------------------------
+  # Detect barcode suffix from the Seurat object
+  # ----------------------------------------------------------
+
+  # seurat_obj here is already subset to Endocardium/Mesenchyme cells
+  # only, so the first loom barcode is often not among the retained
+  # cells (unlike the full-sample object used in 10.3). Try successive
+  # barcodes until one matches, rather than assuming the first one does.
+  example_bc <- character(0)
+  matched_bc <- character(0)
+  for (bc in colnames(spliced_assay)) {
+    matched_bc <- grep(paste0("^", bc), colnames(seurat_obj), value = TRUE)
+    if (length(matched_bc) >= 1) {
+      example_bc <- bc
+      break
+    }
+  }
+  stopifnot(length(matched_bc) >= 1)
+  barcode_suffix <- sub(paste0("^", example_bc), "", matched_bc[1])
+  message("  Detected barcode suffix: '", barcode_suffix, "'")
+
+  # ----------------------------------------------------------
+  # Subset to high-quality cells and non-filtered genes
+  # ----------------------------------------------------------
+
+  colnames(spliced_assay)   <- paste0(colnames(spliced_assay),   barcode_suffix)
+  colnames(unspliced_assay) <- paste0(colnames(unspliced_assay), barcode_suffix)
+
+  target_genes <- rownames(seurat_obj)
+  target_cells <- colnames(seurat_obj)
+
+  spliced_counts   <- spliced_assay@counts[target_genes, target_cells]
+  unspliced_counts <- unspliced_assay@counts[target_genes, target_cells]
+
+  message("  Retained ", length(target_cells), " cells and ", length(target_genes), " genes after subsetting to Endocardium/Mesenchyme cells")
+
+  rm(dt_spliced, spliced_mat, spliced_assay,
+     dt_unspliced, unspliced_mat, unspliced_assay)
+  gc()
+
+  stopifnot(identical(dim(spliced_counts), dim(unspliced_counts)))
+
+  rownames(spliced_counts)   <- paste0(rownames(spliced_counts),   "-spliced")
+  rownames(unspliced_counts) <- paste0(rownames(unspliced_counts), "-unspliced")
+
+  combined_counts <- rbind(spliced_counts, unspliced_counts)
+
+  stopifnot(identical(colnames(combined_counts), colnames(seurat_obj)))
+
+  # ----------------------------------------------------------
+  # Build new Seurat object from combined spliced/unspliced counts
+  # ----------------------------------------------------------
+
+  new_seurat <- CreateSeuratObject(counts = combined_counts)
+  new_seurat <- AddMetaData(
+    new_seurat,
+    metadata = seurat_obj@meta.data[, c("orig.ident",
+                                        "original_barcode",
+                                        "genotype",
+                                        "stage",
+                                        "predicted_sex",
+                                        "new_celltypes",
+                                        "seurat_clusters_endo_mesen",
+                                        "full_dataset_clusters_no_cc",
+                                        "G2M.Score",
+                                        "S.Score")]
+  )
+
+  # ----------------------------------------------------------
+  # Normalise, find variable features, scale, PCA, UMAP
+  # ----------------------------------------------------------
+
+  re_embed_new_seurat <- new_seurat %>%
+    NormalizeData(
+      assay = "RNA",
+      normalization.method = "LogNormalize",
+      scale.factor = 10000,
+      verbose = FALSE
+    ) %>%
+    FindVariableFeatures(
+      assay = "RNA",
+      selection.method = "vst",
+      nfeatures = nfeatures,
+      verbose = FALSE
+    ) %>%
+    ScaleData(
+      assay = "RNA",
+      verbose = FALSE
+    ) %>%
+    RunPCA(
+      assay = "RNA",
+      verbose = FALSE
+    ) %>%
+    FindNeighbors(
+      reduction = "pca",
+      dims = 1:n_dims,
+      graph.name = c("spliced_endo_mesen_nn", "spliced_endo_mesen_snn"),
+      verbose = FALSE
+    ) %>%
+    RunUMAP(
+      reduction = "pca",
+      dims = 1:n_dims,
+      verbose = FALSE
+    )
+
+  # ----------------------------------------------------------
+  # Resolution sweep — inspect before proceeding
+  # ----------------------------------------------------------
+  # Run clustering once per resolution, storing each result in the
+  # Seurat object metadata (Seurat auto-creates one column per
+  # resolution, named "<graph.name>_res.<resolution>"), then reuse
+  # those columns for both the per-resolution UMAPs and the clustree
+  # comparison below - avoids clustering twice at the same resolution.
+  #
+  # Inspect these plots before running the next chunk.
+  # Enter your chosen resolution per sample in the
+  # 'chosen_resolutions' vector in the chunk that follows.
+
+  resolution_range <- seq(0.1, 1.0, by = 0.1)
+
+  re_embed_new_seurat <- FindClusters(
+    re_embed_new_seurat,
+    graph.name = "spliced_endo_mesen_snn",
+    resolution = resolution_range,
+    verbose    = FALSE
+  )
+
+  spliced_resolution_sweep_dir <- file.path(out_dir, sample_ID, "resolution_sweep")
+  dir.create(spliced_resolution_sweep_dir, recursive = TRUE, showWarnings = FALSE)
+
+  for (res in resolution_range) {
+
+    col_name   <- paste0("spliced_endo_mesen_snn_res.", res)
+    n_clusters <- length(unique(re_embed_new_seurat[[col_name]][[1]]))
+    message("  ", sample_ID, " — resolution ", res, ": ", n_clusters, " clusters")
+
+    res_plot <- DimPlot(
+        re_embed_new_seurat,
+        reduction  = "umap",
+        group.by   = col_name,
+        label      = TRUE,
+        label.size = 6
+      ) +
+        labs(
+          title    = paste0(sample_ID, " — resolution: ", res),
+          subtitle = paste0(n_clusters, " clusters"),
+          caption  = "Spliced/unspliced — Endocardium + Mesenchyme"
+        ) +
+        NoLegend()
+
+    print(res_plot)
+
+    ggsave(
+      filename = file.path(spliced_resolution_sweep_dir,
+                            paste0(sample_ID, "_resolution_", res, "_endo_mesen_spliced_unspliced_re_embed", ".png")),
+      plot   = res_plot,
+      width  = 8,
+      height = 8,
+      dpi    = 300
+    )
+  }
+
+  # ----------------------------------------------------------
+  # Resolution sweep — clustree comparison
+  # ----------------------------------------------------------
+  # Visualise how clusters split/merge across resolutions with
+  # clustree(), reusing the resolution columns computed above.
+  # Coloured by sc3_stability; saved as a PNG using the same
+  # naming/ggsave convention established in 11.1's clustree exports
+  # (clustree-endmt-scores / clustree-metabolic-scores).
+
+  clustree_plot <- clustree(
+    re_embed_new_seurat,
+    prefix      = "spliced_endo_mesen_snn_res.",
+    node_colour = "sc3_stability"
+  ) +
+    labs(
+      title   = paste0(sample_ID, " — clustree — sc3_stability"),
+      caption = "Spliced/unspliced — Endocardium + Mesenchyme"
+    )
+
+  print(clustree_plot)
+
+  spliced_clustree_dir <- file.path(out_dir, sample_ID, "clustree")
+  dir.create(spliced_clustree_dir, recursive = TRUE, showWarnings = FALSE)
+
+  ggsave(
+    filename = file.path(spliced_clustree_dir,
+                          paste0(sample_ID, "_sc3_stability_endo_mesen_spliced_unspliced_re_embed", ".png")),
+    plot   = clustree_plot,
+    width  = 10,
+    height = 12,
+    dpi    = 300
+  )
+
+  # ----------------------------------------------------------
+  # Transfer spliced/unspliced neighbour graph to original
+  # Seurat object, so downstream clustering can point at the
+  # spliced/unspliced graph rather than the gene-level graph
+  # ----------------------------------------------------------
+
+  cell_order <- colnames(seurat_obj)
+
+  nn_mat  <- as(re_embed_new_seurat[["spliced_endo_mesen_nn"]],  "CsparseMatrix")
+  snn_mat <- as(re_embed_new_seurat[["spliced_endo_mesen_snn"]], "CsparseMatrix")
+
+  nn_mat  <- nn_mat[cell_order, cell_order]
+  snn_mat <- snn_mat[cell_order, cell_order]
+
+  seurat_obj[["spliced_endo_mesen_nn"]]  <- as.Graph(nn_mat)
+  seurat_obj[["spliced_endo_mesen_snn"]] <- as.Graph(snn_mat)
+
+  # ----------------------------------------------------------
+  # Transfer spliced/unspliced UMAP embeddings to original
+  # Seurat object
+  # ----------------------------------------------------------
+
+  umap_embed <- Embeddings(re_embed_new_seurat, reduction = "umap")
+  umap_embed <- umap_embed[colnames(seurat_obj), ]
+
+  seurat_obj[["umap_spliced_endo_mesen"]] <- CreateDimReducObject(
+    embeddings = umap_embed,
+    key = "UMAPspliced_",
+    assay = DefaultAssay(seurat_obj)
+  )
+
+  message("Finished: ", sample_ID)
+
+  return(seurat_obj)
+}
+```
+
+# Run loom processing — Step 1: embedding and resolution sweep
+- Run `process_loom_endo_mesen()` across all samples.
+- Inspect the resolution sweep plots in the output before proceeding to the next chunk.
+
+```{r}
+# Collect loaded Seurat objects into a named list
+samples <- mget(sample_names)
+
+# Process all samples
+processed_samples <- lapply(
+  names(samples),
+  function(sample_ID) {
+    process_loom_endo_mesen(
+      seurat_obj   = samples[[sample_ID]],
+      sample_ID    = sample_ID,
+      loom_colname = loom_colnames[[sample_ID]]
+    )
+  }
+)
+
+# Keep sample names
+names(processed_samples) <- sample_names
+
+# Quick check to confirm reductions were added
+lapply(processed_samples, Reductions)
+```
+
+# Run loom processing — Step 2: supervised clustering
+- Inspect the resolution sweep plots above before running this chunk.
+- Enter the per-sample resolution choices in `chosen_resolutions` below.
+
+```{r}
+# ============================================================
+# Enter chosen resolutions after inspecting sweep plots above.
+# Run this chunk only after reviewing.
+# ============================================================
+
+chosen_resolutions <- c(
+  "e11_control" = 0.3,
+  "e11_ko"      = 0.3,
+  "e12_control" = 0.3,
+  "e12_ko"      = 0.3
+)
+
+for (sample_ID in sample_names) {
+
+  res <- chosen_resolutions[[sample_ID]]
+  message("Applying resolution ", res, " to ", sample_ID)
+
+  processed_samples[[sample_ID]][["spliced_clusters_endo_mesen"]] <- FindClusters(
+    processed_samples[[sample_ID]],
+    graph.name   = "spliced_endo_mesen_snn",
+    resolution   = res,
+    verbose      = FALSE
+  )$seurat_clusters
+
+  n_clusters <- length(unique(processed_samples[[sample_ID]]$spliced_clusters_endo_mesen))
+  message("  ", sample_ID, ": ", n_clusters, " clusters at resolution ", res)
+}
+```
+
+# Comparison UMAPs — gene-level vs spliced/unspliced embeddings
+
+```{r}
+for (sample_ID in sample_names) {
+
+  obj <- processed_samples[[sample_ID]]
+
+  plot_1 <- DimPlot(obj,
+                    reduction = "umap_endo_mesen",
+                    group.by = "new_celltypes",
+                    cols = celltype_cols,
+                    label = TRUE,
+                    label.size = 6,
+                    pt.size = 1) +
+    labs(title = "Reduction = umap_endo_mesen",
+         subtitle = sample_ID,
+         caption = "Gene level counts")
+
+  plot_2 <- DimPlot(obj,
+                    reduction = "umap_spliced_endo_mesen",
+                    group.by = "new_celltypes",
+                    cols = celltype_cols,
+                    label = TRUE,
+                    label.size = 6,
+                    pt.size = 1) +
+    labs(title = "Reduction = umap_spliced_endo_mesen",
+         subtitle = sample_ID,
+         caption = "Combined spliced/unspliced counts")
+
+  plot_3 <- DimPlot(obj,
+                    reduction = "umap_spliced_endo_mesen",
+                    group.by = "spliced_clusters_endo_mesen",
+                    label = TRUE,
+                    label.size = 6,
+                    pt.size = 1) +
+    labs(title = "Reduction = umap_spliced_endo_mesen (clusters)",
+         subtitle = sample_ID,
+         caption = "Combined spliced/unspliced counts")
+
+  prow <- plot_grid(
+    plot_1 + theme(legend.position = "none"),
+    plot_2 + theme(legend.position = "none"),
+    plot_3 + theme(legend.position = "none"),
+    align = "vh",
+    hjust = -1,
+    nrow = 1,
+    rel_widths = c(1.5, 1.5, 1.5)
+  )
+
+  legend <- get_legend(
+    plot_1 +
+      guides(color = guide_legend(nrow = 1)) +
+      theme(legend.position = "bottom")
+  )
+
+  print(
+    plot_grid(prow, legend, ncol = 1, rel_heights = c(1, .1))
+  )
+  }
+```
+
+# Write out processed objects as .h5ad for scVelo/PAGA
+
+```{r}
+for (sample in sample_names) {
+
+  obj <- processed_samples[[sample]]
+
+  Idents(obj) <- "spliced_clusters_endo_mesen"
+  Idents(obj) <- factor(Idents(obj))
+  DefaultAssay(obj) <- "RNA"
+
+  obj[["RNA"]] <- as(obj[["RNA"]], "Assay")
+  cat("Assay class:", class(obj[["RNA"]]), "\n")
+
+  as.anndata(obj,
+             file_path = file.path(out_dir, sample),
+             file_name = paste0(sample, "_endo_mesen_spliced_unspliced.h5ad"))
+}
+```
+
+# Subset Loom Layers to 11.1 Cells and Genes
+- Reads each sample's Velocyto `.loom` file directly (not the pre-extracted `spliced_counts.tsv.gz`/`unspliced_counts.tsv.gz` used above) so the `ambiguous` layer is available — `run_spliced_unspliced_export.py` reads all three loom layers via `sc.read_loom()` but only ever writes out `spliced` and `unspliced`, so `ambiguous` was never exported to TSV. Subsets all three layers to the cells and genes retained in the 11.1 Endocardium/Mesenchyme subset.
+
+```{r subset-loom-to-11point1-cells}
+loom_spliced_subset   <- list()
+loom_unspliced_subset <- list()
+loom_ambiguous_subset <- list()
+
+for (sample_ID in sample_names) {
+
+  tryCatch({
+
+    message("Subsetting loom layers: ", sample_ID)
+
+    velocyto_dir <- file.path(project_repo_dir, "outDir", "09-rna_velocity", sample_ID, "velocyto_output")
+    loom_file    <- file.path(velocyto_dir, paste0(sub(":$", "", loom_colnames[[sample_ID]]), ".loom"))
+
+    lfile <- loomR::connect(filename = loom_file, mode = "r", skip.validate = TRUE)
+
+    # loomR returns layers oriented cells (rows) x genes (columns)
+    loom_barcodes <- lfile$col.attrs$CellID[]
+    loom_genes    <- lfile$row.attrs$Gene[]
+
+    n_cells_original <- length(loom_barcodes)
+    n_genes_original <- length(loom_genes)
+
+    # ------------------------------------------------------------
+    # Clean loom barcodes: strip this sample's loom prefix and the
+    # trailing "x" (same convention already used by
+    # process_loom_endo_mesen() above), then detect and append the
+    # Seurat barcode suffix by matching one cleaned barcode against
+    # the 11.1 subset object's colnames.
+    # ------------------------------------------------------------
+    clean_barcodes <- gsub(loom_colnames[[sample_ID]], "", loom_barcodes)
+    clean_barcodes <- gsub("x$", "", clean_barcodes)
+
+    retained_cells <- colnames(re_embed_subset_samples[[sample_ID]])
+    retained_genes <- rownames(re_embed_subset_samples[[sample_ID]])
+
+    # retained_cells is already subset to Endocardium/Mesenchyme cells
+    # only, so the first loom barcode is often not among them (same
+    # issue fixed in process_loom_endo_mesen() above). Try successive
+    # barcodes until one matches, rather than assuming the first one does.
+    example_bc <- character(0)
+    matched_bc <- character(0)
+    for (bc in clean_barcodes) {
+      matched_bc <- grep(paste0("^", bc), retained_cells, value = TRUE)
+      if (length(matched_bc) >= 1) {
+        example_bc <- bc
+        break
+      }
+    }
+    stopifnot(length(matched_bc) >= 1)
+    barcode_suffix <- sub(paste0("^", example_bc), "", matched_bc[1])
+
+    full_barcodes <- paste0(clean_barcodes, barcode_suffix)
+
+    # ------------------------------------------------------------
+    # Match retained (11.1) cells/genes into the loom's cell/gene order
+    # ------------------------------------------------------------
+    cell_match_idx <- match(retained_cells, full_barcodes)
+    pct_matched    <- mean(!is.na(cell_match_idx))
+
+    if (pct_matched < 0.8) {
+      warning(sample_ID, " — only ", round(pct_matched * 100, 1),
+              "% of 11.1 cells matched in the loom file (expected >= 80%)")
+    }
+
+    keep_cells_idx <- cell_match_idx[!is.na(cell_match_idx)]
+    keep_cells     <- retained_cells[!is.na(cell_match_idx)]
+
+    gene_match_idx <- match(retained_genes, loom_genes)
+    keep_genes_idx <- gene_match_idx[!is.na(gene_match_idx)]
+    keep_genes     <- retained_genes[!is.na(gene_match_idx)]
+
+    # ------------------------------------------------------------
+    # Read each layer, subset to retained cells/genes, transpose to
+    # genes x cells (Seurat convention), wrap as sparse, then discard
+    # the dense intermediate before moving to the next layer
+    # ------------------------------------------------------------
+    read_layer_subset <- function(layer_name) {
+      full_mat <- lfile[[paste0("layers/", layer_name)]][, ]
+      sub_mat  <- t(full_mat[keep_cells_idx, keep_genes_idx])
+      rownames(sub_mat) <- keep_genes
+      colnames(sub_mat) <- keep_cells
+      sub_mat <- Matrix::Matrix(sub_mat, sparse = TRUE)
+      rm(full_mat)
+      gc()
+      sub_mat
+    }
+
+    loom_spliced_subset[[sample_ID]]   <- read_layer_subset("spliced")
+    loom_unspliced_subset[[sample_ID]] <- read_layer_subset("unspliced")
+    loom_ambiguous_subset[[sample_ID]] <- read_layer_subset("ambiguous")
+
+    lfile$close_all()
+
+    message(
+      sample_ID,
+      " — cells: ", n_cells_original, " -> ", length(keep_cells),
+      " | genes: ", n_genes_original, " -> ", length(keep_genes)
+    )
+
+  }, error = function(e) {
+    warning(sample_ID, " — loom subsetting failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed loom layer subsetting for ", length(loom_spliced_subset), " of ", length(sample_names), " samples")
+```
+
+# Create Spliced/Unspliced Seurat Objects and Re-embed
+- For each sample, build a new Seurat object from the subset spliced counts, attach the unspliced/ambiguous layers as additional assays, transfer all 11.1 metadata (including EndMT/Metab module scores), then re-embed and sweep the same resolution sequence used in 11.1 (`seq(0.1, 1.0, by = 0.1)`, `res_` naming).
+
+```{r create-seurat-spliced-reembed}
+resolution_sequence <- seq(0.1, 1.0, by = 0.1)
+n_dims_spliced       <- 30
+nfeatures_spliced    <- 3000
+
+spliced_subset_samples <- list()
+
+for (sample_ID in sample_names) {
+
+  tryCatch({
+
+    message("Creating spliced/unspliced object: ", sample_ID)
+
+    seu <- CreateSeuratObject(counts = loom_spliced_subset[[sample_ID]])
+
+    seu[["unspliced"]] <- CreateAssayObject(counts = loom_unspliced_subset[[sample_ID]])
+    seu[["ambiguous"]] <- CreateAssayObject(counts = loom_ambiguous_subset[[sample_ID]])
+
+    # Transfer all metadata from the 11.1 subset object, matched by barcode
+    source_meta <- re_embed_subset_samples[[sample_ID]]@meta.data[colnames(seu), ]
+    seu <- AddMetaData(seu, metadata = source_meta)
+
+    DefaultAssay(seu) <- "RNA"
+
+    seu <- NormalizeData(seu, verbose = FALSE)
+    seu <- FindVariableFeatures(seu, selection.method = "vst",
+                                 nfeatures = nfeatures_spliced, verbose = FALSE)
+    seu <- ScaleData(seu, verbose = FALSE)
+    seu <- RunPCA(seu, reduction.name = "pca_spliced", reduction.key = "PCspliced_", verbose = FALSE)
+    seu <- FindNeighbors(seu, reduction = "pca_spliced", dims = 1:n_dims_spliced, verbose = FALSE)
+
+    for (res in resolution_sequence) {
+      seu <- FindClusters(seu, resolution = res, cluster.name = paste0("res_", res), verbose = FALSE)
+    }
+
+    seu <- RunUMAP(seu, reduction = "pca_spliced", dims = 1:n_dims_spliced,
+                   reduction.name = "umap_spliced", reduction.key = "UMAPspliced_", verbose = FALSE)
+
+    spliced_subset_samples[[sample_ID]] <- seu
+
+    message("Finished: ", sample_ID)
+
+  }, error = function(e) {
+    warning(sample_ID, " — spliced/unspliced object creation failed: ", conditionMessage(e))
+  })
+}
+
+message("Created spliced/unspliced objects for ", length(spliced_subset_samples), " of ", length(sample_names), " samples")
+```
+
+# Spliced/Unspliced Resolution Sweep Plots
+- Reproduces 11.1's `resolution-sweep` figures (per-resolution UMAP + stability clustree) for the spliced/unspliced embedding, using the `res_0.1`...`res_1` columns created above. `clustree()` is passed the metadata data frame directly, with the resolution prefix detected dynamically.
+
+```{r spliced-resolution-sweep-plots}
+resolution_sequence <- seq(0.1, 1.0, by = 0.1)
+
+for (sample_ID in sample_names) {
+
+  tryCatch({
+
+    seu <- spliced_subset_samples[[sample_ID]]
+
+    fig_dir <- file.path(out_dir, sample_ID, "spliced_unspliced")
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+    for (res in resolution_sequence) {
+
+      col_name   <- paste0("res_", res)
+      n_clusters <- length(unique(seu[[col_name]][[1]]))
+
+      p <- DimPlot(
+        seu,
+        reduction  = "umap_spliced",
+        group.by   = col_name,
+        label      = TRUE,
+        label.size = 6
+      ) +
+        labs(
+          title    = paste0(sample_ID, " — resolution: ", res),
+          subtitle = paste0(n_clusters, " clusters"),
+          caption  = "Spliced/unspliced — Endocardium + Mesenchyme subset"
+        ) +
+        NoLegend()
+
+      print(p)
+
+      ggsave(
+        filename = file.path(fig_dir, paste0("11.2-umap.spliced_unspliced_re_embed.", sample_ID, ".res_", res, ".png")),
+        plot = p, width = 8, height = 8, dpi = 300
+      )
+    }
+
+    meta_df <- seu@meta.data
+    resolution_cols   <- grep("^res_[0-9]", colnames(meta_df), value = TRUE)
+    resolution_prefix <- unique(sub("[0-9.]+$", "", resolution_cols))
+
+    p_tree <- clustree(
+      meta_df,
+      prefix      = resolution_prefix,
+      node_colour = "sc3_stability"
+    ) +
+      labs(
+        title   = paste0(sample_ID, " — clustree — sc3_stability"),
+        caption = "Spliced/unspliced — Endocardium + Mesenchyme subset"
+      )
+
+    print(p_tree)
+
+    ggsave(
+      filename = file.path(fig_dir, paste0("11.2-clustree.spliced_unspliced_re_embed.", sample_ID, ".sc3_stability.png")),
+      plot = p_tree, width = 10, height = 12, dpi = 300
+    )
+
+  }, error = function(e) {
+    warning(sample_ID, " — spliced resolution sweep plotting failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed spliced/unspliced resolution sweep plots for ", length(sample_names), " samples")
+```
+
+# Spliced/Unspliced UMAP by Cell Type
+- Reproduces 11.1's "UMAP coloured by cell type" figure using the spliced/unspliced embedding.
+
+```{r spliced-umap-celltype}
+for (sample_ID in sample_names) {
+
+  tryCatch({
+
+    seu <- spliced_subset_samples[[sample_ID]]
+
+    fig_dir <- file.path(out_dir, sample_ID, "spliced_unspliced")
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+    p <- DimPlot(
+        seu,
+        reduction = "umap_spliced",
+        group.by = "new_celltypes",
+        cols = celltype_cols,
+        label = TRUE,
+        label.size = 6
+        ) +
+        labs(
+          title = paste0(sample_ID, " - spliced/unspliced re-embed (cell types)"),
+          caption = sample_ID
+        ) +
+        NoLegend()
+
+    print(p)
+
+    ggsave(
+      filename = file.path(fig_dir, paste0("11.2-umap.spliced_unspliced_re_embed.", sample_ID, ".new_celltype.png")),
+      plot = p, width = 8, height = 8, dpi = 300
+    )
+
+  }, error = function(e) {
+    warning(sample_ID, " — spliced cell type UMAP failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed spliced/unspliced UMAP-by-cell-type plots for ", length(sample_names), " samples")
+```
+
+# Spliced/Unspliced UMAP by Cell Cycle Phase
+- Reproduces 11.1's "UMAP coloured by cell cycle Phase" figure using the spliced/unspliced embedding.
+
+```{r spliced-umap-phase}
+for (sample_ID in sample_names) {
+
+  tryCatch({
+
+    seu <- spliced_subset_samples[[sample_ID]]
+
+    fig_dir <- file.path(out_dir, sample_ID, "spliced_unspliced")
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+    p <- DimPlot(
+        seu,
+        reduction = "umap_spliced",
+        group.by = "Phase",
+        label = TRUE,
+        label.size = 6
+        ) +
+        labs(
+          title = paste0(sample_ID, " - spliced/unspliced re-embed (Phase)"),
+          caption = sample_ID
+        ) +
+        NoLegend()
+
+    print(p)
+
+    ggsave(
+      filename = file.path(fig_dir, paste0("11.2-umap.spliced_unspliced_re_embed.", sample_ID, ".phase.png")),
+      plot = p, width = 8, height = 8, dpi = 300
+    )
+
+  }, error = function(e) {
+    warning(sample_ID, " — spliced Phase UMAP failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed spliced/unspliced UMAP-by-Phase plots for ", length(sample_names), " samples")
+```
+
+# Spliced/Unspliced Endocardial Lineage Markers
+- Reproduces 11.1's "Endocardial lineage markers" FeaturePlot using the spliced/unspliced embedding.
+
+```{r spliced-endocardial-markers}
+for (sample_ID in sample_names) {
+
+  tryCatch({
+
+    seu <- spliced_subset_samples[[sample_ID]]
+
+    fig_dir <- file.path(out_dir, sample_ID, "spliced_unspliced")
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+    p <- FeaturePlot(
+      object = seu,
+      reduction = "umap_spliced",
+      features = c("Ecscr", "Cdh5"),
+      ncol = 1,
+      order = TRUE
+      ) &
+      scale_colour_gradientn(
+      colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+      name = "Expression"
+      ) &
+      plot_annotation(
+      title = paste0(sample_ID, " Endocardial lineage markers"),
+      caption = paste0("spliced/unspliced - re_embed - sample level")
+      ) &
+      theme_bw(base_size = 14) &
+      theme(
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5)
+        )
+
+    print(p)
+
+    ggsave(
+      filename = file.path(fig_dir, paste0("11.2-umap.spliced_unspliced_re_embed.", sample_ID, ".endocardial_genes.png")),
+      plot = p, width = 8, height = 8, dpi = 300
+    )
+
+  }, error = function(e) {
+    warning(sample_ID, " — spliced endocardial marker FeaturePlot failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed spliced/unspliced endocardial marker plots for ", length(sample_names), " samples")
+```
+
+# Spliced/Unspliced Mesenchymal Lineage Markers
+- Reproduces 11.1's "Mesenchymal lineage markers" FeaturePlot using the spliced/unspliced embedding.
+
+```{r spliced-mesenchymal-markers}
+for (sample_ID in sample_names) {
+
+  tryCatch({
+
+    seu <- spliced_subset_samples[[sample_ID]]
+
+    fig_dir <- file.path(out_dir, sample_ID, "spliced_unspliced")
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+    p <- FeaturePlot(
+      object = seu,
+      reduction = "umap_spliced",
+      features = c("Postn", "Cthrc1"),
+      ncol = 1,
+      order = TRUE
+      ) &
+      scale_colour_gradientn(
+      colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+      name = "Expression"
+      ) &
+      plot_annotation(
+      title = paste0(sample_ID, " Mesenchymal lineage markers"),
+      caption = paste0("spliced/unspliced - re_embed - sample level")
+      ) &
+      theme_bw(base_size = 14) &
+      theme(
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5)
+        )
+
+    print(p)
+
+    ggsave(
+      filename = file.path(fig_dir, paste0("11.2-umap.spliced_unspliced_re_embed.", sample_ID, ".mesenchymal_genes.png")),
+      plot = p, width = 8, height = 8, dpi = 300
+    )
+
+  }, error = function(e) {
+    warning(sample_ID, " — spliced mesenchymal marker FeaturePlot failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed spliced/unspliced mesenchymal marker plots for ", length(sample_names), " samples")
+```
+
+# Spliced/Unspliced Cell Cycle Scores
+- Reproduces 11.1's "Cell cycle scores" FeaturePlot using the spliced/unspliced embedding.
+
+```{r spliced-cellcycle-scores}
+for (sample_ID in sample_names) {
+
+  tryCatch({
+
+    seu <- spliced_subset_samples[[sample_ID]]
+
+    fig_dir <- file.path(out_dir, sample_ID, "spliced_unspliced")
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+    p <- FeaturePlot(
+      object = seu,
+      reduction = "umap_spliced",
+      features = c("G2M.Score", "S.Score"),
+      ncol = 1,
+      order = TRUE
+      ) &
+      scale_colour_gradientn(
+      colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+      name = "Expression"
+      ) &
+      plot_annotation(
+      title = paste0(sample_ID, " Cell Cycle"),
+      caption = paste0("spliced/unspliced - re_embed - sample level")
+      ) &
+      theme_bw(base_size = 14) &
+      theme(
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5)
+        )
+
+    print(p)
+
+    ggsave(
+      filename = file.path(fig_dir, paste0("11.2-umap.spliced_unspliced_re_embed.", sample_ID, ".cellCycle.png")),
+      plot = p, width = 8, height = 8, dpi = 300
+    )
+
+  }, error = function(e) {
+    warning(sample_ID, " — spliced cell cycle FeaturePlot failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed spliced/unspliced cell cycle score plots for ", length(sample_names), " samples")
+```
+
+# Spliced/Unspliced Module Score FeaturePlots
+- FeaturePlot for all nine EndMT/Metab module score columns, using the spliced/unspliced embedding.
+
+```{r spliced-module-score-featureplots}
+module_scores <- c("EndMT_endocardial1", "EndMT_transition1", "EndMT_mesenchyme1",
+                    "EndMT_Notch1", "EndMT_TGFb1",
+                    "Metab_glycolysis1", "Metab_oxphos1", "Metab_hypoxia1", "Metab_FAO1")
+
+for (sample_ID in sample_names) {
+
+  score_col <- NA
+
+  tryCatch({
+
+    seu <- spliced_subset_samples[[sample_ID]]
+
+    fig_dir <- file.path(out_dir, sample_ID, "spliced_unspliced")
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+    for (score_col in module_scores) {
+
+      p <- FeaturePlot(
+        seu,
+        reduction  = "umap_spliced",
+        features   = score_col,
+        label      = TRUE,
+        label.size = 6
+      ) +
+        scale_colour_gradientn(
+          colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+          name = "Expression"
+        ) +
+        labs(
+          title   = paste0(sample_ID, " — ", score_col),
+          caption = "Spliced/unspliced — Endocardium + Mesenchyme subset"
+        )
+
+      print(p)
+
+      ggsave(
+        filename = file.path(fig_dir, paste0("11.2-featureplot.spliced_unspliced_re_embed.", sample_ID, ".", score_col, ".png")),
+        plot = p, width = 8, height = 8, dpi = 300
+      )
+    }
+
+  }, error = function(e) {
+    warning(sample_ID, " — ", score_col, " spliced module score FeaturePlot failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed spliced/unspliced module score FeaturePlots for ", length(sample_names), " samples")
+```
+
+# Spliced/Unspliced Clustree: Module Scores
+- Clustree for all nine EndMT/Metab module scores, using the spliced/unspliced embedding. Same approach as 11.1's `clustree-endmt-scores`/`clustree-metabolic-scores`: `clustree()` receives the metadata data frame directly, and the resolution prefix is detected dynamically via `grep()`.
+
+```{r spliced-clustree-module-scores}
+module_scores <- c("EndMT_endocardial1", "EndMT_transition1", "EndMT_mesenchyme1",
+                    "EndMT_Notch1", "EndMT_TGFb1",
+                    "Metab_glycolysis1", "Metab_oxphos1", "Metab_hypoxia1", "Metab_FAO1")
+
+n_saved <- 0
+
+for (sample_ID in sample_names) {
+
+  score_col <- NA
+
+  tryCatch({
+
+    seu     <- spliced_subset_samples[[sample_ID]]
+    meta_df <- seu@meta.data
+
+    resolution_cols   <- grep("^res_[0-9]", colnames(meta_df), value = TRUE)
+    resolution_prefix <- unique(sub("[0-9.]+$", "", resolution_cols))
+
+    fig_dir <- file.path(out_dir, sample_ID, "spliced_unspliced")
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+    for (score_col in module_scores) {
+
+      score_name <- sub("1$", "", score_col)
+
+      p <- clustree(meta_df,
+                    prefix           = resolution_prefix,
+                    node_colour      = score_col,
+                    node_colour_aggr = "mean",
+                    node_size        = "size") +
+        ggtitle(paste(sample_ID, score_col))
+
+      print(p)
+
+      ggsave(
+        filename = file.path(fig_dir,
+                              paste0(sample_ID, "_", score_name,
+                                     "_endo_mesen_spliced_unspliced_re_embed", ".png")),
+        plot   = p,
+        width  = 10,
+        height = 12,
+        dpi    = 300
+      )
+
+      n_saved <- n_saved + 1
+    }
+
+  }, error = function(e) {
+    warning(sample_ID, " — ", score_col, " spliced clustree failed: ", conditionMessage(e))
+  })
+}
+
+message("Saved ", n_saved, " spliced/unspliced module-score clustree PNGs under 'spliced_unspliced' subdirectories")
+```
+
+# Export Spliced/Unspliced Objects — RDS
+- Save each spliced/unspliced Seurat object to RDS.
+
+```{r export-spliced-seurat-rds}
+for (sample_ID in sample_names) {
+
+  tryCatch({
+
+    write_rds(
+      x = spliced_subset_samples[[sample_ID]],
+      file = file.path(out_dir, sample_ID, paste0(sample_ID, "_spliced_endo_mesen_subset.RDS"))
+    )
+
+    message("Saved RDS: ", sample_ID)
+
+  }, error = function(e) {
+    warning(sample_ID, " — RDS export failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed RDS export for ", length(sample_names), " samples")
+```
+
+# Export Spliced/Unspliced Objects — .h5ad
+- Follows the same `sceasy::as.anndata()` approach already used in "Write out processed objects as .h5ad for scVelo/PAGA" above. Uses `res_0.4` as the cluster identity (matching 11.1's `chosen_resolutions`, applied uniformly to all four samples).
+
+```{r export-spliced-h5ad}
+for (sample_ID in sample_names) {
+
+  tryCatch({
+
+    obj <- spliced_subset_samples[[sample_ID]]
+
+    Idents(obj) <- "res_0.4"
+    Idents(obj) <- factor(Idents(obj))
+    DefaultAssay(obj) <- "RNA"
+
+    obj[["RNA"]] <- as(obj[["RNA"]], "Assay")
+
+    as.anndata(
+      obj,
+      file_path = file.path(out_dir, sample_ID),
+      file_name = paste0(sample_ID, "_spliced_endo_mesen_subset.h5ad")
+    )
+
+    message("Saved h5ad: ", sample_ID)
+
+  }, error = function(e) {
+    warning(sample_ID, " — h5ad export failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed h5ad export for ", length(sample_names), " samples")
+```
+
+# Session info
+
+```{r}
+writeLines(capture.output(sessionInfo()), file.path(out_dir, "11.2_session_info.txt"))
+```
