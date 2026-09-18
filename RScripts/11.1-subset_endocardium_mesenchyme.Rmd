@@ -444,6 +444,58 @@ for (sample_ID in sample_names) {
 colnames(re_embed_subset_samples[["e11_control"]][[]])
 ```
 
+# UMAP by EndMT and Metabolic Signature
+- For each sample, plot a UMAP coloured by each EndMT and metabolic module score, and export it as a PNG under a `umap_signatures` subfolder (sibling to `clustree`).
+
+```{r umap-signatures}
+signatures <- c("EndMT_endocardial1", "EndMT_transition1", "EndMT_mesenchyme1",
+                "EndMT_Notch1", "EndMT_TGFb1",
+                "Metab_glycolysis1", "Metab_oxphos1", "Metab_hypoxia1", "Metab_FAO1")
+
+for (sample_ID in sample_names) {
+
+  sig <- NA
+
+  tryCatch({
+
+    umap_signatures_dir <- file.path(out_dir, sample_ID, "umap_signatures")
+    dir.create(umap_signatures_dir, recursive = TRUE, showWarnings = FALSE)
+
+    for (sig in signatures) {
+
+      sig_name <- sub("1$", "", sig)
+
+      p <- FeaturePlot(
+        re_embed_subset_samples[[sample_ID]],
+        reduction  = "umap_endo_mesen",
+        features = sig,
+        label      = TRUE,
+        label.size = 6
+      ) +
+        scale_colour_gradientn(
+          colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+          name = "Expression"
+        ) +
+        labs(
+          title    = paste0(sample_ID, " — ", sig),
+          caption  = "Endocardium + Mesenchyme subset"
+        )
+
+      print(p)
+
+      ggsave(
+        filename = file.path(umap_signatures_dir,
+                              paste0(sample_ID, "_", sig_name, "_endo_mesen_no_cc_re_embed", ".png")),
+        plot = p, width = 8, height = 8, dpi = 300
+      )
+    }
+
+  }, error = function(e) {
+    warning(sample_ID, " — ", sig, " UMAP signature plot failed: ", conditionMessage(e))
+  })
+}
+```
+
 # Resolution sweep
 - Run this chunk and inspect the plots for each sample before proceeding.
 - Choose a resolution per sample based on the plots below.
@@ -592,28 +644,6 @@ DimPlot(
           caption  = "Endocardium + Mesenchyme subset"
         ) +
         NoLegend()
-
-      signatures <- c("EndMT_endocardial1", "EndMT_transition1", "EndMT_mesenchyme1", "EndMT_Notch1", "EndMT_TGFb1")
-
-      for (sig in signatures) {
-        print(
-      FeaturePlot(
-        re_embed_subset_samples[[sample_ID]],
-        reduction  = "umap_endo_mesen",
-        features = sig,
-        label      = TRUE,
-        label.size = 6
-      ) +
-        scale_colour_gradientn(
-          colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
-          name = "Expression"
-        ) +
-        labs(
-          title    = paste0(sample_ID, " \u2014 ", sig),
-          caption  = "Endocardium + Mesenchyme subset"
-        )
-        )
-      }
 
 ```
 

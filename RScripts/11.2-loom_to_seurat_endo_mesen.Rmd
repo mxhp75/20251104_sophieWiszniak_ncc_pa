@@ -444,7 +444,7 @@ chosen_resolutions <- c(
   "e11_ko"      = 0.3,
   "e12_control" = 0.3,
   "e12_ko"      = 0.3
-)
+  )
 
 for (sample_ID in sample_names) {
 
