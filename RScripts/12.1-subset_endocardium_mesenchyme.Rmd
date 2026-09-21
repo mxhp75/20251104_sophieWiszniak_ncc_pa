@@ -1,0 +1,1133 @@
+---
+title: "Subset to Endocardium and Mesenchyme by genotype and re-embed"
+author: "Melanie Smith"
+date: "2026-09-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+- This short markdown file takes the full merged Seurat object (all four samples, all cell types, cell-cycle genes retained), splits it by genotype into control (e11_control + e12_control) and knock-out (e11_ko + e12_ko) groups, subsets each to Endocardium and Mesenchyme cells only, then re-embeds from scratch on the subset.
+- Cell-cycle-associated genes are deliberately retained in this workflow (unlike `11.x`), so RNA velocity results can be inspected before that removal step.
+- Mixing the two timepoints (E11 + E12) within each genotype is intentional, to let a genuine developmental time axis emerge within each group for the RNA velocity analysis.
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+library(clustree)
+
+# Plotting
+library(patchwork)
+library(RColorBrewer)
+```
+
+# Set project directories
+
+```{r}
+# set project directories
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+out_dir <- file.path(project_repo_dir, "outDir", "12-rna_velocity")
+
+# the starting object for this workflow - full merged object, all cell types,
+# cell-cycle genes retained (i.e. before the removal step used in 10.x/11.x)
+full_object_path <- file.path(project_repo_dir, "outDir", "06-cluster_marker_genes", "final_interesting_cells_0.6.rds")
+
+group_names <- c("control", "ko")
+
+# Maps our short group names onto the actual values in the `genotype` metadata column
+genotype_lookup <- c(control = "control", ko = "Mib1_KO")
+
+# Set group-level output directories
+for (group_ID in group_names) {
+  dir.create(
+    file.path(out_dir, group_ID),
+    recursive = TRUE,
+    showWarnings = FALSE
+  )
+}
+```
+
+## Set up the cell-type colours and marker genes
+
+```{r}
+celltype_cols <- c("Myocardium"    = "#E41A1C",
+                   "VSMC"          = "#984EA3",
+                   "Endocardium"   = "#377EB8",
+                   "Epicardium"    = "#FF7F00",
+                   "Mesenchyme"    = "#4DAF4A",
+                   "Other/Unknown" = "grey70")
+
+endocardial_genes  <- c("Ecscr", "Cdh5", "Tie1", "Rasip1", "Plxnd1")
+mesenchymal_genes  <- c("Postn", "Cthrc1", "Col1a1", "Fn1")
+```
+
+# User defined functions
+
+```{r}
+# Helper function (put this at the top of your script)
+save_if <- function(plot_object, filename, width, height, ...) {
+  if (save_plots) {
+    ggsave(plot = plot_object, filename = filename,
+           width = width, height = height, dpi = 300, ...)
+  }
+}
+# change to TRUE to save plots
+save_plots <- TRUE
+```
+
+# Load and split the full Seurat object by genotype
+- This is the full merged object (all four samples, all cell types), with cell-cycle-associated genes retained.
+- Splitting on `genotype` combines both timepoints within each arm: `"control"` = e11_control + e12_control, `"Mib1_KO"` = e11_ko + e12_ko (confirmed directly against the per-sample cell counts in `orig.ident`).
+
+```{r}
+full_object <- read_rds(full_object_path)
+
+stopifnot(inherits(full_object, "Seurat"))
+
+split_by_genotype <- SplitObject(full_object, split.by = "genotype")
+
+subset_groups <- list()
+
+for (group_ID in group_names) {
+  subset_groups[[group_ID]] <- split_by_genotype[[genotype_lookup[[group_ID]]]]
+}
+
+rm(full_object, split_by_genotype)
+gc()
+```
+
+# Cell type counts (QC before subsetting)
+- Check we have enough cells in both the Endocardium and Mesenchyme populations before subsetting.
+
+```{r}
+# ============================================================
+# Print cell type counts per group
+# ============================================================
+
+for (group_ID in group_names) {
+
+  obj <- subset_groups[[group_ID]]
+
+  message("Cell type counts: ", group_ID)
+  print(table(obj$new_celltypes))
+  }
+```
+
+# Subset to Endocardium and Mesenchyme
+
+```{r}
+# ============================================================
+# Subset each genotype group to Endocardium and Mesenchyme cells only
+# ============================================================
+
+for (group_ID in group_names) {
+
+  obj <- subset_groups[[group_ID]]
+
+  message("Subsetting: ", group_ID)
+  message("Dimensions before subsetting: ", paste(dim(obj), collapse = " x "))
+
+  obj_subset <- subset(
+    obj,
+    subset = new_celltypes %in% c("Endocardium", "Mesenchyme")
+  )
+
+  message("Dimensions after subsetting: ", paste(dim(obj_subset), collapse = " x "))
+
+  subset_groups[[group_ID]] <- obj_subset
+  }
+```
+
+# Re-embedding function
+- perform re-embedding for the subset (Endocardium and Mesenchyme) Seurat objects
+
+```{r}
+# ============================================================
+# Function to re-embed one subset group
+# ============================================================
+
+re_embed_subset <- function(seurat_obj,
+                             group_ID,
+                             n_dims = 30,
+                             nfeatures = 3000) {
+
+  message("Processing: ", group_ID)
+
+  # ----------------------------------------------------------
+  # Set default assay and reset idents
+  # ----------------------------------------------------------
+  DefaultAssay(seurat_obj) <- "RNA"
+  Idents(seurat_obj) <- seurat_obj$new_celltypes
+
+  # ----------------------------------------------------------
+  # Recalculate variable features
+  # ----------------------------------------------------------
+  re_embed_seurat_obj <- FindVariableFeatures(
+    seurat_obj,
+    selection.method = "vst",
+    nfeatures        = nfeatures,
+    verbose          = FALSE
+  )
+
+  # ----------------------------------------------------------
+  # Scale data and calculate new PCA
+  # ----------------------------------------------------------
+  re_embed_seurat_obj <- ScaleData(
+    re_embed_seurat_obj,
+    features = rownames(re_embed_seurat_obj),
+    verbose  = FALSE
+  )
+
+  re_embed_seurat_obj <- RunPCA(
+    re_embed_seurat_obj,
+    reduction.name = "pca_endo_mesen",
+    reduction.key  = "PCEndoMesen_",
+    verbose        = FALSE
+  )
+
+  # ----------------------------------------------------------
+  # Calculate neighbour graph
+  # ----------------------------------------------------------
+  re_embed_seurat_obj <- FindNeighbors(
+    re_embed_seurat_obj,
+    reduction = "pca_endo_mesen",
+    dims      = 1:n_dims,
+    verbose   = FALSE
+  )
+
+  # ----------------------------------------------------------
+  # Calculate UMAP
+  # ----------------------------------------------------------
+  re_embed_seurat_obj <- RunUMAP(
+    re_embed_seurat_obj,
+    reduction      = "pca_endo_mesen",
+    dims           = 1:n_dims,
+    reduction.name = "umap_endo_mesen",
+    reduction.key  = "UMAPEndoMesen_",
+    verbose        = FALSE
+  )
+
+  message("Finished: ", group_ID)
+  return(re_embed_seurat_obj)
+}
+```
+
+# Run re-embedding on all subset groups
+
+```{r}
+# ============================================================
+# Run re-embedding on all subset groups
+# ============================================================
+
+re_embed_subset_groups <- lapply(
+  names(subset_groups),
+  function(group_ID) {
+
+    re_embed_subset(
+      seurat_obj = subset_groups[[group_ID]],
+      group_ID = group_ID
+    )
+
+  }
+)
+
+# Keep group names
+names(re_embed_subset_groups) <- group_names
+
+# Quick check to make check reductions
+lapply(
+  re_embed_subset_groups,
+  Reductions
+  )
+```
+
+# EndMT Module Scoring
+
+## Define EndMT gene sets
+- Five gene sets capturing different aspects of endocardial-to-mesenchymal transition (EndMT), each preceded by a comment block giving the gene set name, supporting references, and biological context.
+
+```{r endmt-gene-sets}
+# EndMT gene set 1: Endocardial identity (pre-EndMT)
+# Marks cells that retain endocardial character before transition begins.
+# Key markers: Nfatc1 and Npr3 are the most specific endocardial (non-coronary) markers.
+# Ref: Timmerman et al. (2004) J Clin Invest 114:755-763;
+#      de Lange et al. (2004) Dev Biol;
+#      Luxan et al. (2013) Nat Med.
+genes_EndMT_endocardial <- c("Nfatc1", "Npr3", "Cdh5", "Pecam1", "Tie1",
+                              "Gata2", "Klf2", "Klf4", "Sox17", "Hey1", "Hey2")
+
+# EndMT gene set 2: EndMT induction / transition state
+# Marks cells actively undergoing endocardial-to-mesenchymal transition.
+# Has2 (hyaluronan synthase 2) and Versican mark cardiac jelly — highly specific
+# to the AV canal and outflow tract at E11.5-E12.5.
+# Bmp2, Tgfb2, Tgfb3 are the canonical EndMT-inducing ligands in the AV canal.
+# Ref: Timmerman et al. (2004) J Clin Invest 114:755-763;
+#      Townsend et al. (2011) Dev Biol 356:208-220;
+#      de Vlaming et al. (2012) Differentiation.
+genes_EndMT_transition <- c("Snai1", "Snai2", "Twist1", "Twist2", "Zeb1", "Zeb2",
+                             "Tbx20", "Has2", "Vcan", "Notch1", "Notch2",
+                             "Bmp2", "Tgfb2", "Tgfb3")
+
+# EndMT gene set 3: Valvular mesenchyme (post-EndMT)
+# Marks cells that have completed transition and become valvular interstitial
+# cell precursors. Most directly validated by Hulin et al. (2019) scRNA-seq
+# of mouse valve development at E12.5 — the closest published reference to
+# our timepoints.
+# Ref: Lincoln et al. (2006) Dev Biol 294:292-302;
+#      Levay et al. (2008) Dev Biol 322:189-200;
+#      Hulin et al. (2019) Circ Res 124:1328-1342.
+genes_EndMT_mesenchyme <- c("Postn", "Col1a1", "Col3a1", "Vim", "Fn1",
+                             "Tcf21", "Pdgfra", "Sox9", "Msx1", "Msx2",
+                             "Twist1", "Acta2")
+
+# EndMT gene set 4: Notch signaling axis (EndMT-driving)
+# Score separately from general Notch targets to distinguish EndMT-driving
+# Notch activity from trabeculation/compaction Notch activity.
+# Notch1 loss of function abolishes EndMT in the mouse AV canal.
+# Ref: Timmerman et al. (2004) J Clin Invest;
+#      Luxan et al. (2013) Nat Med 19:1443-1451.
+genes_EndMT_Notch <- c("Notch1", "Notch2", "Jag1", "Dll4", "Hey1", "Hey2",
+                        "Hes1", "Nrg1", "Erbb2", "Erbb4", "Snai2")
+
+# EndMT gene set 5: TGF-beta / BMP signaling axis
+# Eng (endoglin) is a TGF-beta co-receptor expressed specifically on endocardium
+# and is a key upstream regulator of AV canal EndMT.
+# Ref: Townsend et al. (2011) Dev Biol 356:208-220;
+#      Mercado-Pimentel & Runyan (2007) Dev Biol 304:264-275.
+genes_EndMT_TGFb <- c("Tgfb2", "Tgfb3", "Bmp2", "Bmp4", "Smad1", "Smad2",
+                       "Smad3", "Smad5", "Id1", "Id2", "Alk2", "Alk3",
+                       "Alk5", "Eng")
+```
+
+## Run module scoring per group
+- For each group, run `AddModuleScore()` once per EndMT gene set (`nbin = 24`, `ctrl = 5`), storing the resulting `EndMT_*1` metadata columns back into `re_embed_subset_groups`. Each call is wrapped in `tryCatch()` so a scoring failure warns with the group ID and gene set name rather than halting the loop.
+
+```{r endmt-module-scoring}
+gene_sets <- list(
+  EndMT_endocardial = genes_EndMT_endocardial,
+  EndMT_transition  = genes_EndMT_transition,
+  EndMT_mesenchyme  = genes_EndMT_mesenchyme,
+  EndMT_Notch       = genes_EndMT_Notch,
+  EndMT_TGFb        = genes_EndMT_TGFb
+)
+
+for (group_ID in group_names) {
+
+  obj <- re_embed_subset_groups[[group_ID]]
+
+  for (set_name in names(gene_sets)) {
+
+    obj <- tryCatch({
+      AddModuleScore(
+        object   = obj,
+        features = list(gene_sets[[set_name]]),
+        name     = set_name,
+        nbin     = 24,
+        ctrl     = 5
+      )
+    }, error = function(e) {
+      warning(group_ID, " — ", set_name, " scoring failed: ", conditionMessage(e))
+      obj
+    })
+  }
+
+  re_embed_subset_groups[[group_ID]] <- obj
+}
+```
+
+## Confirm EndMT score columns were added
+- Print the metadata column names for one group to confirm all five `EndMT_*1` score columns are present.
+
+```{r endmt-confirm-columns}
+colnames(re_embed_subset_groups[["control"]][[]])
+```
+
+# Metabolic State Module Scoring
+
+## Define metabolic state gene sets
+
+
+```{r metabolic-state-gene-sets}
+# Metabolic gene set 1: Glycolysis
+# At E11.5-E12.5 cardiomyocytes are primarily glycolytic — high scores are
+# expected in immature and proliferating CM populations. Scoring this alongside
+# OxPhos allows the glycolytic-to-oxidative metabolic transition to be mapped
+# across the endocardial/mesenchymal subset.
+# Source: MSigDB mh.all.v2023.2.Mm HALLMARK_GLYCOLYSIS (official mouse HALLMARK
+# collection — mouse gene symbols, no liftover required).
+# Ref: Lopaschuk & Jaswal (2010) J Cardiovasc Pharmacol 56:130-140;
+#      Liberzon et al. (2015) Cell Syst 1:417-425.
+genes_Metab_glycolysis <- c("Hk2", "Pkm", "Ldha", "Pgk1", "Eno1",
+                             "Pfkl", "Slc2a1", "Aldoa", "Pfkfb3", "Gapdh")
+
+# Metabolic gene set 2: Oxidative phosphorylation
+# Expected to be low in immature/transitioning cells at these timepoints and
+# higher in more mature or post-EndMT mesenchymal populations. Contrasting
+# with glycolysis score gives a metabolic maturation axis across the subset.
+# Source: MSigDB mh.all.v2023.2.Mm HALLMARK_OXIDATIVE_PHOSPHORYLATION.
+# Ref: Liberzon et al. (2015) Cell Syst 1:417-425;
+#      Lopaschuk & Jaswal (2010) J Cardiovasc Pharmacol 56:130-140.
+genes_Metab_oxphos <- c("Ndufb3", "Sdhb", "Uqcrc1", "Cox5a", "Atp5f1b",
+                         "Cycs", "Sdha", "Uqcrq", "Cox6a1", "Ndufa4")
+
+# Metabolic gene set 3: Hypoxia response
+# The embryonic heart is physiologically hypoxic at E11.5-E12.5. Hif1a-driven
+# hypoxia signalling is expected in endocardial and transitioning cells.
+# Cited2 and Epas1 (HIF2a) are particularly relevant to cardiac development
+# and help distinguish cardiac-specific hypoxia response from a generic stress
+# signature. High hypoxia score in post-EndMT mesenchyme may indicate cells
+# in the avascular cardiac jelly microenvironment.
+# Source: MSigDB mh.all.v2023.2.Mm HALLMARK_HYPOXIA.
+# Ref: Liberzon et al. (2015) Cell Syst 1:417-425;
+#      Semenza (2012) Science 339:62-66.
+genes_Metab_hypoxia <- c("Hif1a", "Vegfa", "Slc2a1", "Pgk1", "Ldha",
+                          "Bnip3", "Egln1", "Pdk1", "Cited2", "Epas1")
+
+# Metabolic gene set 4: Fatty acid oxidation
+# FAO is the dominant energy source in mature cardiomyocytes but is low at
+# embryonic stages. In the endocardial/mesenchymal subset a high FAO score
+# would suggest more advanced metabolic maturation. Ppara is the master
+# transcriptional regulator of the FAO gene programme in the heart.
+# Ref: Lopaschuk & Jaswal (2010) J Cardiovasc Pharmacol 56:130-140;
+#      Vega et al. (2000) Mol Cell Biol 20:1868-1876.
+genes_Metab_FAO <- c("Ppara", "Cpt1b", "Acadm", "Hadha", "Hadhb",
+                      "Acadvl", "Acaa2", "Echs1", "Slc25a20", "Fabp3")
+```
+
+## Run module scoring per group
+- For each group, run `AddModuleScore()` once per metabolic state gene set (`nbin = 24`, `ctrl = 5`), storing the resulting `Metab_*1` metadata columns back into `re_embed_subset_groups`. Each call is wrapped in `tryCatch()` so a scoring failure warns with the group ID and gene set name rather than halting the loop.
+
+```{r metabolic-state-module-scoring}
+gene_sets <- list(
+  Metab_glycolysis = genes_Metab_glycolysis,
+  Metab_oxphos     = genes_Metab_oxphos,
+  Metab_hypoxia    = genes_Metab_hypoxia,
+  Metab_FAO        = genes_Metab_FAO
+)
+
+for (group_ID in group_names) {
+
+  obj <- re_embed_subset_groups[[group_ID]]
+
+  for (set_name in names(gene_sets)) {
+
+    obj <- tryCatch({
+      AddModuleScore(
+        object   = obj,
+        features = list(gene_sets[[set_name]]),
+        name     = set_name,
+        nbin     = 24,
+        ctrl     = 5
+      )
+    }, error = function(e) {
+      warning(group_ID, " — ", set_name, " scoring failed: ", conditionMessage(e))
+      obj
+    })
+  }
+
+  re_embed_subset_groups[[group_ID]] <- obj
+}
+```
+
+## Confirm metabolic state score columns were added
+- Print the metadata column names for one group to confirm all four `Metab_*1` score columns are present alongside the existing `EndMT_*1` columns.
+
+```{r metabolic-state-confirm-columns}
+colnames(re_embed_subset_groups[["control"]][[]])
+```
+
+# UMAP by EndMT and Metabolic Signature
+- For each group, plot a UMAP coloured by each EndMT and metabolic module score, and export it as a PNG under a `gene_level/umap_signatures` subfolder (sibling to `gene_level/clustree`).
+
+```{r umap-signatures}
+signatures <- c("EndMT_endocardial1", "EndMT_transition1", "EndMT_mesenchyme1",
+                "EndMT_Notch1", "EndMT_TGFb1",
+                "Metab_glycolysis1", "Metab_oxphos1", "Metab_hypoxia1", "Metab_FAO1")
+
+for (group_ID in group_names) {
+
+  sig <- NA
+
+  tryCatch({
+
+    umap_signatures_dir <- file.path(out_dir, group_ID, "gene_level", "umap_signatures")
+    dir.create(umap_signatures_dir, recursive = TRUE, showWarnings = FALSE)
+
+    for (sig in signatures) {
+
+      sig_name <- sub("1$", "", sig)
+
+      p <- FeaturePlot(
+        re_embed_subset_groups[[group_ID]],
+        reduction  = "umap_endo_mesen",
+        features = sig,
+        label      = TRUE,
+        label.size = 6
+      ) +
+        scale_colour_gradientn(
+          colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+          name = "Expression"
+        ) +
+        labs(
+          title    = paste0(group_ID, " — ", sig),
+          caption  = "Endocardium + Mesenchyme subset — gene level"
+        )
+
+      print(p)
+
+      ggsave(
+        filename = file.path(umap_signatures_dir,
+                              paste0(group_ID, "_", sig_name, "_endo_mesen_re_embed", ".png")),
+        plot = p, width = 8, height = 8, dpi = 300
+      )
+    }
+
+  }, error = function(e) {
+    warning(group_ID, " — ", sig, " UMAP signature plot failed: ", conditionMessage(e))
+  })
+}
+```
+
+# Resolution sweep
+- Run this chunk and inspect the plots for each group before proceeding.
+- Choose a resolution per group based on the plots below.
+- Enter your choices in the **next chunk** before running it.
+
+```{r resolution-sweep}
+# ============================================================
+# Resolution sweep — store all resolutions in object metadata,
+# plot UMAPs for each, then visualise stability with clustree.
+# Inspect all plots before running the supervised clustering chunk.
+# Per-resolution UMAPs are saved under a 'gene_level/resolution_sweep'
+# subfolder, the stability clustree under 'gene_level/clustree' (sibling
+# folders, same convention as the EndMT/metabolic clustree exports above),
+# and a summary table of cluster counts per resolution is saved as a CSV.
+# ============================================================
+
+resolution_summary <- data.frame()
+
+for (group_ID in group_names) {
+
+  obj <- re_embed_subset_groups[[group_ID]]
+
+  resolution_sweep_dir <- file.path(out_dir, group_ID, "gene_level", "resolution_sweep")
+  dir.create(resolution_sweep_dir, recursive = TRUE, showWarnings = FALSE)
+
+  clustree_dir <- file.path(out_dir, group_ID, "gene_level", "clustree")
+  dir.create(clustree_dir, recursive = TRUE, showWarnings = FALSE)
+
+  # ----------------------------------------------------------
+  # Run FindClusters at each resolution and store in metadata
+  # ----------------------------------------------------------
+  for (res in seq(0.1, 1.0, by = 0.1)) {
+
+    col_name <- paste0("res_", res)
+
+    obj <- FindClusters(
+      obj,
+      resolution   = res,
+      cluster.name = col_name,
+      verbose      = FALSE
+    )
+
+    n_clusters <- length(unique(obj[[col_name]][[1]]))
+    message(group_ID, " — resolution ", res, ": ", n_clusters, " clusters")
+
+    resolution_summary <- rbind(
+      resolution_summary,
+      data.frame(group_ID = group_ID, resolution = res, n_clusters = n_clusters)
+    )
+  }
+
+  # Store the updated object back into the list so metadata is retained
+  re_embed_subset_groups[[group_ID]] <- obj
+
+  # ----------------------------------------------------------
+  # Plot UMAP for each resolution inline, and save to disk
+  # ----------------------------------------------------------
+  for (res in seq(0.1, 1.0, by = 0.1)) {
+
+    col_name   <- paste0("res_", res)
+    n_clusters <- length(unique(obj[[col_name]][[1]]))
+
+    res_plot <- DimPlot(
+        obj,
+        reduction  = "umap_endo_mesen",
+        group.by   = col_name,
+        label      = TRUE,
+        label.size = 6
+      ) +
+        labs(
+          title    = paste0(group_ID, " — resolution: ", res),
+          subtitle = paste0(n_clusters, " clusters"),
+          caption  = "Endocardium + Mesenchyme subset — gene level"
+        ) +
+        NoLegend()
+
+    print(res_plot)
+
+    ggsave(
+      filename = file.path(resolution_sweep_dir,
+                            paste0(group_ID, "_resolution_", res, "_endo_mesen_re_embed", ".png")),
+      plot   = res_plot,
+      width  = 8,
+      height = 8,
+      dpi    = 300
+    )
+  }
+
+  # ----------------------------------------------------------
+  # Clustree plot — visualise cluster stability across resolutions
+  # ----------------------------------------------------------
+  stability_plot <- clustree(
+      obj,
+      node_colour = "sc3_stability",
+      # node_colour_aggr = "mean",
+      prefix = "res_"
+    ) +
+      labs(
+        title   = paste0(group_ID, " — clustree", " — sc3_stability"),
+        caption = "Endocardium + Mesenchyme subset — gene level — node size = cluster size, edge width = cells moving between clusters"
+      )
+
+  print(stability_plot)
+
+  ggsave(
+    filename = file.path(clustree_dir,
+                          paste0(group_ID, "_sc3_stability_endo_mesen_re_embed", ".png")),
+    plot   = stability_plot,
+    width  = 10,
+    height = 12,
+    dpi    = 300
+  )
+}
+
+# ----------------------------------------------------------
+# Save the resolution sweep summary table
+# ----------------------------------------------------------
+print(resolution_summary)
+
+write.csv(
+  resolution_summary,
+  file.path(out_dir, "gene_level_resolution_sweep_summary.csv"),
+  row.names = FALSE
+)
+```
+
+```{r clustree-overlay}
+# ============================================================
+# Clustree overlay — resolution sweep plotted on UMAP coordinates
+# Reuses the res_0.1 ... res_1 columns stored by the resolution
+# sweep chunk above. Inspect these plots before proceeding.
+# ============================================================
+
+for (group_ID in group_names) {
+
+  obj <- re_embed_subset_groups[[group_ID]]
+
+  # Add UMAP coordinates to metadata (required by clustree_overlay)
+  umap_coords <- Embeddings(obj, reduction = "umap_endo_mesen")
+  colnames(umap_coords) <- c("UMAP_1", "UMAP_2")
+  obj <- AddMetaData(obj, metadata = as.data.frame(umap_coords))
+
+  print(
+    clustree_overlay(
+      obj,
+      prefix  = "res_",
+      x_value = "UMAP_1",
+      y_value = "UMAP_2"
+    ) +
+      labs(
+        title   = paste0(group_ID, " — clustree overlay on UMAP"),
+        caption = "Endocardium + Mesenchyme subset — gene level"
+      )
+  )
+}
+```
+
+```{r clustree-exploration}
+
+ # ----------------------------------------------------------
+ # Clustree plot — visualise signatures
+ # ----------------------------------------------------------
+
+sig_genes <- c("Ecscr", "Cdh5", "Postn", "Cthrc1")
+
+for (group_ID in group_names) {
+
+  gene <- NA
+
+  tryCatch({
+
+    clustree_dir <- file.path(out_dir, group_ID, "gene_level", "clustree")
+    dir.create(clustree_dir, recursive = TRUE, showWarnings = FALSE)
+
+    for (gene in sig_genes) {
+
+      p <- clustree(
+        re_embed_subset_groups[[group_ID]],
+        node_colour = gene,
+        node_colour_aggr = "mean",
+        prefix = "res_"
+        ) +
+        labs(
+          title   = paste0(group_ID, " — clustree", " —", gene, " avg exp."),
+          caption = "Endocardium + Mesenchyme subset — gene level"
+          )
+
+      print(p)
+
+      ggsave(
+        filename = file.path(clustree_dir,
+                              paste0(group_ID, "_", gene, "_endo_mesen_re_embed", ".png")),
+        plot   = p,
+        width  = 10,
+        height = 12,
+        dpi    = 300
+      )
+    }
+
+  }, error = function(e) {
+    warning(group_ID, " — ", gene, " clustree exploration failed: ", conditionMessage(e))
+  })
+}
+
+```
+
+# UMAP by Cell Type (pre-final-clustering)
+- The `new_celltypes` UMAP originally generated inside `clustree-exploration`, moved into its own chunk, looped across both groups, and saved to `gene_level/umap_signatures`.
+
+```{r umap-new-celltypes-exploration}
+for (group_ID in group_names) {
+
+  tryCatch({
+
+    umap_signatures_dir <- file.path(out_dir, group_ID, "gene_level", "umap_signatures")
+    dir.create(umap_signatures_dir, recursive = TRUE, showWarnings = FALSE)
+
+    p <- DimPlot(
+            re_embed_subset_groups[[group_ID]],
+            reduction  = "umap_endo_mesen",
+            group.by   = "new_celltypes",
+            label      = TRUE,
+            label.size = 6
+          ) +
+            labs(
+              title    = paste0(group_ID, " — new_celltypes"),
+              caption  = "Endocardium + Mesenchyme subset — gene level"
+            ) +
+            NoLegend()
+
+    print(p)
+
+    ggsave(
+      filename = file.path(umap_signatures_dir,
+                            paste0(group_ID, "_new_celltypes_endo_mesen_re_embed", ".png")),
+      plot = p, width = 8, height = 8, dpi = 300
+    )
+
+  }, error = function(e) {
+    warning(group_ID, " — new_celltypes UMAP failed: ", conditionMessage(e))
+  })
+}
+```
+
+# Clustree: EndMT Module Scores
+- For each group, plot a clustree coloured by each EndMT module score (mean per cluster) and export it as a PNG. The resolution prefix is detected automatically from the metadata column names rather than hardcoded, and `clustree()` is passed the metadata data frame directly rather than the Seurat object.
+
+```{r clustree-endmt-scores}
+endmt_scores <- c("EndMT_endocardial1", "EndMT_transition1",
+                  "EndMT_mesenchyme1", "EndMT_Notch1", "EndMT_TGFb1")
+
+n_saved <- 0
+
+for (group_ID in group_names) {
+
+  score_col <- NA
+
+  tryCatch({
+
+    seu     <- re_embed_subset_groups[[group_ID]]
+    meta_df <- seu@meta.data
+
+    # Detect the clustering resolution prefix dynamically from metadata
+    # column names (never hardcoded)
+    resolution_cols   <- grep("^res_[0-9]", colnames(meta_df), value = TRUE)
+    resolution_prefix <- unique(sub("[0-9.]+$", "", resolution_cols))
+
+    dir.create(file.path(out_dir, group_ID, "gene_level", "clustree"),
+               recursive = TRUE, showWarnings = FALSE)
+
+    for (score_col in endmt_scores) {
+
+      score_name <- sub("1$", "", score_col)
+
+      p <- clustree(meta_df,
+                    prefix           = resolution_prefix,
+                    node_colour      = score_col,
+                    node_colour_aggr = "mean",
+                    node_size        = "size") +
+        ggtitle(paste(group_ID, score_col))
+
+      ggsave(
+        filename = file.path(out_dir, group_ID, "gene_level", "clustree",
+                              paste0(group_ID, "_", score_name,
+                                     "_endo_mesen_re_embed", ".png")),
+        plot   = p,
+        width  = 10,
+        height = 12,
+        dpi    = 300
+      )
+
+      n_saved <- n_saved + 1
+    }
+
+  }, error = function(e) {
+    warning(group_ID, " — ", score_col, " clustree failed: ", conditionMessage(e))
+  })
+}
+
+message("Saved ", n_saved, " EndMT clustree PNGs under ", out_dir, " (per-group 'clustree' subdirectories)")
+```
+
+# Clustree: Metabolic Module Scores
+- For each group, plot a clustree coloured by each metabolic module score (mean per cluster) and export it as a PNG. Same structure as the EndMT clustree section above — dynamic resolution prefix detection, `tryCatch()` per group, and `clustree()` called on the metadata data frame directly.
+
+```{r clustree-metabolic-scores}
+metab_scores <- c("Metab_glycolysis1", "Metab_oxphos1",
+                  "Metab_hypoxia1", "Metab_FAO1")
+
+n_saved <- 0
+
+for (group_ID in group_names) {
+
+  score_col <- NA
+
+  tryCatch({
+
+    seu     <- re_embed_subset_groups[[group_ID]]
+    meta_df <- seu@meta.data
+
+    # Detect the clustering resolution prefix dynamically from metadata
+    # column names (never hardcoded)
+    resolution_cols   <- grep("^res_[0-9]", colnames(meta_df), value = TRUE)
+    resolution_prefix <- unique(sub("[0-9.]+$", "", resolution_cols))
+
+    dir.create(file.path(out_dir, group_ID, "gene_level", "clustree"),
+               recursive = TRUE, showWarnings = FALSE)
+
+    for (score_col in metab_scores) {
+
+      score_name <- sub("1$", "", score_col)
+
+      p <- clustree(meta_df,
+                    prefix           = resolution_prefix,
+                    node_colour      = score_col,
+                    node_colour_aggr = "mean",
+                    node_size        = "size") +
+        ggtitle(paste(group_ID, score_col))
+
+      ggsave(
+        filename = file.path(out_dir, group_ID, "gene_level", "clustree",
+                              paste0(group_ID, "_", score_name,
+                                     "_endo_mesen_re_embed", ".png")),
+        plot   = p,
+        width  = 10,
+        height = 12,
+        dpi    = 300
+      )
+
+      n_saved <- n_saved + 1
+    }
+
+  }, error = function(e) {
+    warning(group_ID, " — ", score_col, " clustree failed: ", conditionMessage(e))
+  })
+}
+
+message("Saved ", n_saved, " metabolic clustree PNGs under ", out_dir, " (per-group 'clustree' subdirectories)")
+```
+
+# Final clustering — supervised resolution choice
+- Inspect the resolution sweep plots above before running this chunk.
+- Enter your per-group resolution choices in the `chosen_resolutions` vector below.
+- Then run this chunk to apply `FindClusters` at the chosen resolution for each group.
+
+```{r}
+# ============================================================
+# Enter your chosen resolution per group after inspecting
+# the sweep plots above. Run this chunk only after reviewing.
+# ============================================================
+
+chosen_resolutions <- c(
+  "control" = 0.4,
+  "ko"      = 0.5
+  )
+
+for (group_ID in group_names) {
+
+  res <- chosen_resolutions[[group_ID]]
+  message("Applying resolution ", res, " to ", group_ID)
+
+  re_embed_subset_groups[[group_ID]] <- FindClusters(
+    re_embed_subset_groups[[group_ID]],
+    resolution   = res,
+    cluster.name = "seurat_clusters_endo_mesen",
+    verbose      = FALSE
+  )
+
+  n_clusters <- length(unique(re_embed_subset_groups[[group_ID]]$seurat_clusters_endo_mesen))
+  message("  ", group_ID, ": ", n_clusters, " clusters at resolution ", res)
+  }
+
+```
+
+# UMAP coloured by cell type
+
+```{r}
+for (group_ID in group_names) {
+
+  obj <- re_embed_subset_groups[[group_ID]]
+
+  umap_celltype <- DimPlot(
+      obj,
+      reduction = "umap_endo_mesen",
+      group.by = "new_celltypes",
+      cols = celltype_cols,
+      label = TRUE,
+      label.size = 6
+      ) +
+      labs(
+        title = paste0(group_ID, " - endo/mesen re-embed (cell types)"),
+        caption = paste0(group_ID, " — gene level")
+      ) +
+      NoLegend()
+
+  print(umap_celltype)
+
+  dir.create(file.path(out_dir, group_ID, "gene_level", "umap_signatures"), recursive = TRUE, showWarnings = FALSE)
+
+  save_if(umap_celltype,
+          filename = file.path(out_dir, group_ID, "gene_level", "umap_signatures", paste0("12.1-umap.re_embed.", group_ID, ".new_celltype.png")),
+          width = 8,
+          height = 8)
+  }
+```
+
+# UMAP coloured by new cluster
+
+```{r}
+for (group_ID in group_names) {
+
+  obj <- re_embed_subset_groups[[group_ID]]
+
+  umap_newCluster <- DimPlot(
+      obj,
+      reduction = "umap_endo_mesen",
+      group.by = "seurat_clusters_endo_mesen",
+      label = TRUE,
+      label.size = 6
+      ) +
+      labs(
+        title = paste0(group_ID, " - endo/mesen re-embed (new clusters)"),
+        caption = paste0(group_ID, " — gene level")
+      ) +
+      NoLegend()
+
+  print(umap_newCluster)
+
+  dir.create(file.path(out_dir, group_ID, "gene_level"), recursive = TRUE, showWarnings = FALSE)
+
+  save_if(umap_newCluster,
+          filename = file.path(out_dir, group_ID, "gene_level", paste0("12.1-umap.re_embed.", group_ID, ".new_clusters.png")),
+          width = 8,
+          height = 8)
+  }
+```
+
+# UMAP coloured by cell cycle Phase
+
+```{r}
+for (group_ID in group_names) {
+
+  obj <- re_embed_subset_groups[[group_ID]]
+
+  umap_phase <- DimPlot(
+      obj,
+      reduction = "umap_endo_mesen",
+      group.by = "Phase",
+      label = TRUE,
+      label.size = 6
+      ) +
+      labs(
+        title = paste0(group_ID, " - endo/mesen re-embed (Phase)"),
+        caption = paste0(group_ID, " — gene level")
+      ) +
+      NoLegend()
+
+  print(umap_phase)
+
+  dir.create(file.path(out_dir, group_ID, "gene_level", "umap_signatures"), recursive = TRUE, showWarnings = FALSE)
+
+  save_if(umap_phase,
+          filename = file.path(out_dir, group_ID, "gene_level", "umap_signatures", paste0("12.1-umap.re_embed.", group_ID, ".phase.png")),
+          width = 8,
+          height = 8)
+  }
+```
+
+# Endocardial lineage markers
+
+```{r}
+for (group_ID in group_names) {
+
+  obj <- re_embed_subset_groups[[group_ID]]
+
+  endocardial_markers <- FeaturePlot(
+    object = obj,
+    reduction = "umap_endo_mesen",
+    features = c("Ecscr", "Cdh5"),
+    ncol = 1,                      # side-by-side panels
+    order = TRUE                   # high-expression cells on top
+    ) &
+    scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+    ) &
+    plot_annotation(
+    title = paste0(group_ID, " Endocardial lineage markers"),
+    caption = paste0("endo/mesen - re_embed - group level - gene level")
+    ) &
+    theme_bw(base_size = 14) &
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      plot.subtitle = element_text(hjust = 0.5)
+      )
+
+  print(endocardial_markers)
+
+  dir.create(file.path(out_dir, group_ID, "gene_level", "umap_signatures"), recursive = TRUE, showWarnings = FALSE)
+
+  save_if(endocardial_markers,
+          filename = file.path(out_dir, group_ID, "gene_level", "umap_signatures", paste0("12.1-umap.re_embed.", group_ID, ".endocardial_genes.png")),
+          width = 8,
+          height = 8)
+  }
+```
+
+# Mesenchymal lineage markers
+
+```{r}
+for (group_ID in group_names) {
+
+  obj <- re_embed_subset_groups[[group_ID]]
+
+  mesenchymal_markers <- FeaturePlot(
+    object = obj,
+    reduction = "umap_endo_mesen",
+    features = c("Postn", "Cthrc1"),
+    ncol = 1,                      # side-by-side panels
+    order = TRUE                   # high-expression cells on top
+    ) &
+    scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+    ) &
+    plot_annotation(
+    title = paste0(group_ID, " Mesenchymal lineage markers"),
+    caption = paste0("endo/mesen - re_embed - group level - gene level")
+    ) &
+    theme_bw(base_size = 14) &
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      plot.subtitle = element_text(hjust = 0.5)
+      )
+
+  print(mesenchymal_markers)
+
+  dir.create(file.path(out_dir, group_ID, "gene_level", "umap_signatures"), recursive = TRUE, showWarnings = FALSE)
+
+  save_if(mesenchymal_markers,
+          filename = file.path(out_dir, group_ID, "gene_level", "umap_signatures", paste0("12.1-umap.re_embed.", group_ID, ".mesenchymal_genes.png")),
+          width = 8,
+          height = 8)
+  }
+```
+
+# Cell cycle scores
+
+```{r}
+for (group_ID in group_names) {
+
+  obj <- re_embed_subset_groups[[group_ID]]
+
+  cellCycle_feature <- FeaturePlot(
+    object = obj,
+    reduction = "umap_endo_mesen",
+    features = c("G2M.Score", "S.Score"),
+    ncol = 1,                      # vertical panels
+    order = TRUE                   # high-expression cells on top
+    ) &
+    scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+    ) &
+    plot_annotation(
+    title = paste0(group_ID, " Cell Cycle"),
+    caption = paste0("endo/mesen - re_embed - group level - gene level")
+    ) &
+    theme_bw(base_size = 14) &
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      plot.subtitle = element_text(hjust = 0.5)
+      )
+
+  print(cellCycle_feature)
+
+  dir.create(file.path(out_dir, group_ID, "gene_level", "umap_signatures"), recursive = TRUE, showWarnings = FALSE)
+
+  save_if(cellCycle_feature,
+          filename = file.path(out_dir, group_ID, "gene_level", "umap_signatures", paste0("12.1-umap.re_embed.", group_ID, ".cellCycle.png")),
+          width = 8,
+          height = 8)
+  }
+```
+
+# Write out the re-embedded subset objects
+
+```{r}
+for (group_ID in group_names) {
+  write_rds(
+    x = re_embed_subset_groups[[group_ID]],
+    file = file.path(out_dir, group_ID, paste0(group_ID, "_endo_mesen_re_embed", ".rds"))
+  )
+
+  message("Saved: ", group_ID)
+  }
+```
+
+# Session info
+
+```{r}
+writeLines(capture.output(sessionInfo()), file.path(out_dir, "12.1_session_info.txt"))
+```
