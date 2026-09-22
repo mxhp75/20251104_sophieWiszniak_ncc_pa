@@ -1,0 +1,817 @@
+---
+title: "Import Velocyto spliced/unspliced counts for Endocardium and Mesenchyme by genotype"
+author: "Melanie Smith"
+date: "2026-09-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr's "grouped output" informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+- This script imports the Velocyto spliced/unspliced/ambiguous counts for the genotype-level Endocardium/Mesenchyme subsets created in `12.1`, subsets them to the cells and genes retained in that subset, re-embeds, and exports the combined object as an `.h5ad` for scVelo/PAGA.
+- Route B only (reads the raw `.loom` files directly - the older TSV-based combined-assay approach used in `11.2` is not carried forward here).
+- Each genotype group combines two original samples (`control` = e11_control + e12_control, `ko` = e11_ko + e12_ko), so the `.loom` handling here loops over each group's two samples and combines their matrices, unlike `11.2` which only ever handled one sample at a time.
+
+# Load Libraries
+
+```{r}
+reticulate::py_require(c("anndata==0.10.9", "pandas<3.0"))
+
+library(tidyverse)
+library(Seurat)
+library(Matrix)
+library(ggokabeito)
+library(cowplot)
+library(patchwork)
+library(reticulate)
+library(sceasy)
+library(anndata)
+library(scCustomize)
+library(clustree)
+```
+
+# Set project directories and parameters
+
+```{r}
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+out_dir <- file.path(project_repo_dir, "outDir", "12-rna_velocity")
+
+group_names <- c("control", "ko")
+
+# Maps each genotype group to its two constituent original samples
+group_sample_map <- list(
+  control = c("e11_control", "e12_control"),
+  ko      = c("e11_ko", "e12_ko")
+)
+
+# Named vector mapping each original sample to its Velocyto loom column prefix
+loom_colnames <- c(
+  "e11_control" = "possorted_genome_bam_5Q1UF:",
+  "e11_ko"      = "possorted_genome_bam_LZRTJ:",
+  "e12_control" = "possorted_genome_bam_YIL7N:",
+  "e12_ko"      = "possorted_genome_bam_0YX73:"
+)
+```
+
+## Set up the cell-type colours and marker genes
+
+```{r}
+celltype_cols <- c("Myocardium"    = "#E41A1C",
+                   "VSMC"          = "#984EA3",
+                   "Endocardium"   = "#377EB8",
+                   "Epicardium"    = "#FF7F00",
+                   "Mesenchyme"    = "#4DAF4A",
+                   "Other/Unknown" = "grey70")
+
+endocardial_genes <- c("Ecscr", "Cdh5", "Tie1", "Rasip1", "Plxnd1")
+mesenchymal_genes <- c("Postn", "Cthrc1", "Col1a1", "Fn1")
+```
+
+# Helper functions
+
+```{r}
+save_if <- function(plot_object, filename, width, height, ...) {
+  if (save_plots) {
+    ggsave(plot = plot_object, filename = filename,
+           width = width, height = height, dpi = 300, ...)
+  }
+}
+save_plots <- TRUE
+```
+
+# Load Endocardium and Mesenchyme subset Seurat objects
+- These are the per-group objects saved by `12.1`.
+- They contain gene-level counts, metadata, and the `umap_endo_mesen`/`pca_endo_mesen` reductions.
+- Cell barcodes here define which cells are retained from the loom (spliced/unspliced/ambiguous) data.
+
+```{r}
+re_embed_subset_groups <- list()
+
+for (group_ID in group_names) {
+  re_embed_subset_groups[[group_ID]] <- read_rds(
+    file = file.path(out_dir, group_ID, paste0(group_ID, "_endo_mesen_re_embed.rds"))
+  )
+}
+```
+
+# Subset Loom Layers to 12.1 Cells and Genes
+- For each genotype group, loops over its two original samples, reads each sample's Velocyto `.loom` file directly (so the `ambiguous` layer is available), matches barcodes against the cells from that sample retained in the group's `12.1` object (identified via `orig.ident`, not inferred from barcode suffixes, since the two samples in a group carry different suffixes), then combines both samples' matrices into one group-level matrix per layer.
+
+```{r subset-loom-to-12point1-cells}
+loom_spliced_subset   <- list()
+loom_unspliced_subset <- list()
+loom_ambiguous_subset <- list()
+
+for (group_ID in group_names) {
+
+  tryCatch({
+
+    message("Subsetting loom layers: ", group_ID)
+
+    retained_genes <- rownames(re_embed_subset_groups[[group_ID]])
+
+    group_spliced_parts   <- list()
+    group_unspliced_parts <- list()
+    group_ambiguous_parts <- list()
+
+    for (sample_ID in group_sample_map[[group_ID]]) {
+
+      velocyto_dir <- file.path(project_repo_dir, "outDir", "09-rna_velocity", sample_ID, "velocyto_output")
+      loom_file    <- file.path(velocyto_dir, paste0(sub(":$", "", loom_colnames[[sample_ID]]), ".loom"))
+
+      lfile <- loomR::connect(filename = loom_file, mode = "r", skip.validate = TRUE)
+
+      # loomR returns layers oriented cells (rows) x genes (columns)
+      loom_barcodes <- lfile$col.attrs$CellID[]
+      loom_genes    <- lfile$row.attrs$Gene[]
+
+      n_cells_original <- length(loom_barcodes)
+
+      clean_barcodes <- gsub(loom_colnames[[sample_ID]], "", loom_barcodes)
+      clean_barcodes <- gsub("x$", "", clean_barcodes)
+
+      # Cells retained for this group AND originating from this particular
+      # sample - identified via orig.ident, since the group combines two
+      # originally-separate samples with different barcode suffixes.
+      retained_cells_this_sample <- colnames(re_embed_subset_groups[[group_ID]])[
+        re_embed_subset_groups[[group_ID]]$orig.ident == sample_ID
+      ]
+
+      # retained_cells_this_sample is already subset to Endocardium/Mesenchyme
+      # cells only, so the first loom barcode is often not among them. Try
+      # successive barcodes until one matches, rather than assuming the first
+      # one does (same issue fixed in 11.2/12.1).
+      example_bc <- character(0)
+      matched_bc <- character(0)
+      for (bc in clean_barcodes) {
+        matched_bc <- grep(paste0("^", bc), retained_cells_this_sample, value = TRUE)
+        if (length(matched_bc) >= 1) {
+          example_bc <- bc
+          break
+        }
+      }
+      stopifnot(length(matched_bc) >= 1)
+      barcode_suffix <- sub(paste0("^", example_bc), "", matched_bc[1])
+
+      full_barcodes <- paste0(clean_barcodes, barcode_suffix)
+
+      cell_match_idx <- match(retained_cells_this_sample, full_barcodes)
+      pct_matched    <- mean(!is.na(cell_match_idx))
+
+      if (pct_matched < 0.8) {
+        warning(group_ID, " (", sample_ID, ") — only ", round(pct_matched * 100, 1),
+                "% of 12.1 cells matched in the loom file (expected >= 80%)")
+      }
+
+      keep_cells_idx <- cell_match_idx[!is.na(cell_match_idx)]
+      keep_cells     <- retained_cells_this_sample[!is.na(cell_match_idx)]
+
+      gene_match_idx <- match(retained_genes, loom_genes)
+      keep_genes_idx <- gene_match_idx[!is.na(gene_match_idx)]
+      keep_genes     <- retained_genes[!is.na(gene_match_idx)]
+
+      # Read each layer, subset to retained cells/genes, transpose to genes x
+      # cells (Seurat convention), wrap as sparse, then discard the dense
+      # intermediate before moving to the next layer
+      read_layer_subset <- function(layer_name) {
+        full_mat <- lfile[[paste0("layers/", layer_name)]][, ]
+        sub_mat  <- t(full_mat[keep_cells_idx, keep_genes_idx])
+        rownames(sub_mat) <- keep_genes
+        colnames(sub_mat) <- keep_cells
+        sub_mat <- Matrix::Matrix(sub_mat, sparse = TRUE)
+        rm(full_mat)
+        gc()
+        sub_mat
+      }
+
+      group_spliced_parts[[sample_ID]]   <- read_layer_subset("spliced")
+      group_unspliced_parts[[sample_ID]] <- read_layer_subset("unspliced")
+      group_ambiguous_parts[[sample_ID]] <- read_layer_subset("ambiguous")
+
+      lfile$close_all()
+
+      message(
+        group_ID, " (", sample_ID, ")",
+        " — cells: ", n_cells_original, " -> ", length(keep_cells),
+        " | genes matched: ", length(keep_genes)
+      )
+    }
+
+    # Combine both samples' matrices (same genes, different cells) into one
+    # group-level matrix per layer
+    loom_spliced_subset[[group_ID]]   <- do.call(cbind, group_spliced_parts)
+    loom_unspliced_subset[[group_ID]] <- do.call(cbind, group_unspliced_parts)
+    loom_ambiguous_subset[[group_ID]] <- do.call(cbind, group_ambiguous_parts)
+
+    message(group_ID, " — combined cells: ", ncol(loom_spliced_subset[[group_ID]]))
+
+  }, error = function(e) {
+    warning(group_ID, " — loom subsetting failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed loom layer subsetting for ", length(loom_spliced_subset), " of ", length(group_names), " groups")
+```
+
+# Create Group-Level Spliced/Unspliced Seurat Objects and Re-embed
+- For each group, build a new Seurat object from the combined spliced counts, attach the unspliced/ambiguous layers as additional assays, transfer all `12.1` metadata (including EndMT/Metab module scores), then re-embed and sweep the same resolution sequence used in `12.1` (`seq(0.1, 1.0, by = 0.1)`, `res_` naming). Normalisation, scaling, PCA, neighbours, clustering, and UMAP all run on the spliced assay only - unspliced/ambiguous are carried as separate assays for the later velocity model fit, not used to build this embedding.
+
+```{r create-seurat-group-spliced-reembed}
+resolution_sequence <- seq(0.1, 1.0, by = 0.1)
+n_dims_spliced       <- 30
+nfeatures_spliced    <- 3000
+
+spliced_subset_groups <- list()
+
+for (group_ID in group_names) {
+
+  tryCatch({
+
+    message("Creating spliced/unspliced object: ", group_ID)
+
+    seu <- CreateSeuratObject(counts = loom_spliced_subset[[group_ID]])
+
+    seu[["unspliced"]] <- CreateAssayObject(counts = loom_unspliced_subset[[group_ID]])
+    seu[["ambiguous"]] <- CreateAssayObject(counts = loom_ambiguous_subset[[group_ID]])
+
+    # Transfer all metadata from the 12.1 subset object, matched by barcode
+    source_meta <- re_embed_subset_groups[[group_ID]]@meta.data[colnames(seu), ]
+    seu <- AddMetaData(seu, metadata = source_meta)
+
+    DefaultAssay(seu) <- "RNA"
+
+    seu <- NormalizeData(seu, verbose = FALSE)
+    seu <- FindVariableFeatures(seu, selection.method = "vst",
+                                 nfeatures = nfeatures_spliced, verbose = FALSE)
+    seu <- ScaleData(seu, verbose = FALSE)
+    seu <- RunPCA(seu, reduction.name = "pca_spliced", reduction.key = "PCspliced_", verbose = FALSE)
+    seu <- FindNeighbors(seu, reduction = "pca_spliced", dims = 1:n_dims_spliced, verbose = FALSE)
+
+    for (res in resolution_sequence) {
+      seu <- FindClusters(seu, resolution = res, cluster.name = paste0("res_", res), verbose = FALSE)
+    }
+
+    seu <- RunUMAP(seu, reduction = "pca_spliced", dims = 1:n_dims_spliced,
+                   reduction.name = "umap_spliced", reduction.key = "UMAPspliced_", verbose = FALSE)
+
+    spliced_subset_groups[[group_ID]] <- seu
+
+    message("Finished: ", group_ID)
+
+  }, error = function(e) {
+    warning(group_ID, " — spliced/unspliced object creation failed: ", conditionMessage(e))
+  })
+}
+
+message("Created spliced/unspliced objects for ", length(spliced_subset_groups), " of ", length(group_names), " groups")
+```
+
+# Spliced/Unspliced Resolution Sweep Plots
+- Reproduces `12.1`'s `resolution-sweep` figures (per-resolution UMAP + stability clustree) for the spliced/unspliced embedding, using the `res_0.1`...`res_1` columns created above. `clustree()` is passed the metadata data frame directly, with the resolution prefix detected dynamically.
+
+```{r spliced-resolution-sweep-plots}
+resolution_sequence <- seq(0.1, 1.0, by = 0.1)
+
+for (group_ID in group_names) {
+
+  tryCatch({
+
+    seu <- spliced_subset_groups[[group_ID]]
+
+    resolution_sweep_dir <- file.path(out_dir, group_ID, "spliced_unspliced", "resolution_sweep")
+    dir.create(resolution_sweep_dir, recursive = TRUE, showWarnings = FALSE)
+
+    clustree_dir <- file.path(out_dir, group_ID, "spliced_unspliced", "clustree")
+    dir.create(clustree_dir, recursive = TRUE, showWarnings = FALSE)
+
+    for (res in resolution_sequence) {
+
+      col_name   <- paste0("res_", res)
+      n_clusters <- length(unique(seu[[col_name]][[1]]))
+
+      p <- DimPlot(
+        seu,
+        reduction  = "umap_spliced",
+        group.by   = col_name,
+        label      = TRUE,
+        label.size = 6
+      ) +
+        labs(
+          title    = paste0(group_ID, " — resolution: ", res),
+          subtitle = paste0(n_clusters, " clusters"),
+          caption  = "Endocardium + Mesenchyme subset — spliced/unspliced level"
+        ) +
+        NoLegend()
+
+      print(p)
+
+      ggsave(
+        filename = file.path(resolution_sweep_dir, paste0("12.2-umap.spliced_unspliced_re_embed.", group_ID, ".res_", res, ".png")),
+        plot = p, width = 8, height = 8, dpi = 300
+      )
+    }
+
+    meta_df <- seu@meta.data
+    resolution_cols   <- grep("^res_[0-9]", colnames(meta_df), value = TRUE)
+    resolution_prefix <- unique(sub("[0-9.]+$", "", resolution_cols))
+
+    p_tree <- clustree(
+      meta_df,
+      prefix      = resolution_prefix,
+      node_colour = "sc3_stability"
+    ) +
+      labs(
+        title   = paste0(group_ID, " — clustree — sc3_stability"),
+        caption = "Endocardium + Mesenchyme subset — spliced/unspliced level"
+      )
+
+    print(p_tree)
+
+    ggsave(
+      filename = file.path(clustree_dir, paste0("12.2-clustree.spliced_unspliced_re_embed.", group_ID, ".sc3_stability.png")),
+      plot = p_tree, width = 10, height = 12, dpi = 300
+    )
+
+  }, error = function(e) {
+    warning(group_ID, " — spliced resolution sweep plotting failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed spliced/unspliced resolution sweep plots for ", length(group_names), " groups")
+```
+
+# Spliced/Unspliced Clustree Exploration
+- Reproduces `12.1`'s extended `clustree-exploration` chunk (marker-gene clustree: `Ecscr`, `Cdh5`, `Postn`, `Cthrc1`) for the spliced/unspliced embedding, looped across both groups and saved to `spliced_unspliced/clustree`, mirroring the same subfolder structure used under `gene_level`.
+
+```{r spliced-clustree-exploration}
+sig_genes <- c("Ecscr", "Cdh5", "Postn", "Cthrc1")
+
+for (group_ID in group_names) {
+
+  gene <- NA
+
+  tryCatch({
+
+    seu     <- spliced_subset_groups[[group_ID]]
+    meta_df <- seu@meta.data
+
+    resolution_cols   <- grep("^res_[0-9]", colnames(meta_df), value = TRUE)
+    resolution_prefix <- unique(sub("[0-9.]+$", "", resolution_cols))
+
+    fig_dir <- file.path(out_dir, group_ID, "spliced_unspliced", "clustree")
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+    for (gene in sig_genes) {
+
+      # Gene expression is not a metadata column, so clustree needs the
+      # Seurat object itself here (not meta_df) to look up expression via
+      # node_colour_aggr - unlike the module-score clustree calls below,
+      # where the score is already a metadata column.
+      p <- clustree(
+        seu,
+        prefix           = resolution_prefix,
+        node_colour      = gene,
+        node_colour_aggr = "mean"
+        ) +
+        labs(
+          title   = paste0(group_ID, " — clustree — ", gene, " avg exp."),
+          caption = "Endocardium + Mesenchyme subset — spliced/unspliced level"
+          )
+
+      print(p)
+
+      ggsave(
+        filename = file.path(fig_dir, paste0("12.2-clustree.spliced_unspliced_re_embed.", group_ID, ".", gene, ".png")),
+        plot = p, width = 10, height = 12, dpi = 300
+      )
+    }
+
+  }, error = function(e) {
+    warning(group_ID, " — ", gene, " spliced clustree exploration failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed spliced/unspliced clustree exploration for ", length(group_names), " groups")
+```
+
+# Spliced/Unspliced UMAP by Cell Type
+- Reproduces `12.1`'s "UMAP coloured by cell type" figure using the spliced/unspliced embedding.
+
+```{r spliced-umap-celltype}
+for (group_ID in group_names) {
+
+  tryCatch({
+
+    seu <- spliced_subset_groups[[group_ID]]
+
+    fig_dir <- file.path(out_dir, group_ID, "spliced_unspliced", "umap_signatures")
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+    p <- DimPlot(
+        seu,
+        reduction = "umap_spliced",
+        group.by = "new_celltypes",
+        cols = celltype_cols,
+        label = TRUE,
+        label.size = 6
+        ) +
+        labs(
+          title = paste0(group_ID, " - spliced/unspliced re-embed (cell types)"),
+          caption = paste0(group_ID, " — spliced/unspliced level")
+        ) +
+        NoLegend()
+
+    print(p)
+
+    ggsave(
+      filename = file.path(fig_dir, paste0("12.2-umap.spliced_unspliced_re_embed.", group_ID, ".new_celltype.png")),
+      plot = p, width = 8, height = 8, dpi = 300
+    )
+
+  }, error = function(e) {
+    warning(group_ID, " — spliced cell type UMAP failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed spliced/unspliced UMAP-by-cell-type plots for ", length(group_names), " groups")
+```
+
+# Spliced/Unspliced UMAP by Cell Cycle Phase
+- Reproduces `12.1`'s "UMAP coloured by cell cycle Phase" figure using the spliced/unspliced embedding.
+
+```{r spliced-umap-phase}
+for (group_ID in group_names) {
+
+  tryCatch({
+
+    seu <- spliced_subset_groups[[group_ID]]
+
+    fig_dir <- file.path(out_dir, group_ID, "spliced_unspliced", "umap_signatures")
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+    p <- DimPlot(
+        seu,
+        reduction = "umap_spliced",
+        group.by = "Phase",
+        label = TRUE,
+        label.size = 6
+        ) +
+        labs(
+          title = paste0(group_ID, " - spliced/unspliced re-embed (Phase)"),
+          caption = paste0(group_ID, " — spliced/unspliced level")
+        ) +
+        NoLegend()
+
+    print(p)
+
+    ggsave(
+      filename = file.path(fig_dir, paste0("12.2-umap.spliced_unspliced_re_embed.", group_ID, ".phase.png")),
+      plot = p, width = 8, height = 8, dpi = 300
+    )
+
+  }, error = function(e) {
+    warning(group_ID, " — spliced Phase UMAP failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed spliced/unspliced UMAP-by-Phase plots for ", length(group_names), " groups")
+```
+
+# Spliced/Unspliced Endocardial Lineage Markers
+- Reproduces `12.1`'s "Endocardial lineage markers" FeaturePlot using the spliced/unspliced embedding.
+
+```{r spliced-endocardial-markers}
+for (group_ID in group_names) {
+
+  tryCatch({
+
+    seu <- spliced_subset_groups[[group_ID]]
+
+    fig_dir <- file.path(out_dir, group_ID, "spliced_unspliced", "umap_signatures")
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+    p <- FeaturePlot(
+      object = seu,
+      reduction = "umap_spliced",
+      features = c("Ecscr", "Cdh5"),
+      ncol = 1,
+      order = TRUE
+      ) &
+      scale_colour_gradientn(
+      colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+      name = "Expression"
+      ) &
+      plot_annotation(
+      title = paste0(group_ID, " Endocardial lineage markers"),
+      caption = paste0("endo/mesen - re_embed - group level - spliced/unspliced level")
+      ) &
+      theme_bw(base_size = 14) &
+      theme(
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5)
+        )
+
+    print(p)
+
+    ggsave(
+      filename = file.path(fig_dir, paste0("12.2-umap.spliced_unspliced_re_embed.", group_ID, ".endocardial_genes.png")),
+      plot = p, width = 8, height = 8, dpi = 300
+    )
+
+  }, error = function(e) {
+    warning(group_ID, " — spliced endocardial marker FeaturePlot failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed spliced/unspliced endocardial marker plots for ", length(group_names), " groups")
+```
+
+# Spliced/Unspliced Mesenchymal Lineage Markers
+- Reproduces `12.1`'s "Mesenchymal lineage markers" FeaturePlot using the spliced/unspliced embedding.
+
+```{r spliced-mesenchymal-markers}
+for (group_ID in group_names) {
+
+  tryCatch({
+
+    seu <- spliced_subset_groups[[group_ID]]
+
+    fig_dir <- file.path(out_dir, group_ID, "spliced_unspliced", "umap_signatures")
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+    p <- FeaturePlot(
+      object = seu,
+      reduction = "umap_spliced",
+      features = c("Postn", "Cthrc1"),
+      ncol = 1,
+      order = TRUE
+      ) &
+      scale_colour_gradientn(
+      colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+      name = "Expression"
+      ) &
+      plot_annotation(
+      title = paste0(group_ID, " Mesenchymal lineage markers"),
+      caption = paste0("endo/mesen - re_embed - group level - spliced/unspliced level")
+      ) &
+      theme_bw(base_size = 14) &
+      theme(
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5)
+        )
+
+    print(p)
+
+    ggsave(
+      filename = file.path(fig_dir, paste0("12.2-umap.spliced_unspliced_re_embed.", group_ID, ".mesenchymal_genes.png")),
+      plot = p, width = 8, height = 8, dpi = 300
+    )
+
+  }, error = function(e) {
+    warning(group_ID, " — spliced mesenchymal marker FeaturePlot failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed spliced/unspliced mesenchymal marker plots for ", length(group_names), " groups")
+```
+
+# Spliced/Unspliced Cell Cycle Scores
+- Reproduces `12.1`'s "Cell cycle scores" FeaturePlot using the spliced/unspliced embedding.
+
+```{r spliced-cellcycle-scores}
+for (group_ID in group_names) {
+
+  tryCatch({
+
+    seu <- spliced_subset_groups[[group_ID]]
+
+    fig_dir <- file.path(out_dir, group_ID, "spliced_unspliced", "umap_signatures")
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+    p <- FeaturePlot(
+      object = seu,
+      reduction = "umap_spliced",
+      features = c("G2M.Score", "S.Score"),
+      ncol = 1,
+      order = TRUE
+      ) &
+      scale_colour_gradientn(
+      colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+      name = "Expression"
+      ) &
+      plot_annotation(
+      title = paste0(group_ID, " Cell Cycle"),
+      caption = paste0("endo/mesen - re_embed - group level - spliced/unspliced level")
+      ) &
+      theme_bw(base_size = 14) &
+      theme(
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5)
+        )
+
+    print(p)
+
+    ggsave(
+      filename = file.path(fig_dir, paste0("12.2-umap.spliced_unspliced_re_embed.", group_ID, ".cellCycle.png")),
+      plot = p, width = 8, height = 8, dpi = 300
+    )
+
+  }, error = function(e) {
+    warning(group_ID, " — spliced cell cycle FeaturePlot failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed spliced/unspliced cell cycle score plots for ", length(group_names), " groups")
+```
+
+# Spliced/Unspliced Module Score FeaturePlots
+- FeaturePlot for all nine EndMT/Metab module score columns, using the spliced/unspliced embedding.
+
+```{r spliced-module-score-featureplots}
+module_scores <- c("EndMT_endocardial1", "EndMT_transition1", "EndMT_mesenchyme1",
+                    "EndMT_Notch1", "EndMT_TGFb1",
+                    "Metab_glycolysis1", "Metab_oxphos1", "Metab_hypoxia1", "Metab_FAO1")
+
+for (group_ID in group_names) {
+
+  score_col <- NA
+
+  tryCatch({
+
+    seu <- spliced_subset_groups[[group_ID]]
+
+    fig_dir <- file.path(out_dir, group_ID, "spliced_unspliced", "umap_signatures")
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+    for (score_col in module_scores) {
+
+      p <- FeaturePlot(
+        seu,
+        reduction  = "umap_spliced",
+        features   = score_col,
+        label      = TRUE,
+        label.size = 6
+      ) +
+        scale_colour_gradientn(
+          colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+          name = "Expression"
+        ) +
+        labs(
+          title   = paste0(group_ID, " — ", score_col),
+          caption = "Endocardium + Mesenchyme subset — spliced/unspliced level"
+        )
+
+      print(p)
+
+      ggsave(
+        filename = file.path(fig_dir, paste0("12.2-featureplot.spliced_unspliced_re_embed.", group_ID, ".", score_col, ".png")),
+        plot = p, width = 8, height = 8, dpi = 300
+      )
+    }
+
+  }, error = function(e) {
+    warning(group_ID, " — ", score_col, " spliced module score FeaturePlot failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed spliced/unspliced module score FeaturePlots for ", length(group_names), " groups")
+```
+
+# Spliced/Unspliced Clustree: Module Scores
+- Clustree for all nine EndMT/Metab module scores, using the spliced/unspliced embedding. Same approach as `12.1`'s `clustree-endmt-scores`/`clustree-metabolic-scores`: `clustree()` receives the metadata data frame directly, and the resolution prefix is detected dynamically via `grep()`.
+
+```{r spliced-clustree-module-scores}
+module_scores <- c("EndMT_endocardial1", "EndMT_transition1", "EndMT_mesenchyme1",
+                    "EndMT_Notch1", "EndMT_TGFb1",
+                    "Metab_glycolysis1", "Metab_oxphos1", "Metab_hypoxia1", "Metab_FAO1")
+
+n_saved <- 0
+
+for (group_ID in group_names) {
+
+  score_col <- NA
+
+  tryCatch({
+
+    seu     <- spliced_subset_groups[[group_ID]]
+    meta_df <- seu@meta.data
+
+    resolution_cols   <- grep("^res_[0-9]", colnames(meta_df), value = TRUE)
+    resolution_prefix <- unique(sub("[0-9.]+$", "", resolution_cols))
+
+    fig_dir <- file.path(out_dir, group_ID, "spliced_unspliced", "clustree")
+    dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+    for (score_col in module_scores) {
+
+      score_name <- sub("1$", "", score_col)
+
+      p <- clustree(meta_df,
+                    prefix           = resolution_prefix,
+                    node_colour      = score_col,
+                    node_colour_aggr = "mean",
+                    node_size        = "size") +
+        ggtitle(paste(group_ID, score_col)) +
+        labs(caption = "Endocardium + Mesenchyme subset — spliced/unspliced level")
+
+      print(p)
+
+      ggsave(
+        filename = file.path(fig_dir,
+                              paste0(group_ID, "_", score_name,
+                                     "_endo_mesen_spliced_unspliced_re_embed", ".png")),
+        plot   = p,
+        width  = 10,
+        height = 12,
+        dpi    = 300
+      )
+
+      n_saved <- n_saved + 1
+    }
+
+  }, error = function(e) {
+    warning(group_ID, " — ", score_col, " spliced clustree failed: ", conditionMessage(e))
+  })
+}
+
+message("Saved ", n_saved, " spliced/unspliced module-score clustree PNGs under 'spliced_unspliced' subdirectories")
+```
+
+# Export Spliced/Unspliced Objects — RDS
+- Save each spliced/unspliced Seurat object to RDS.
+
+```{r export-spliced-seurat-rds}
+for (group_ID in group_names) {
+
+  tryCatch({
+
+    write_rds(
+      x = spliced_subset_groups[[group_ID]],
+      file = file.path(out_dir, group_ID, paste0(group_ID, "_spliced_endo_mesen_subset.RDS"))
+    )
+
+    message("Saved RDS: ", group_ID)
+
+  }, error = function(e) {
+    warning(group_ID, " — RDS export failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed RDS export for ", length(group_names), " groups")
+```
+
+# Export Spliced/Unspliced Objects — .h5ad
+- Follows the same `sceasy::as.anndata()` approach already established in `11.2`/`10.x`. Uses the per-group resolutions chosen after inspecting `12.1`'s sweep plots: `res_0.4` for `control`, `res_0.5` for `ko`.
+
+```{r export-spliced-h5ad}
+chosen_resolutions <- c(
+  "control" = 0.4,
+  "ko"      = 0.5
+)
+
+for (group_ID in group_names) {
+
+  tryCatch({
+
+    obj <- spliced_subset_groups[[group_ID]]
+
+    res_col <- paste0("res_", chosen_resolutions[[group_ID]])
+
+    Idents(obj) <- res_col
+    Idents(obj) <- factor(Idents(obj))
+    DefaultAssay(obj) <- "RNA"
+
+    obj[["RNA"]] <- as(obj[["RNA"]], "Assay")
+
+    as.anndata(
+      obj,
+      file_path = file.path(out_dir, group_ID),
+      file_name = paste0(group_ID, "_spliced_endo_mesen_subset.h5ad")
+    )
+
+    message("Saved h5ad: ", group_ID, " (Idents = ", res_col, ")")
+
+  }, error = function(e) {
+    warning(group_ID, " — h5ad export failed: ", conditionMessage(e))
+  })
+}
+
+message("Completed h5ad export for ", length(group_names), " groups")
+```
+
+# Session info
+
+```{r}
+writeLines(capture.output(sessionInfo()), file.path(out_dir, "12.2_session_info.txt"))
+```
