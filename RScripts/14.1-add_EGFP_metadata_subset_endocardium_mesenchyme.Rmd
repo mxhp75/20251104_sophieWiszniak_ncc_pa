@@ -1,0 +1,953 @@
+---
+title: "Add EGFP transgene metadata, subset to Endocardium and Mesenchyme, re-embed"
+author: "Melanie Smith"
+date: "2026-09-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE)
+set.seed(42) # set seed for reproducibility
+```
+
+- This is the first script in a new `14.x` workflow, requested by Sophie: go back to the final merged object (all four samples, all cell types, cell-cycle genes retained — `outDir/06-cluster_marker_genes/final_interesting_cells_0.6.rds`), add newly (and correctly) re-quantified EGFP transgene UMI counts as cell metadata, remove the old, incorrectly-quantified `pEGFP-1` feature from the count matrix, subset to Endocardium + Mesenchyme, and re-embed.
+- Unlike `12.x`/`13.x`, this workflow does **not** split by genotype or sample — all four samples stay merged together in one object throughout, only cell type is subset. The intent is to use `EGFP_UMI` to help identify which cells are Neural-Crest-derived, as a positive control before proceeding to RNA velocity.
+- Cell-cycle-associated genes are retained (matching `12.x`, not `13.x`), since this is a fresh investigation independent of the earlier no-cc work.
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+library(clustree)
+
+# Plotting
+library(patchwork)
+library(RColorBrewer)
+```
+
+# Set project directories
+
+```{r}
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+out_dir <- file.path(project_repo_dir, "outDir", "14-rna_velocity")
+downloads_dir <- file.path(project_repo_dir, "downloads")
+
+full_object_path <- file.path(project_repo_dir, "outDir", "06-cluster_marker_genes", "final_interesting_cells_0.6.rds")
+
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+```
+
+## Set up the cell-type colours and marker genes
+
+```{r}
+celltype_cols <- c("Myocardium"    = "#E41A1C",
+                   "VSMC"          = "#984EA3",
+                   "Endocardium"   = "#377EB8",
+                   "Epicardium"    = "#FF7F00",
+                   "Mesenchyme"    = "#4DAF4A",
+                   "Other/Unknown" = "grey70")
+
+endocardial_genes  <- c("Ecscr", "Cdh5", "Tie1", "Rasip1", "Plxnd1")
+mesenchymal_genes  <- c("Postn", "Cthrc1", "Col1a1", "Fn1")
+```
+
+# User defined functions
+
+```{r}
+save_if <- function(plot_object, filename, width, height, ...) {
+  if (save_plots) {
+    ggsave(plot = plot_object, filename = filename,
+           width = width, height = height, dpi = 300, ...)
+  }
+}
+# change to TRUE to save plots
+save_plots <- TRUE
+```
+
+# Load the full merged Seurat object
+- All four samples, all cell types, cell-cycle genes retained.
+
+```{r}
+full_object <- read_rds(full_object_path)
+
+stopifnot(inherits(full_object, "Seurat"))
+
+message("Dimensions of full merged object: ", paste(dim(full_object), collapse = " x "))
+print(table(full_object$orig.ident))
+```
+
+# Add EGFP transgene metadata
+- Reads the four newly re-quantified transgene UMI files (one per sample), filters to `EGFP` only (the files also contain `MIB1_neo` and `ZEG_stop_pA`, which we are not interested in here), and adds two new metadata columns: `EGFP_UMI` (raw UMI count, 0 for any cell not listed with an `EGFP` row) and `EGFP_positive` (`EGFP_UMI > 0`). The EGFP transgene is a little leaky, so single-UMI detections are treated as noise and zeroed - `EGFP_UMI` only takes a nonzero value for cells with 2 or more EGFP UMIs.
+- Each sample uses a single, consistent barcode suffix in the merged object (confirmed directly against `orig.ident`, not assumed), so barcode matching here is a straightforward per-sample suffix append rather than the "try successive barcodes" logic needed for the `.loom` files elsewhere in this project.
+- Not every `EGFP`-tagged barcode in the transgene files is present in this QC-filtered object (this object already excludes cells that failed earlier QC) - the per-sample match rate is reported below and is expected to be well under 100%.
+
+```{r add-egfp-metadata}
+sample_suffixes <- c(
+  e11_control = "_1_1",
+  e11_ko      = "_2_1",
+  e12_control = "_1",
+  e12_ko      = "_2"
+)
+
+egfp_umi <- setNames(rep(0L, ncol(full_object)), colnames(full_object))
+
+for (sample_ID in names(sample_suffixes)) {
+
+  tsv_path <- file.path(downloads_dir, paste0(sample_ID, "_transgene_umis_final.tsv"))
+
+  tsv <- read.delim(tsv_path, header = FALSE,
+                     col.names = c("barcode", "gene", "umi"))
+
+  egfp_rows <- tsv[tsv$gene == "EGFP", ]
+
+  full_barcodes <- paste0(egfp_rows$barcode, sample_suffixes[[sample_ID]])
+
+  matched <- full_barcodes %in% names(egfp_umi)
+
+  message(
+    sample_ID, " — EGFP rows: ", nrow(egfp_rows),
+    " | matched to object: ", sum(matched),
+    " (", round(100 * mean(matched), 1), "%)"
+  )
+
+  egfp_umi[full_barcodes[matched]] <- egfp_rows$umi[matched]
+}
+
+# The EGFP transgene is a little leaky - treat single-UMI detections as noise
+# rather than true signal, zeroing any cell with < 2 EGFP UMIs.
+n_leaky <- sum(egfp_umi == 1)
+message(n_leaky, " cells with exactly 1 EGFP UMI zeroed out as leaky signal")
+egfp_umi[egfp_umi < 2] <- 0
+
+full_object <- AddMetaData(full_object, metadata = egfp_umi, col.name = "EGFP_UMI")
+full_object$EGFP_positive <- full_object$EGFP_UMI > 0
+full_object$EGFP_UMI_log1p <- log1p(full_object$EGFP_UMI)
+
+message("Total EGFP-positive cells: ", sum(full_object$EGFP_positive), " of ", ncol(full_object))
+print(table(full_object$EGFP_positive, full_object$new_celltypes))
+```
+
+# Remove the pEGFP-1 feature
+- The original `pEGFP-1` quantification (a feature already present in this object's count matrix from the standard reference/pipeline) was not done correctly and has now been superseded by the `EGFP_UMI` metadata added above. Removing it from the count matrix so it doesn't contribute to any downstream normalisation, variable feature selection, or clustering.
+
+```{r remove-pegfp1-feature}
+stopifnot("pEGFP-1" %in% rownames(full_object))
+
+message("Dimensions before removing pEGFP-1: ", paste(dim(full_object), collapse = " x "))
+
+full_object <- subset(full_object, features = setdiff(rownames(full_object), "pEGFP-1"))
+
+message("Dimensions after removing pEGFP-1: ", paste(dim(full_object), collapse = " x "))
+stopifnot(!("pEGFP-1" %in% rownames(full_object)))
+```
+
+# Positive control — EGFP on all cells, all cell types
+- Reuses the existing `pca`/`umap` reduction already stored in the object rather than re-embedding - removing a single low-signal feature (`pEGFP-1`) out of thousands is very unlikely to meaningfully change the embedding, so re-embedding here would add cost without changing the result.
+
+```{r positive-control-umap, fig.width=20, fig.height=6}
+positive_control_dir <- file.path(out_dir, "positive_control")
+dir.create(positive_control_dir, recursive = TRUE, showWarnings = FALSE)
+
+p1 <- DimPlot(
+    full_object,
+    reduction = "umap",
+    group.by = "new_celltypes",
+    cols = celltype_cols,
+    label = TRUE,
+    label.size = 6
+  ) +
+  labs(
+    title = "All cells — cell type",
+    caption = "Full merged object — positive control"
+  ) +
+  NoLegend()
+
+p2 <- DimPlot(
+    full_object,
+    reduction = "umap",
+    group.by = "EGFP_positive",
+    cols = c("TRUE" = "#4DAF4A", "FALSE" = "grey85")
+  ) +
+  labs(
+    title = "All cells — EGFP positive",
+    caption = "Full merged object — positive control"
+  )
+
+p3 <- FeaturePlot(
+    full_object,
+    reduction = "umap",
+    features = "EGFP_UMI_log1p",
+    order = TRUE
+  ) +
+  # Spectral has no neutral colour at the low end, so zero-value cells still
+  # render as a solid, visible colour - misleading for a sparse feature like
+  # this. grey90 lets zero-value cells fade into the background instead.
+  scale_colour_gradientn(
+    colours = c("grey90", "gold", "red"),
+    name = "log1p(EGFP UMI)"
+  ) +
+  labs(
+    title = "All cells — EGFP UMI",
+    caption = "Full merged object — positive control"
+  )
+
+positive_control_plot <- p1 + p2 + p3
+print(positive_control_plot)
+
+save_if(positive_control_plot,
+        filename = file.path(positive_control_dir, "14.1-umap.all_cells.celltype_egfp.png"),
+        width = 20,
+        height = 6)
+```
+
+## EGFP UMAP split by sample
+
+```{r positive-control-umap-split-sample, fig.width=20, fig.height=6}
+egfp_split_sample_plot <- FeaturePlot(
+    full_object,
+    reduction = "umap",
+    features = "EGFP_UMI_log1p",
+    split.by = "orig.ident",
+    order = TRUE
+  ) &
+  # `FeaturePlot(..., split.by=...)` returns a multi-panel patchwork object -
+  # `+` here would only modify the LAST panel, `&` applies to all of them
+  scale_colour_gradientn(
+    colours = c("grey90", "gold", "red"),
+    name = "log1p(EGFP UMI)"
+  ) &
+  labs(
+    caption = "Full merged object — positive control"
+  )
+
+print(egfp_split_sample_plot)
+
+save_if(egfp_split_sample_plot,
+        filename = file.path(positive_control_dir, "14.1-umap.all_cells.egfp_by_sample.png"),
+        width = 20,
+        height = 6)
+```
+
+# Cell type counts (QC before subsetting)
+
+```{r}
+print(table(full_object$new_celltypes))
+```
+
+# Subset to Endocardium and Mesenchyme
+
+```{r}
+message("Dimensions before subsetting: ", paste(dim(full_object), collapse = " x "))
+
+subset_object <- subset(
+  full_object,
+  subset = new_celltypes %in% c("Endocardium", "Mesenchyme")
+)
+
+message("Dimensions after subsetting: ", paste(dim(subset_object), collapse = " x "))
+
+rm(full_object)
+gc()
+```
+
+# Re-embedding function
+- Re-embed the Endocardium + Mesenchyme subset, mirroring `12.1`'s `re_embed_subset()` mechanics.
+
+```{r}
+re_embed_subset <- function(seurat_obj,
+                             n_dims = 30,
+                             nfeatures = 3000) {
+
+  DefaultAssay(seurat_obj) <- "RNA"
+  Idents(seurat_obj) <- seurat_obj$new_celltypes
+
+  re_embed_seurat_obj <- FindVariableFeatures(
+    seurat_obj,
+    selection.method = "vst",
+    nfeatures        = nfeatures,
+    verbose          = FALSE
+  )
+
+  re_embed_seurat_obj <- ScaleData(
+    re_embed_seurat_obj,
+    features = rownames(re_embed_seurat_obj),
+    verbose  = FALSE
+  )
+
+  re_embed_seurat_obj <- RunPCA(
+    re_embed_seurat_obj,
+    reduction.name = "pca_endo_mesen",
+    reduction.key  = "PCEndoMesen_",
+    verbose        = FALSE
+  )
+
+  re_embed_seurat_obj <- FindNeighbors(
+    re_embed_seurat_obj,
+    reduction = "pca_endo_mesen",
+    dims      = 1:n_dims,
+    verbose   = FALSE
+  )
+
+  re_embed_seurat_obj <- RunUMAP(
+    re_embed_seurat_obj,
+    reduction      = "pca_endo_mesen",
+    dims           = 1:n_dims,
+    reduction.name = "umap_endo_mesen",
+    reduction.key  = "UMAPEndoMesen_",
+    verbose        = FALSE
+  )
+
+  return(re_embed_seurat_obj)
+}
+```
+
+```{r}
+re_embed_subset_obj <- re_embed_subset(subset_object)
+
+rm(subset_object)
+gc()
+
+Reductions(re_embed_subset_obj)
+```
+
+# EndMT Module Scoring
+
+## Define EndMT gene sets
+
+```{r endmt-gene-sets}
+# EndMT gene set 1: Endocardial identity (pre-EndMT)
+genes_EndMT_endocardial <- c("Nfatc1", "Npr3", "Cdh5", "Pecam1", "Tie1",
+                              "Gata2", "Klf2", "Klf4", "Sox17", "Hey1", "Hey2")
+
+# EndMT gene set 2: EndMT induction / transition state
+genes_EndMT_transition <- c("Snai1", "Snai2", "Twist1", "Twist2", "Zeb1", "Zeb2",
+                             "Tbx20", "Has2", "Vcan", "Notch1", "Notch2",
+                             "Bmp2", "Tgfb2", "Tgfb3")
+
+# EndMT gene set 3: Valvular mesenchyme (post-EndMT)
+genes_EndMT_mesenchyme <- c("Postn", "Col1a1", "Col3a1", "Vim", "Fn1",
+                             "Tcf21", "Pdgfra", "Sox9", "Msx1", "Msx2",
+                             "Twist1", "Acta2")
+
+# EndMT gene set 4: Notch signaling axis (EndMT-driving)
+genes_EndMT_Notch <- c("Notch1", "Notch2", "Jag1", "Dll4", "Hey1", "Hey2",
+                        "Hes1", "Nrg1", "Erbb2", "Erbb4", "Snai2")
+
+# EndMT gene set 5: TGF-beta / BMP signaling axis
+genes_EndMT_TGFb <- c("Tgfb2", "Tgfb3", "Bmp2", "Bmp4", "Smad1", "Smad2",
+                       "Smad3", "Smad5", "Id1", "Id2", "Alk2", "Alk3",
+                       "Alk5", "Eng")
+```
+
+## Run module scoring
+
+```{r endmt-module-scoring}
+gene_sets <- list(
+  EndMT_endocardial = genes_EndMT_endocardial,
+  EndMT_transition  = genes_EndMT_transition,
+  EndMT_mesenchyme  = genes_EndMT_mesenchyme,
+  EndMT_Notch       = genes_EndMT_Notch,
+  EndMT_TGFb        = genes_EndMT_TGFb
+)
+
+for (set_name in names(gene_sets)) {
+
+  re_embed_subset_obj <- tryCatch({
+    AddModuleScore(
+      object   = re_embed_subset_obj,
+      features = list(gene_sets[[set_name]]),
+      name     = set_name,
+      nbin     = 24,
+      ctrl     = 5
+    )
+  }, error = function(e) {
+    warning(set_name, " scoring failed: ", conditionMessage(e))
+    re_embed_subset_obj
+  })
+}
+```
+
+# Metabolic State Module Scoring
+
+## Define metabolic state gene sets
+
+```{r metabolic-state-gene-sets}
+genes_Metab_glycolysis <- c("Hk2", "Pkm", "Ldha", "Pgk1", "Eno1",
+                             "Pfkl", "Slc2a1", "Aldoa", "Pfkfb3", "Gapdh")
+
+genes_Metab_oxphos <- c("Ndufb3", "Sdhb", "Uqcrc1", "Cox5a", "Atp5f1b",
+                         "Cycs", "Sdha", "Uqcrq", "Cox6a1", "Ndufa4")
+
+genes_Metab_hypoxia <- c("Hif1a", "Vegfa", "Slc2a1", "Pgk1", "Ldha",
+                          "Bnip3", "Egln1", "Pdk1", "Cited2", "Epas1")
+
+genes_Metab_FAO <- c("Ppara", "Cpt1b", "Acadm", "Hadha", "Hadhb",
+                      "Acadvl", "Acaa2", "Echs1", "Slc25a20", "Fabp3")
+```
+
+## Run module scoring
+
+```{r metabolic-state-module-scoring}
+gene_sets <- list(
+  Metab_glycolysis = genes_Metab_glycolysis,
+  Metab_oxphos     = genes_Metab_oxphos,
+  Metab_hypoxia    = genes_Metab_hypoxia,
+  Metab_FAO        = genes_Metab_FAO
+)
+
+for (set_name in names(gene_sets)) {
+
+  re_embed_subset_obj <- tryCatch({
+    AddModuleScore(
+      object   = re_embed_subset_obj,
+      features = list(gene_sets[[set_name]]),
+      name     = set_name,
+      nbin     = 24,
+      ctrl     = 5
+    )
+  }, error = function(e) {
+    warning(set_name, " scoring failed: ", conditionMessage(e))
+    re_embed_subset_obj
+  })
+}
+
+colnames(re_embed_subset_obj[[]])
+```
+
+# UMAP by EndMT and Metabolic Signature
+
+```{r umap-signatures}
+signatures <- c("EndMT_endocardial1", "EndMT_transition1", "EndMT_mesenchyme1",
+                "EndMT_Notch1", "EndMT_TGFb1",
+                "Metab_glycolysis1", "Metab_oxphos1", "Metab_hypoxia1", "Metab_FAO1")
+
+umap_signatures_dir <- file.path(out_dir, "gene_level", "umap_signatures")
+dir.create(umap_signatures_dir, recursive = TRUE, showWarnings = FALSE)
+
+for (sig in signatures) {
+
+  sig_name <- sub("1$", "", sig)
+
+  p <- FeaturePlot(
+    re_embed_subset_obj,
+    reduction  = "umap_endo_mesen",
+    features = sig,
+    label      = TRUE,
+    label.size = 6
+  ) +
+    scale_colour_gradientn(
+      colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+      name = "Expression"
+    ) +
+    labs(
+      title    = sig,
+      caption  = "Endocardium + Mesenchyme subset — gene level"
+    )
+
+  print(p)
+
+  ggsave(
+    filename = file.path(umap_signatures_dir, paste0(sig_name, "_endo_mesen_re_embed.png")),
+    plot = p, width = 8, height = 8, dpi = 300
+  )
+}
+```
+
+# Resolution sweep
+- Run this chunk and inspect the plots before proceeding.
+- Choose a resolution based on the plots below, then enter it in the **final clustering** chunk further down.
+
+```{r resolution-sweep}
+resolution_summary <- data.frame()
+
+resolution_sweep_dir <- file.path(out_dir, "gene_level", "resolution_sweep")
+dir.create(resolution_sweep_dir, recursive = TRUE, showWarnings = FALSE)
+
+clustree_dir <- file.path(out_dir, "gene_level", "clustree")
+dir.create(clustree_dir, recursive = TRUE, showWarnings = FALSE)
+
+for (res in seq(0.1, 1.0, by = 0.1)) {
+
+  col_name <- paste0("res_", res)
+
+  re_embed_subset_obj <- FindClusters(
+    re_embed_subset_obj,
+    resolution   = res,
+    cluster.name = col_name,
+    verbose      = FALSE
+  )
+
+  n_clusters <- length(unique(re_embed_subset_obj[[col_name]][[1]]))
+  message("resolution ", res, ": ", n_clusters, " clusters")
+
+  resolution_summary <- rbind(
+    resolution_summary,
+    data.frame(resolution = res, n_clusters = n_clusters)
+  )
+}
+
+for (res in seq(0.1, 1.0, by = 0.1)) {
+
+  col_name   <- paste0("res_", res)
+  n_clusters <- length(unique(re_embed_subset_obj[[col_name]][[1]]))
+
+  res_plot <- DimPlot(
+      re_embed_subset_obj,
+      reduction  = "umap_endo_mesen",
+      group.by   = col_name,
+      label      = TRUE,
+      label.size = 6
+    ) +
+      labs(
+        title    = paste0("resolution: ", res),
+        subtitle = paste0(n_clusters, " clusters"),
+        caption  = "Endocardium + Mesenchyme subset — gene level"
+      ) +
+      NoLegend()
+
+  print(res_plot)
+
+  ggsave(
+    filename = file.path(resolution_sweep_dir, paste0("resolution_", res, "_endo_mesen_re_embed.png")),
+    plot   = res_plot,
+    width  = 8,
+    height = 8,
+    dpi    = 300
+  )
+}
+
+stability_plot <- clustree(
+    re_embed_subset_obj,
+    node_colour = "sc3_stability",
+    prefix = "res_"
+  ) +
+    labs(
+      title   = "clustree — sc3_stability",
+      caption = "Endocardium + Mesenchyme subset — gene level"
+    )
+
+print(stability_plot)
+
+ggsave(
+  filename = file.path(clustree_dir, "sc3_stability_endo_mesen_re_embed.png"),
+  plot   = stability_plot,
+  width  = 10,
+  height = 12,
+  dpi    = 300
+)
+
+print(resolution_summary)
+
+write.csv(
+  resolution_summary,
+  file.path(out_dir, "gene_level_resolution_sweep_summary.csv"),
+  row.names = FALSE
+)
+```
+
+```{r clustree-overlay}
+umap_coords <- Embeddings(re_embed_subset_obj, reduction = "umap_endo_mesen")
+colnames(umap_coords) <- c("UMAP_1", "UMAP_2")
+re_embed_subset_obj <- AddMetaData(re_embed_subset_obj, metadata = as.data.frame(umap_coords))
+
+print(
+  clustree_overlay(
+    re_embed_subset_obj,
+    prefix  = "res_",
+    x_value = "UMAP_1",
+    y_value = "UMAP_2"
+  ) +
+    labs(
+      title   = "clustree overlay on UMAP",
+      caption = "Endocardium + Mesenchyme subset — gene level"
+    )
+)
+```
+
+```{r clustree-exploration}
+sig_genes <- c("Ecscr", "Cdh5", "Postn", "Cthrc1")
+
+for (gene in sig_genes) {
+
+  p <- clustree(
+    re_embed_subset_obj,
+    node_colour = gene,
+    node_colour_aggr = "mean",
+    prefix = "res_"
+    ) +
+    labs(
+      title   = paste0("clustree — ", gene, " avg exp."),
+      caption = "Endocardium + Mesenchyme subset — gene level"
+      )
+
+  print(p)
+
+  ggsave(
+    filename = file.path(clustree_dir, paste0(gene, "_endo_mesen_re_embed.png")),
+    plot   = p,
+    width  = 10,
+    height = 12,
+    dpi    = 300
+  )
+}
+```
+
+# UMAP by Cell Type (pre-final-clustering)
+
+```{r umap-new-celltypes-exploration}
+p <- DimPlot(
+        re_embed_subset_obj,
+        reduction  = "umap_endo_mesen",
+        group.by   = "new_celltypes",
+        label      = TRUE,
+        label.size = 6
+      ) +
+        labs(
+          title    = "new_celltypes",
+          caption  = "Endocardium + Mesenchyme subset — gene level"
+        ) +
+        NoLegend()
+
+print(p)
+
+ggsave(
+  filename = file.path(umap_signatures_dir, "new_celltypes_endo_mesen_re_embed.png"),
+  plot = p, width = 8, height = 8, dpi = 300
+)
+```
+
+# Clustree: EndMT Module Scores
+
+```{r clustree-endmt-scores}
+endmt_scores <- c("EndMT_endocardial1", "EndMT_transition1",
+                  "EndMT_mesenchyme1", "EndMT_Notch1", "EndMT_TGFb1")
+
+n_saved <- 0
+
+meta_df <- re_embed_subset_obj@meta.data
+resolution_cols   <- grep("^res_[0-9]", colnames(meta_df), value = TRUE)
+resolution_prefix <- unique(sub("[0-9.]+$", "", resolution_cols))
+
+for (score_col in endmt_scores) {
+
+  score_name <- sub("1$", "", score_col)
+
+  p <- clustree(meta_df,
+                prefix           = resolution_prefix,
+                node_colour      = score_col,
+                node_colour_aggr = "mean",
+                node_size        = "size") +
+    ggtitle(score_col)
+
+  ggsave(
+    filename = file.path(clustree_dir, paste0(score_name, "_endo_mesen_re_embed.png")),
+    plot   = p,
+    width  = 10,
+    height = 12,
+    dpi    = 300
+  )
+
+  n_saved <- n_saved + 1
+}
+
+message("Saved ", n_saved, " EndMT clustree PNGs")
+```
+
+# Clustree: Metabolic Module Scores
+
+```{r clustree-metabolic-scores}
+metab_scores <- c("Metab_glycolysis1", "Metab_oxphos1",
+                  "Metab_hypoxia1", "Metab_FAO1")
+
+n_saved <- 0
+
+for (score_col in metab_scores) {
+
+  score_name <- sub("1$", "", score_col)
+
+  p <- clustree(meta_df,
+                prefix           = resolution_prefix,
+                node_colour      = score_col,
+                node_colour_aggr = "mean",
+                node_size        = "size") +
+    ggtitle(score_col)
+
+  ggsave(
+    filename = file.path(clustree_dir, paste0(score_name, "_endo_mesen_re_embed.png")),
+    plot   = p,
+    width  = 10,
+    height = 12,
+    dpi    = 300
+  )
+
+  n_saved <- n_saved + 1
+}
+
+message("Saved ", n_saved, " metabolic clustree PNGs")
+```
+
+# Final clustering — supervised resolution choice
+- Inspect the resolution sweep plots above before running this chunk.
+
+```{r}
+chosen_resolution <- 0.4
+
+re_embed_subset_obj <- FindClusters(
+  re_embed_subset_obj,
+  resolution   = chosen_resolution,
+  cluster.name = "seurat_clusters_endo_mesen",
+  verbose      = FALSE
+)
+
+n_clusters <- length(unique(re_embed_subset_obj$seurat_clusters_endo_mesen))
+message("Applying resolution ", chosen_resolution, ": ", n_clusters, " clusters")
+```
+
+# UMAP coloured by cell type
+
+```{r}
+umap_celltype <- DimPlot(
+    re_embed_subset_obj,
+    reduction = "umap_endo_mesen",
+    group.by = "new_celltypes",
+    cols = celltype_cols,
+    label = TRUE,
+    label.size = 6
+    ) +
+    labs(
+      title = "endo/mesen re-embed (cell types)",
+      caption = "gene level"
+    ) +
+    NoLegend()
+
+print(umap_celltype)
+
+save_if(umap_celltype,
+        filename = file.path(out_dir, "gene_level", "umap_signatures", "14.1-umap.re_embed.new_celltype.png"),
+        width = 8,
+        height = 8)
+```
+
+# UMAP coloured by new cluster
+
+```{r}
+umap_newCluster <- DimPlot(
+    re_embed_subset_obj,
+    reduction = "umap_endo_mesen",
+    group.by = "seurat_clusters_endo_mesen",
+    label = TRUE,
+    label.size = 6
+    ) +
+    labs(
+      title = "endo/mesen re-embed (new clusters)",
+      caption = "gene level"
+    ) +
+    NoLegend()
+
+print(umap_newCluster)
+
+save_if(umap_newCluster,
+        filename = file.path(out_dir, "gene_level", "14.1-umap.re_embed.new_clusters.png"),
+        width = 8,
+        height = 8)
+```
+
+# UMAP coloured by cell cycle Phase
+
+```{r}
+umap_phase <- DimPlot(
+    re_embed_subset_obj,
+    reduction = "umap_endo_mesen",
+    group.by = "Phase",
+    label = TRUE,
+    label.size = 6
+    ) +
+    labs(
+      title = "endo/mesen re-embed (Phase)",
+      caption = "gene level"
+    ) +
+    NoLegend()
+
+print(umap_phase)
+
+save_if(umap_phase,
+        filename = file.path(out_dir, "gene_level", "umap_signatures", "14.1-umap.re_embed.phase.png"),
+        width = 8,
+        height = 8)
+```
+
+# EGFP on the re-embedded subset
+- Same `EGFP_UMI_log1p`/`EGFP_positive` metadata added earlier, now on the Endocardium + Mesenchyme-only embedding.
+
+```{r}
+umap_egfp_positive <- DimPlot(
+    re_embed_subset_obj,
+    reduction = "umap_endo_mesen",
+    group.by = "EGFP_positive",
+    cols = c("TRUE" = "#4DAF4A", "FALSE" = "grey85")
+    ) +
+    labs(
+      title = "endo/mesen re-embed (EGFP positive)",
+      caption = "gene level"
+    )
+
+print(umap_egfp_positive)
+
+save_if(umap_egfp_positive,
+        filename = file.path(out_dir, "gene_level", "umap_signatures", "14.1-umap.re_embed.egfp_positive.png"),
+        width = 8,
+        height = 8)
+
+umap_egfp_umi <- FeaturePlot(
+    re_embed_subset_obj,
+    reduction = "umap_endo_mesen",
+    features = "EGFP_UMI_log1p",
+    order = TRUE
+    ) +
+    # grey90 low end so zero-value cells fade into the background rather than
+    # rendering as a solid, misleading colour (see positive-control chunk above)
+    scale_colour_gradientn(
+      colours = c("grey90", "gold", "red"),
+      name = "log1p(EGFP UMI)"
+    ) +
+    labs(
+      title = "endo/mesen re-embed (EGFP UMI)",
+      caption = "gene level"
+    )
+
+print(umap_egfp_umi)
+
+save_if(umap_egfp_umi,
+        filename = file.path(out_dir, "gene_level", "umap_signatures", "14.1-umap.re_embed.egfp_umi.png"),
+        width = 8,
+        height = 8)
+```
+
+# Endocardial lineage markers
+
+```{r}
+endocardial_markers <- FeaturePlot(
+  object = re_embed_subset_obj,
+  reduction = "umap_endo_mesen",
+  features = c("Ecscr", "Cdh5"),
+  ncol = 1,
+  order = TRUE
+  ) &
+  scale_colour_gradientn(
+  colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+  name = "Expression"
+  ) &
+  plot_annotation(
+  title = "Endocardial lineage markers",
+  caption = "endo/mesen - re_embed - gene level"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+    )
+
+print(endocardial_markers)
+
+save_if(endocardial_markers,
+        filename = file.path(out_dir, "gene_level", "umap_signatures", "14.1-umap.re_embed.endocardial_genes.png"),
+        width = 8,
+        height = 8)
+```
+
+# Mesenchymal lineage markers
+
+```{r}
+mesenchymal_markers <- FeaturePlot(
+  object = re_embed_subset_obj,
+  reduction = "umap_endo_mesen",
+  features = c("Postn", "Cthrc1"),
+  ncol = 1,
+  order = TRUE
+  ) &
+  scale_colour_gradientn(
+  colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+  name = "Expression"
+  ) &
+  plot_annotation(
+  title = "Mesenchymal lineage markers",
+  caption = "endo/mesen - re_embed - gene level"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+    )
+
+print(mesenchymal_markers)
+
+save_if(mesenchymal_markers,
+        filename = file.path(out_dir, "gene_level", "umap_signatures", "14.1-umap.re_embed.mesenchymal_genes.png"),
+        width = 8,
+        height = 8)
+```
+
+# Cell cycle scores
+
+```{r}
+cellCycle_feature <- FeaturePlot(
+  object = re_embed_subset_obj,
+  reduction = "umap_endo_mesen",
+  features = c("G2M.Score", "S.Score"),
+  ncol = 1,
+  order = TRUE
+  ) &
+  scale_colour_gradientn(
+  colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+  name = "Expression"
+  ) &
+  plot_annotation(
+  title = "Cell Cycle",
+  caption = "endo/mesen - re_embed - gene level"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+    )
+
+print(cellCycle_feature)
+
+save_if(cellCycle_feature,
+        filename = file.path(out_dir, "gene_level", "umap_signatures", "14.1-umap.re_embed.cellCycle.png"),
+        width = 8,
+        height = 8)
+```
+
+# Write out the re-embedded subset object
+
+```{r}
+write_rds(
+  x = re_embed_subset_obj,
+  file = file.path(out_dir, "all_samples_endo_mesen_re_embed.rds")
+)
+
+message("Saved: all_samples_endo_mesen_re_embed.rds")
+```
+
+# Session info
+
+```{r}
+writeLines(capture.output(sessionInfo()), file.path(out_dir, "14.1_session_info.txt"))
+```
