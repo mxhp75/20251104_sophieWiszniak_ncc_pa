@@ -219,6 +219,14 @@ save_if(positive_control_plot,
 ## EGFP UMAP split by sample
 
 ```{r positive-control-umap-split-sample, fig.width=20, fig.height=6}
+# Without an explicit `limits=`, each panel of a split.by FeaturePlot
+# independently rescales colour to its OWN data range - a panel with zero
+# variance (e.g. e12_control, which has ~0% EGFP TSV match and so every cell
+# is exactly 0) gets its constant value rescaled to the midpoint of the
+# gradient ("gold") instead of the low end ("grey90"). Passing a shared
+# limits range fixes this.
+egfp_umi_limits <- range(full_object$EGFP_UMI_log1p)
+
 egfp_split_sample_plot <- FeaturePlot(
     full_object,
     reduction = "umap",
@@ -230,6 +238,7 @@ egfp_split_sample_plot <- FeaturePlot(
   # `+` here would only modify the LAST panel, `&` applies to all of them
   scale_colour_gradientn(
     colours = c("grey90", "gold", "red"),
+    limits  = egfp_umi_limits,
     name = "log1p(EGFP UMI)"
   ) &
   labs(
