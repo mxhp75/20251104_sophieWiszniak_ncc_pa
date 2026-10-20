@@ -69,6 +69,19 @@ if (!dir.exists(out_dir)) {
 # load the full seurat object
 re_embed_interesting_cells <- readRDS(file.path(project_repo_dir, "outDir", "06-cluster_marker_genes", "final_interesting_cells_0.6.rds"))
 
+# Remove the pEGFP-1 feature - its quantification in this object's count
+# matrix was not done correctly (see 14.1, which superseded it with the
+# properly re-quantified EGFP_UMI metadata field). Removing it here so the
+# pseudobulk aggregation/logCPM matrix doesn't carry it either, for
+# consistency with the DE results this script joins against (which, once
+# 07-gene_expression_de_genotype.Rmd is re-run, will no longer contain it).
+stopifnot("pEGFP-1" %in% rownames(re_embed_interesting_cells))
+re_embed_interesting_cells <- subset(
+  re_embed_interesting_cells,
+  features = setdiff(rownames(re_embed_interesting_cells), "pEGFP-1")
+)
+stopifnot(!("pEGFP-1" %in% rownames(re_embed_interesting_cells)))
+
 # Find all DE result files
 files <- list.files(
   path = out_dir,
@@ -79,7 +92,7 @@ files <- list.files(
 # Read them all into a named list
 de_results <- files %>%
   setNames(basename(files) %>%
-             sub("_de_results\\.csv$", "", x = _)) %>%
+             sub("_de_results\\.csv$", "", x = .)) %>%
   map(read_csv)
 
 ```
@@ -100,7 +113,7 @@ dge <- edgeR::DGEList(pb$RNA)
 # TMM normaliation
 dge <- edgeR::calcNormFactors(dge, method = "TMM")
 # Log2 CPM
-logCPM <- cpm(
+logCPM <- edgeR::cpm(
     dge,
     log = TRUE,
     prior.count = 1

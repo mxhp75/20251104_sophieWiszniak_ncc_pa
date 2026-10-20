@@ -62,6 +62,31 @@ re_embed_interesting_cells <- readRDS(
 )
 ```
 
+# Remove the pEGFP-1 feature
+
+- The `pEGFP-1` quantification in this object's count matrix (from the
+  standard reference/pipeline) was not done correctly — see `14.1`, which
+  superseded it with a properly re-quantified `EGFP_UMI` metadata field and
+  removed it from the `14.x`/`15.x` objects. That fix was never applied to
+  this object, so `pEGFP-1` is still here: a transgene feature that is
+  essentially absent in control and clearly present in KO by construction
+  (it marks recombined cells), which previously dominated DE/volcano
+  results as a trivial, already-unreliable hit rather than real biology.
+  Removing it before running DE.
+
+```{r}
+stopifnot("pEGFP-1" %in% rownames(re_embed_interesting_cells))
+message("Dimensions before removing pEGFP-1: ", paste(dim(re_embed_interesting_cells), collapse = " x "))
+
+re_embed_interesting_cells <- subset(
+  re_embed_interesting_cells,
+  features = setdiff(rownames(re_embed_interesting_cells), "pEGFP-1")
+)
+
+message("Dimensions after removing pEGFP-1: ", paste(dim(re_embed_interesting_cells), collapse = " x "))
+stopifnot(!("pEGFP-1" %in% rownames(re_embed_interesting_cells)))
+```
+
 # Collapse cell cycle phase into cycling / not_cycling
 
 G1 = not_cycling; S or G2M = cycling

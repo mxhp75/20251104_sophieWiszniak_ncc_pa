@@ -68,6 +68,30 @@ Idents(re_embed_interesting_cells) <- "seurat_clusters"
 
 ```
 
+# Remove the pEGFP-1 feature
+
+- The `pEGFP-1` quantification in this object's count matrix (from the
+  standard reference/pipeline) was not done correctly — see `14.1`, which
+  superseded it with a properly re-quantified `EGFP_UMI` metadata field and
+  removed it from the `14.x`/`15.x` objects. That fix was never applied to
+  this object, so `pEGFP-1` is still here. Removing it before running DE,
+  for consistency with the genotype-comparison DE scripts (`07-gene_expression_de_genotype.Rmd`,
+  `07-gene_expression_de_genotype_cellcycle.Rmd`), even though this script's
+  comparisons are control-only (e11 vs e12) and so less directly affected.
+
+```{r}
+stopifnot("pEGFP-1" %in% rownames(re_embed_interesting_cells))
+message("Dimensions before removing pEGFP-1: ", paste(dim(re_embed_interesting_cells), collapse = " x "))
+
+re_embed_interesting_cells <- subset(
+  re_embed_interesting_cells,
+  features = setdiff(rownames(re_embed_interesting_cells), "pEGFP-1")
+)
+
+message("Dimensions after removing pEGFP-1: ", paste(dim(re_embed_interesting_cells), collapse = " x "))
+stopifnot(!("pEGFP-1" %in% rownames(re_embed_interesting_cells)))
+```
+
 # DE
 
 ```{r}
