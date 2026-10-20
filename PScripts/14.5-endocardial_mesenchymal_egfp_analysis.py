@@ -90,6 +90,26 @@ signatures = {
     "Arterial":    ["Pak7", "Fbln5", "Rtl4", "Isl1", "Trpc5", "Gja4"],
 }
 
+# Sophie's proposed Mesenchyme sub-types (email, 2026-10-20), keyed to
+# seurat_clusters cluster numbers (confirmed by direct marker-gene
+# expression check - NOT the res_0.4 unsupervised clustering used in
+# section 2 below, a different resolution/partition entirely):
+#   cluster 0  -> EndoMT_derived
+#   cluster 2  -> Proliferating (shares identity with cluster 0 + prolif markers)
+#   cluster 3  -> E11_NCC
+#   cluster 8  -> proliferating version of cluster 3 - no distinct markers given,
+#                 so no separate signature (identifiable as E11_NCC + Proliferating
+#                 both elevated)
+#   cluster 5  -> E12_NCC_Vegfa
+#   cluster 10 -> E12_NCC_Sema3c
+mesenchyme_signatures = {
+    "EndoMT_derived":  ["Sall3", "Rapgef4", "Bmp6", "Htra1", "Lef1", "Nkain4"],
+    "Proliferating":   ["Hist1h2ap", "Esco2"],
+    "E11_NCC":         ["Plxna2", "Ramp1", "Kif26a", "Itga4"],
+    "E12_NCC_Vegfa":   ["Vegfa", "Sema3d", "Ndufa4l2", "Chrm3", "Ctnna2"],
+    "E12_NCC_Sema3c":  ["Sema3c", "Cntn4", "Cntn6", "Syt1", "Penk"],
+}
+
 egfp_cmap = LinearSegmentedColormap.from_list("egfp", ["#e5e5e5", "gold", "red"])
 
 #-----------------------------------------------------------------------------------
@@ -110,6 +130,15 @@ for sig_name, genes in signatures.items():
 
 print(f"Scored {len(signatures)} signatures on {adata_full.n_vars} genes")
 
+for sig_name, genes in mesenchyme_signatures.items():
+    genes_present = [g for g in genes if g in adata_full.var_names]
+    genes_missing = sorted(set(genes) - set(genes_present))
+    if genes_missing:
+        warnings.warn(f"{sig_name}: missing genes {genes_missing}")
+    sc.tl.score_genes(adata_full, gene_list=genes_present, score_name=sig_name)
+
+print(f"Scored {len(mesenchyme_signatures)} Mesenchyme signatures on {adata_full.n_vars} genes")
+
 velocity_h5ad_path = os.path.join(
     out_dir, "velocity_output_dynamical", paga_group,
     f"all_samples_velocity_dynamical_{pcs}_{neighbours}_{count_level}_{paga_group}.h5ad"
@@ -122,6 +151,9 @@ adata = sc.read_h5ad(velocity_h5ad_path)
 adata.obs["EGFP_positive"] = adata.obs["EGFP_positive"].astype(bool)
 
 for sig_name in signatures:
+    adata.obs[sig_name] = adata_full.obs.loc[adata.obs_names, sig_name].values
+
+for sig_name in mesenchyme_signatures:
     adata.obs[sig_name] = adata_full.obs.loc[adata.obs_names, sig_name].values
 
 print(f"Merged signature scores onto velocity object ({adata.n_obs} cells)")
@@ -195,6 +227,35 @@ try:
 except Exception as e:
     plt.close("all")
     warnings.warn(f"Endocardial subtype confirmation failed: {e}")
+
+#-----------------------------------------------------------------------------------
+# 1b. Mesenchyme sub-type signature scores (Sophie's seurat_clusters-based
+# proposal, email 2026-10-20) - same signature_scores/ directory and
+# all_samples_{signature}_score_{basis}.png naming as the Endocardium
+# signatures above
+#-----------------------------------------------------------------------------------
+
+try:
+    score_dir = os.path.join(analysis_dir, "signature_scores")
+    os.makedirs(score_dir, exist_ok=True)
+
+    for sig_name in mesenchyme_signatures:
+        for basis, basis_label in [("draw_graph_fa", "fdg"), ("umap_spliced", "umap")]:
+            sc.pl.embedding(
+                adata, basis=basis, color=sig_name, cmap="viridis",
+                title=f"all_samples — {sig_name} — {basis_label}", show=False
+            )
+            plt.savefig(
+                os.path.join(score_dir, f"all_samples_{sig_name}_score_{basis_label}.png"),
+                dpi=300, bbox_inches="tight"
+            )
+            plt.close()
+
+    print("Saved Mesenchyme sub-type signature score plots")
+
+except Exception as e:
+    plt.close("all")
+    warnings.warn(f"Mesenchyme sub-type signature scoring failed: {e}")
 
 #-----------------------------------------------------------------------------------
 # 2. Mesenchyme cluster characterisation (unsupervised, mirrors 13.7)
