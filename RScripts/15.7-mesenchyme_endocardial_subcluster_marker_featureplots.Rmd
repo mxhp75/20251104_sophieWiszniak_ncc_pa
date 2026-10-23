@@ -1,0 +1,221 @@
+---
+title: "15.7-mesenchyme_endocardial_subcluster_marker_featureplots"
+author: "Melanie Smith"
+date: "2026-10-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Purpose: `FeaturePlot`s of candidate sub-cluster marker genes (originally
+identified in `05-curated_cell_type_marker_genes.Rmd`, on the pre-final,
+full dataset), re-plotted here on the Endocardium + Mesenchyme, all-samples,
+cell-cycle-genes-removed object. One 4-panel plot per cluster label.
+
+Note: `Pla2g16` (c0 list) is not present in this object's feature set, so
+that panel is 3 genes (Itga4, Eln, Myl2). `Cripl`/`Crip` (c5/c6 lists) were
+not present either and are used here as `Crip1`, which is.
+
+Cell type per cluster label (matches the `ms_`/`ed_` prefixes in the
+original `05-` script): c0/c1/c7/c8 = Mesenchymal, c5/c6/c12 = Endocardial.
+Every gene is a positive marker (elevated in that sub-cluster) unless noted
+as a negative marker (depleted) below - each panel title is annotated
+accordingly.
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE)
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(Seurat)
+library(patchwork)
+```
+
+# User defined functions
+
+```{r}
+save_if <- function(plot_object, filename, width, height, ...) {
+  if (save_plots) {
+    ggsave(plot = plot_object,
+           filename = filename,
+           width = width,
+           height = height,
+           dpi = 300)
+  }
+}
+save_plots <- TRUE
+```
+
+# Set project directories and file paths
+
+```{r}
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+data_dir <- file.path(project_repo_dir, "outDir", "15-rna_velocity")
+new_out_dir <- file.path(data_dir, "subcluster_marker_featureplots")
+
+if (!dir.exists(new_out_dir)) {
+  dir.create(new_out_dir, recursive = TRUE)
+}
+```
+
+# Load required object
+- Endocardium + Mesenchyme, all 4 samples, cell-cycle genes removed, from
+  `15.1-add_EGFP_metadata_subset_endocardium_mesenchyme_no_cc.Rmd`.
+
+```{r}
+all_samples_endo_mesen_no_cc <- readRDS(file.path(data_dir, "all_samples_endo_mesen_no_cc_re_embed.rds"))
+stopifnot(inherits(all_samples_endo_mesen_no_cc, "Seurat"))
+
+"umap_endo_mesen" %in% Reductions(all_samples_endo_mesen_no_cc)
+table(all_samples_endo_mesen_no_cc$new_celltypes)
+```
+
+# Shared plot builder
+
+```{r}
+# genes_signed: named character vector, e.g. c(Itga4 = "+", Eln = "-", Myl2 = "+")
+# - name is the gene, value is "+" (positive/elevated marker) or "-" (negative/depleted marker)
+# - each panel's own title is annotated with its sign, since that's lost if
+#   left to FeaturePlot()'s default per-feature titling
+make_subcluster_featureplot <- function(object, genes_signed, title) {
+
+  gene_names <- names(genes_signed)
+
+  plots <- FeaturePlot(
+    object = object,
+    features = gene_names,
+    reduction = "umap_endo_mesen",
+    order = TRUE,
+    combine = FALSE
+  )
+
+  plots <- lapply(seq_along(plots), function(i) {
+    plots[[i]] +
+      ggtitle(paste0(gene_names[i], " (", genes_signed[[gene_names[i]]], ")")) +
+      scale_colour_gradientn(
+        colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+        name = "Expression"
+      ) +
+      theme_bw(base_size = 14) +
+      theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+  })
+
+  patchwork::wrap_plots(plots, ncol = 2) +
+    patchwork::plot_annotation(
+      title = title,
+      caption = "Endocardium + Mesenchyme, all samples, cell-cycle genes removed. (+) = positive marker, (-) = negative marker"
+    )
+}
+```
+
+- c0 Mesenchymal (Pla2g16 dropped - not present in this object's feature set)
+
+```{r}
+c0_markers <- make_subcluster_featureplot(
+  all_samples_endo_mesen_no_cc,
+  c(Itga4 = "+", Eln = "-", Myl2 = "+"),
+  "c0 Mesenchymal candidate markers"
+)
+save_if(c0_markers,
+       filename = file.path(new_out_dir, "15-umap.c0_mesenchymal_markers.png"),
+       width = 12,
+       height = 10)
+```
+
+- c1 Mesenchymal
+
+```{r}
+c1_markers <- make_subcluster_featureplot(
+  all_samples_endo_mesen_no_cc,
+  c(Htra1 = "+", Eln = "+", Itga4 = "-", Flrt3 = "-"),
+  "c1 Mesenchymal candidate markers"
+)
+save_if(c1_markers,
+       filename = file.path(new_out_dir, "15-umap.c1_mesenchymal_markers.png"),
+       width = 12,
+       height = 10)
+```
+
+- c5 Endocardial (Cripl -> Crip1, not present as typed)
+
+```{r}
+c5_markers <- make_subcluster_featureplot(
+  all_samples_endo_mesen_no_cc,
+  c(Crip1 = "+", Gja4 = "-", Hapln1 = "+", Igfbp7 = "+"),
+  "c5 Endocardial candidate markers"
+)
+save_if(c5_markers,
+       filename = file.path(new_out_dir, "15-umap.c5_endocardial_markers.png"),
+       width = 12,
+       height = 10)
+```
+
+- c6 Endocardial (Crip -> Crip1, not present as typed)
+
+```{r}
+c6_markers <- make_subcluster_featureplot(
+  all_samples_endo_mesen_no_cc,
+  c(Rbp1 = "+", Crip1 = "-", Fbln5 = "+", Gja4 = "+"),
+  "c6 Endocardial candidate markers"
+)
+save_if(c6_markers,
+       filename = file.path(new_out_dir, "15-umap.c6_endocardial_markers.png"),
+       width = 12,
+       height = 10)
+```
+
+- c7 Mesenchymal
+
+```{r}
+c7_markers <- make_subcluster_featureplot(
+  all_samples_endo_mesen_no_cc,
+  c(Actb = "+", Cbx3 = "+", Kdelr2 = "+", Slc39a1 = "+"),
+  "c7 Mesenchymal candidate markers"
+)
+save_if(c7_markers,
+       filename = file.path(new_out_dir, "15-umap.c7_mesenchymal_markers.png"),
+       width = 12,
+       height = 10)
+```
+
+- c8 Mesenchymal
+
+```{r}
+c8_markers <- make_subcluster_featureplot(
+  all_samples_endo_mesen_no_cc,
+  c(Penk = "+", Cxcl12 = "+", Fbln5 = "+", Wnt5a = "+"),
+  "c8 Mesenchymal candidate markers"
+)
+save_if(c8_markers,
+       filename = file.path(new_out_dir, "15-umap.c8_mesenchymal_markers.png"),
+       width = 12,
+       height = 10)
+```
+
+- c12 Endocardial
+
+```{r}
+c12_markers <- make_subcluster_featureplot(
+  all_samples_endo_mesen_no_cc,
+  c(Emcn = "+", Klhl4 = "+", Gatm = "+", Akap12 = "+"),
+  "c12 Endocardial candidate markers"
+)
+save_if(c12_markers,
+       filename = file.path(new_out_dir, "15-umap.c12_endocardial_markers.png"),
+       width = 12,
+       height = 10)
+```

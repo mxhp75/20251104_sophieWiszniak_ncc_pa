@@ -100,7 +100,8 @@ subtype_colours = {
     "E11_NCC (proliferating)":        "#984EA3",
     "E12_NCC_Vegfa":                  "#377EB8",
     "E12_NCC_Sema3c":                 "#A65628",
-    "other":                          (0.85, 0.85, 0.85, 1.0),
+    "Endocardium":                    "#F781BF",
+    "other":                          (0.85, 0.85, 0.85, 1.0),  # defensive fallback only - empirically unused (every Mesenchyme cell maps to one of the 6 clusters above)
 }
 
 #-----------------------------------------------------------------------------------
@@ -112,7 +113,14 @@ adata = sc.read_h5ad(velocity_h5ad_path)
 
 mes_mask = adata.obs["new_celltypes"] == "Mesenchyme"
 seurat_clusters_str = adata.obs["seurat_clusters"].astype(str)
-subtype = np.where(mes_mask, seurat_clusters_str.map(cluster_to_name).fillna("other"), "other")
+# non-Mesenchyme cells in this object are entirely Endocardium (the
+# merged object is Endocardium + Mesenchyme only) - label them as such
+# rather than lumping them into an undifferentiated "other" grey category.
+subtype = np.where(
+    mes_mask,
+    seurat_clusters_str.map(cluster_to_name).fillna("other"),
+    adata.obs["new_celltypes"].astype(str)
+)
 adata.obs["mesenchyme_subtype"] = pd.Categorical(subtype)
 
 print("mesenchyme_subtype counts:")

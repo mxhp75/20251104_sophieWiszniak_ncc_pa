@@ -1,0 +1,44 @@
+---
+title:  "Export PCA/Harmony embeddings for Mesenchyme-VSMC FDG check (exploratory fork)"
+author: "Melanie Smith"
+date:   "2026-10-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Purpose: a UMAP gap between Mesenchyme and VSMC may or may not reflect real
+discontinuity - UMAP can exaggerate separations that a force-directed graph
+(FDG) on the same neighbour graph would not. This exports the PCA (original)
+and Harmony (integrated) cell embeddings plus metadata to CSV, for a PAGA +
+FDG check in Python using the same recipe/parameters as the existing
+velocity pipeline (`14.3-run_scanpy_paga_fdg_cell.py`: PCA computed once with
+50 components, neighbours graph built on pcs=30/neighbours=25, PAGA grouped
+by cell type, FDG seeded from the PCA/Harmony coordinates).
+
+**Standalone exploratory fork** - reads only the already-saved Harmony
+object from `06.5`, does not modify any existing script or object.
+
+```{r}
+suppressMessages(library(Seurat))
+
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+harmony_dir <- file.path(project_repo_dir, "outDir", "06.5-harmony_batch_integration_check")
+out_dir <- file.path(project_repo_dir, "outDir", "06.5-harmony_batch_integration_check", "mesenchyme_vsmc_fdg_check")
+
+if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+
+obj <- readRDS(file.path(harmony_dir, "final_interesting_cells_0.6_harmony_integrated.rds"))
+
+# export both embeddings (50 dims each, matching the project's established
+# "compute 50 PCs, slice to pcs=30 for neighbours" convention)
+write.csv(Embeddings(obj, "pca"),     file.path(out_dir, "pca_embeddings.csv"))
+write.csv(Embeddings(obj, "harmony"), file.path(out_dir, "harmony_embeddings.csv"))
+
+meta <- obj@meta.data[, c("orig.ident", "genotype", "stage", "new_celltypes", "seurat_clusters", "harmony_clusters")]
+write.csv(meta, file.path(out_dir, "cell_metadata.csv"))
+
+cat("Exported", ncol(obj), "cells to", out_dir, "\n")
+```

@@ -1,0 +1,370 @@
+---
+title: "16-propeller_celltype_subtype_breakdown"
+author: "Melanie Smith"
+date: "2026-10-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Purpose: log2 proportion ratio bootstrap plots (same style/methodology as
+slide 10's original composition plot and `09-bootstrap-test-subtype-proportions.Rmd`),
+but using the combined 13-level cell-type/subtype label from
+`16-celltype_subtype_composition_barchart.Rmd` - Myocardium/VSMC/Epicardium
+as-is, Endocardium and Mesenchyme broken into their subtypes - tested as one
+`clusters` variable across the whole dataset (not conditioned on parent cell
+type), matching how the original 5-category composition test must have
+worked (its source script was never found/tracked - this replicates the
+same design with subtypes substituted in for Endocardium/Mesenchyme).
+
+Same pseudo-replicate bootstrap design as `08-bootstrap-test-celltype-proportions-cell-cycle.Rmd` /
+`09-bootstrap-test-subtype-proportions.Rmd`: 100 bootstraps, 3
+pseudo-replicates per genotype, `speckle::propeller(transform = "asin")`.
+Combined (all stages) and by-stage (e11/e12) versions.
+
+**Standalone script** - reads already-saved objects/outputs, does not
+modify any existing script.
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE)
+set.seed(42) # set seed for reproducibility
+```
+
+# Load libraries
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(Seurat)
+library(speckle)
+library(ggdist)
+library(patchwork)
+library(glue)
+```
+
+# Set project directories and file paths
+
+```{r}
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+main_data_dir <- file.path(project_repo_dir, "outDir", "06-cluster_marker_genes")
+subtype_csv_path <- file.path(
+  project_repo_dir, "outDir", "14-rna_velocity", "endocardial_mesenchymal_egfp",
+  "subtype_proportions_bootstrap", "all_samples_subtype_metadata.csv"
+)
+out_dir <- file.path(project_repo_dir, "outDir", "16-lab_meeting_deck", "celltype_subtype_composition")
+
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir, recursive = TRUE)
+}
+```
+
+# Build the composite cell-type/subtype label
+
+- Same construction as `16-celltype_subtype_composition_barchart.Rmd`.
+
+```{r build-composite-label}
+re_embed_interesting_cells <- readRDS(file.path(main_data_dir, "final_interesting_cells_0.6.rds"))
+stopifnot(inherits(re_embed_interesting_cells, "Seurat"))
+
+subtype_meta <- read_csv(subtype_csv_path) %>%
+  dplyr::rename(barcode = `...1`) %>%
+  dplyr::select(barcode, endocardial_subtype, mesenchyme_subtype)
+
+celltype_cols <- c(
+  "Myocardium"  = "#E41A1C",
+  "VSMC"        = "#984EA3",
+  "Epicardium"  = "#FF7F00",
+  "Mesenchyme"  = "#4DAF4A",
+  "Endocardium" = "#377EB8"
+)
+
+endocardial_order <- c("Ventricular", "Angiogenic", "Valve", "Arterial")
+endocardial_cols <- c(
+  "Ventricular" = "#66C2A5",
+  "Angiogenic"  = "#FC8D62",
+  "Valve"       = "#8DA0CB",
+  "Arterial"    = "#E78AC3"
+)
+
+mesenchyme_order <- c(
+  "EndoMT_derived", "EndoMT_derived (proliferating)",
+  "E11_NCC", "E11_NCC (proliferating)",
+  "E12_NCC_Vegfa", "E12_NCC_Sema3c"
+)
+mesenchyme_cols <- c(
+  "EndoMT_derived"                  = "#1B9E77",
+  "EndoMT_derived (proliferating)"  = "#D95F02",
+  "E11_NCC"                         = "#7570B3",
+  "E11_NCC (proliferating)"         = "#E7298A",
+  "E12_NCC_Vegfa"                   = "#66A61E",
+  "E12_NCC_Sema3c"                  = "#E6AB02"
+)
+
+composite_order <- c("Myocardium", "VSMC", "Epicardium", endocardial_order, mesenchyme_order)
+
+# same per-category palette as 16-celltype_subtype_composition_barchart.Rmd,
+# so the bar charts and these bootstrap plots read as one consistent set
+composite_cols <- c(
+  "Myocardium" = celltype_cols[["Myocardium"]],
+  "VSMC"       = celltype_cols[["VSMC"]],
+  "Epicardium" = celltype_cols[["Epicardium"]],
+  endocardial_cols,
+  mesenchyme_cols
+)
+
+meta <- re_embed_interesting_cells@meta.data %>%
+  tibble::rownames_to_column("barcode") %>%
+  dplyr::left_join(subtype_meta, by = "barcode") %>%
+  dplyr::mutate(
+    composite_celltype = dplyr::case_when(
+      new_celltypes == "Endocardium" ~ endocardial_subtype,
+      new_celltypes == "Mesenchyme"  ~ mesenchyme_subtype,
+      TRUE                           ~ as.character(new_celltypes)
+    ),
+    composite_celltype = factor(composite_celltype, levels = composite_order)
+  )
+
+stopifnot(!anyNA(meta$composite_celltype))
+
+# genotype factor levels so PropRatio = Mib1_KO / control, matching the
+# established convention from 08-/09-bootstrap-test-*.Rmd
+meta$genotype <- factor(meta$genotype, levels = c("Mib1_KO", "control"))
+
+table(meta$composite_celltype, meta$genotype)
+```
+
+# Bootstrap helper functions
+
+- Identical logic to `09-bootstrap-test-subtype-proportions.Rmd`.
+
+```{r bootstrap-helpers}
+assign_pseudo_replicates_genotype <- function(meta_subset, n_reps, genotypes) {
+
+  pseudo_rep_col <- rep(NA_character_, nrow(meta_subset))
+
+  for (geno in genotypes) {
+
+    idx <- which(meta_subset$genotype == geno)
+
+    if (length(idx) < n_reps) {
+      warning(glue::glue(
+        "Fewer than {n_reps} cells for genotype {geno} — skipping this group in this bootstrap."
+      ))
+      next
+    }
+
+    sampled_idx <- sample(idx, size = length(idx), replace = TRUE)
+
+    n_keep      <- floor(length(sampled_idx) / n_reps) * n_reps
+    sampled_idx <- sampled_idx[seq_len(n_keep)]
+    rep_labels  <- rep(
+      paste0(geno, "_rep", seq_len(n_reps)),
+      each = floor(length(sampled_idx) / n_reps)
+    )
+
+    pseudo_rep_col[sampled_idx] <- rep_labels
+  }
+
+  return(pseudo_rep_col)
+}
+
+run_bootstrap_propeller <- function(meta, cluster_col = "composite_celltype", n_bootstraps = 100, n_pseudoreps = 3) {
+
+  genotypes <- levels(droplevels(meta$genotype))
+  meta_sub  <- meta %>%
+    dplyr::select(genotype, cluster = dplyr::all_of(cluster_col)) %>%
+    dplyr::mutate(cluster = droplevels(factor(cluster)))
+
+  raw_boot_list <- vector("list", n_bootstraps)
+
+  for (b in seq_len(n_bootstraps)) {
+
+    pseudo_reps <- assign_pseudo_replicates_genotype(
+      meta_subset = meta_sub,
+      n_reps      = n_pseudoreps,
+      genotypes   = genotypes
+    )
+
+    meta_boot <- meta_sub %>%
+      dplyr::mutate(pseudo_rep = pseudo_reps) %>%
+      dplyr::filter(!is.na(pseudo_rep))
+
+    if (nrow(meta_boot) < (n_pseudoreps * length(genotypes))) {
+      raw_boot_list[[b]] <- NULL
+      next
+    }
+
+    prop_result <- tryCatch(
+      {
+        speckle::propeller(
+          clusters  = meta_boot$cluster,
+          sample    = meta_boot$pseudo_rep,
+          group     = meta_boot$genotype,
+          transform = "asin"
+        )
+      },
+      error = function(e) {
+        message(glue::glue("    Bootstrap {b} failed: {conditionMessage(e)}"))
+        NULL
+      }
+    )
+
+    if (!is.null(prop_result)) {
+      prop_result$bootstrap_id <- b
+    }
+
+    raw_boot_list[[b]] <- prop_result
+  }
+
+  raw_results_df <- dplyr::bind_rows(Filter(Negate(is.null), raw_boot_list))
+
+  summary_df <- raw_results_df %>%
+    dplyr::group_by(BaselineProp.clusters) %>%
+    dplyr::summarise(
+      n_bootstraps_run       = dplyr::n(),
+      n_bootstraps_sig_fdr05 = sum(FDR < 0.05,  na.rm = TRUE),
+      prop_sig_fdr05         = mean(FDR < 0.05, na.rm = TRUE),
+      median_FDR             = median(FDR,       na.rm = TRUE),
+      median_PropRatio       = median(PropRatio, na.rm = TRUE),
+      CI_PropRatio_lower     = quantile(PropRatio, 0.025, na.rm = TRUE),
+      CI_PropRatio_upper     = quantile(PropRatio, 0.975, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    dplyr::arrange(dplyr::desc(prop_sig_fdr05))
+
+  list(raw_results = raw_results_df, summary = summary_df)
+}
+
+# shared plot builder - identical logic to 09-bootstrap-test-subtype-proportions.Rmd,
+# including the non-finite / extreme-outlier filter before plotting
+make_bootstrap_plot <- function(raw_results, title, outlier_fence = 3) {
+
+  n_before <- nrow(raw_results)
+
+  raw_results <- raw_results %>%
+    dplyr::mutate(log2PR = log2(PropRatio)) %>%
+    dplyr::filter(is.finite(log2PR)) %>%
+    dplyr::group_by(BaselineProp.clusters) %>%
+    dplyr::mutate(
+      q1  = quantile(log2PR, 0.25, na.rm = TRUE),
+      q3  = quantile(log2PR, 0.75, na.rm = TRUE),
+      iqr = q3 - q1
+    ) %>%
+    dplyr::filter(
+      iqr == 0 | dplyr::between(log2PR, q1 - outlier_fence * iqr, q3 + outlier_fence * iqr)
+    ) %>%
+    dplyr::ungroup() %>%
+    dplyr::select(-q1, -q3, -iqr, -log2PR)
+
+  n_dropped <- n_before - nrow(raw_results)
+  if (n_dropped > 0) {
+    message(glue::glue(
+      "{title}: dropped {n_dropped} bootstrap draw(s) (non-finite or extreme outlier) before plotting"
+    ))
+  }
+
+  raw_results <- raw_results %>%
+    dplyr::mutate(BaselineProp.clusters = forcats::fct_reorder(
+      BaselineProp.clusters, PropRatio, .fun = median
+    ))
+
+  ggplot(
+    raw_results,
+    aes(x = log2(PropRatio), y = BaselineProp.clusters, fill = BaselineProp.clusters)
+  ) +
+    ggdist::stat_halfeye(
+      adjust        = 0.7,
+      width         = 0.6,
+      justification = -0.2,
+      .width        = c(0.5, 0.95),
+      point_colour  = NA,
+      alpha         = 0.8
+    ) +
+    scale_fill_manual(values = composite_cols, guide = "none") +
+    geom_vline(xintercept = 0, linetype = "dashed", colour = "red") +
+    labs(
+      title = title,
+      x     = expression(Log[2]~"Proportion Ratio (Mib1 KO / Control), 100 bootstraps"),
+      y     = NULL
+    ) +
+    theme_bw() +
+    theme(panel.grid.major.y = element_blank())
+}
+```
+
+# =============================================================================
+# Combined (e11 + e12 pooled)
+# =============================================================================
+
+```{r bootstrap-combined, message=FALSE, warning=FALSE}
+combined_result <- run_bootstrap_propeller(meta)
+
+combined_result$summary
+
+saveRDS(
+  combined_result,
+  file = file.path(out_dir, "16-bootstrap_propeller_celltype_subtype_combined.rds")
+)
+
+p_combined <- make_bootstrap_plot(
+  combined_result$raw_results,
+  title = "Cell-type/subtype proportions — Mib1-KO vs control (e11 + e12 combined)"
+)
+
+ggsave(
+  plot = p_combined,
+  filename = file.path(out_dir, "16-bootstrap_celltype_subtype_combined.png"),
+  width = 9, height = 7
+)
+
+p_combined
+```
+
+# =============================================================================
+# By stage (e11, e12 separately)
+# =============================================================================
+
+```{r bootstrap-by-stage, message=FALSE, warning=FALSE}
+stages <- c("e11", "e12")
+
+by_stage_results <- setNames(
+  lapply(stages, function(stg) {
+    message(glue::glue("--- Stage: {stg} ---"))
+    run_bootstrap_propeller(dplyr::filter(meta, stage == stg))
+  }),
+  stages
+)
+
+purrr::walk(stages, function(stg) print(by_stage_results[[stg]]$summary))
+
+saveRDS(
+  by_stage_results,
+  file = file.path(out_dir, "16-bootstrap_propeller_celltype_subtype_by_stage.rds")
+)
+
+stage_plots <- lapply(stages, function(stg) {
+  make_bootstrap_plot(
+    by_stage_results[[stg]]$raw_results,
+    title = glue::glue("Cell-type/subtype proportions — Mib1-KO vs control ({stg})")
+  )
+})
+
+p_by_stage <- patchwork::wrap_plots(stage_plots, ncol = 1)
+
+ggsave(
+  plot = p_by_stage,
+  filename = file.path(out_dir, "16-bootstrap_celltype_subtype_by_stage.png"),
+  width = 9, height = 14
+)
+
+p_by_stage
+```

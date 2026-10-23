@@ -1,0 +1,278 @@
+---
+title: "06.5d-stage_de_covariate_adjusted_and_housekeeping_diagnostic"
+author: "Melanie Smith"
+date: "2026-10-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Purpose: Sophie wants to test differential expression between developmental
+stages (e11 vs e12) directly, despite stage being perfectly confounded with
+sequencing batch in this dataset (see `RScripts/20261021_archive/README.md`
+for the full discussion). This can't be fully resolved from the data alone,
+but two concrete steps make the comparison more defensible than a plain,
+unadjusted test:
+
+1. Re-run the existing control-only stage comparisons from
+   `07-de.control.timepoint.Rmd` (`ident.1 = "{celltype}_e11_control"`,
+   `ident.2 = "{celltype}_e12_control"`, same object, same pEGFP-1 fix,
+   same control-only restriction - genotype is deliberately excluded so it
+   doesn't become a second confound on top of stage/batch) both the
+   original way (plain Wilcoxon) and with known technical covariates
+   (`percent.mt`, `percent.ribo`, `percent.hb`, `nCount_RNA`) included as
+   `latent.vars` in a logistic-regression test, so the stage effect is
+   estimated net of those specific, measured technical proxies.
+
+2. A housekeeping-gene diagnostic: a 15-gene panel of broadly-used mouse
+   reference genes (NOT independently re-validated as stage-invariant in
+   this specific E11.5-E12.5 heart dataset - treat this as the standard/
+   generic choice it is), checked for an e11-vs-e12 shift within each cell
+   type (control cells only). Since these genes aren't expected to change
+   for developmental reasons, any shift observed estimates how large the
+   "pure technical" floor might be, to calibrate against the DE results.
+
+**Standalone fork** - does not modify `07-de.control.timepoint.Rmd` or any
+other existing script/object.
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE)
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(Seurat)
+library(patchwork)
+```
+
+# Set project directories and file paths
+
+```{r}
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+data_dir <- file.path(project_repo_dir, "outDir", "06-cluster_marker_genes")
+out_dir <- file.path(data_dir, "stage_de_housekeeping_fork")
+
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir, recursive = TRUE)
+}
+```
+
+# Load required object
+- Same object and pEGFP-1 fix as `07-de.control.timepoint.Rmd`.
+
+```{r}
+re_embed_interesting_cells <- readRDS(file.path(data_dir, "final_interesting_cells_0.6.rds"))
+stopifnot(inherits(re_embed_interesting_cells, "Seurat"))
+
+stopifnot("pEGFP-1" %in% rownames(re_embed_interesting_cells))
+message("Dimensions before removing pEGFP-1: ", paste(dim(re_embed_interesting_cells), collapse = " x "))
+re_embed_interesting_cells <- subset(
+  re_embed_interesting_cells,
+  features = setdiff(rownames(re_embed_interesting_cells), "pEGFP-1")
+)
+message("Dimensions after removing pEGFP-1: ", paste(dim(re_embed_interesting_cells), collapse = " x "))
+stopifnot(!("pEGFP-1" %in% rownames(re_embed_interesting_cells)))
+
+# composite identity, same construction as 07-de.control.timepoint.Rmd
+re_embed_interesting_cells$celltype.cond <- paste(
+  re_embed_interesting_cells$new_celltypes,
+  re_embed_interesting_cells$orig.ident,
+  sep = "_"
+)
+Idents(re_embed_interesting_cells) <- "celltype.cond"
+
+celltypes <- c("Mesenchyme", "Myocardium", "Endocardium", "Epicardium", "VSMC")
+technical_covariates <- c("percent.mt", "percent.ribo", "percent.hb", "nCount_RNA")
+```
+
+# =============================================================================
+# Part 1: Stage DE (control-only), plain Wilcoxon vs covariate-adjusted LR
+# =============================================================================
+
+```{r stage-de-loop, message=FALSE, warning=FALSE}
+wilcox_results <- list()
+lr_results     <- list()
+
+for (ct in celltypes) {
+
+  message(glue::glue("--- {ct} ---"))
+
+  ident.1 <- paste0(ct, "_e11_control")
+  ident.2 <- paste0(ct, "_e12_control")
+
+  wilcox_results[[ct]] <- FindMarkers(
+    re_embed_interesting_cells,
+    ident.1  = ident.1,
+    ident.2  = ident.2,
+    test.use = "wilcox",
+    verbose  = FALSE
+  ) %>%
+    tibble::rownames_to_column("gene") %>%
+    dplyr::mutate(cell_type = ct)
+
+  lr_results[[ct]] <- FindMarkers(
+    re_embed_interesting_cells,
+    ident.1     = ident.1,
+    ident.2     = ident.2,
+    test.use    = "LR",
+    latent.vars = technical_covariates,
+    verbose     = FALSE
+  ) %>%
+    tibble::rownames_to_column("gene") %>%
+    dplyr::mutate(cell_type = ct)
+
+  write_csv(wilcox_results[[ct]], file.path(out_dir, paste0("07-", ct, "_e11_vs_e12_control_wilcoxon.csv")))
+  write_csv(lr_results[[ct]],     file.path(out_dir, paste0("07-", ct, "_e11_vs_e12_control_LR_covariate_adjusted.csv")))
+}
+```
+
+## Summary: how much does covariate adjustment change the DE gene count
+
+```{r stage-de-summary}
+padj_thresh <- 0.05
+lfc_thresh  <- 0.25
+
+summarise_de <- function(df) {
+  df %>%
+    dplyr::filter(p_val_adj < padj_thresh, abs(avg_log2FC) > lfc_thresh) %>%
+    nrow()
+}
+
+de_summary <- tibble::tibble(
+  cell_type         = celltypes,
+  n_sig_wilcoxon    = purrr::map_int(celltypes, ~ summarise_de(wilcox_results[[.x]])),
+  n_sig_LR_adjusted = purrr::map_int(celltypes, ~ summarise_de(lr_results[[.x]]))
+) %>%
+  dplyr::mutate(
+    pct_retained = round(100 * n_sig_LR_adjusted / n_sig_wilcoxon, 1)
+  )
+
+de_summary
+
+write_csv(de_summary, file.path(out_dir, "07-stage_de_wilcoxon_vs_LR_adjusted_summary.csv"))
+```
+
+## Which genes drop out after adjustment (per cell type)
+
+- Genes significant in the plain Wilcoxon test but not after adjusting for
+  the technical covariates - these are the genes whose apparent stage
+  effect is most consistent with being driven by the measured technical
+  proxies rather than surviving independently of them.
+
+```{r stage-de-dropped-genes}
+dropped_genes <- purrr::map_dfr(celltypes, function(ct) {
+  wilcox_sig <- wilcox_results[[ct]] %>%
+    dplyr::filter(p_val_adj < padj_thresh, abs(avg_log2FC) > lfc_thresh) %>%
+    dplyr::pull(gene)
+
+  lr_sig <- lr_results[[ct]] %>%
+    dplyr::filter(p_val_adj < padj_thresh, abs(avg_log2FC) > lfc_thresh) %>%
+    dplyr::pull(gene)
+
+  tibble::tibble(
+    cell_type = ct,
+    gene      = setdiff(wilcox_sig, lr_sig)
+  )
+})
+
+dropped_genes %>%
+  dplyr::count(cell_type, name = "n_genes_dropped_after_adjustment")
+
+write_csv(dropped_genes, file.path(out_dir, "07-stage_de_genes_dropped_after_adjustment.csv"))
+```
+
+# =============================================================================
+# Part 2: Housekeeping gene diagnostic (control cells only)
+# =============================================================================
+
+- Standard mouse reference-gene panel, not independently validated as
+  stage-invariant for this tissue/window - treat as a generic diagnostic,
+  not a ground truth.
+
+```{r housekeeping-setup}
+hk_panel <- c("Actb", "Gapdh", "B2m", "Hprt", "Tbp", "Ppia", "Ywhaz", "Sdha",
+              "Rpl13a", "Pgk1", "Hmbs", "Tuba1a", "Rplp0", "Gusb", "Polr2a")
+
+stopifnot(all(hk_panel %in% rownames(re_embed_interesting_cells)))
+
+control_cells <- subset(re_embed_interesting_cells, subset = genotype == "control")
+
+hk_expr <- GetAssayData(control_cells, assay = "RNA", layer = "data")[hk_panel, ]
+control_cells$hk_score <- Matrix::colMeans(hk_expr)
+```
+
+```{r housekeeping-test, message=FALSE, warning=FALSE}
+hk_summary <- control_cells@meta.data %>%
+  dplyr::filter(new_celltypes %in% celltypes) %>%
+  dplyr::group_by(new_celltypes, stage) %>%
+  dplyr::summarise(
+    n_cells      = dplyr::n(),
+    mean_hk_score = mean(hk_score),
+    median_hk_score = median(hk_score),
+    .groups = "drop"
+  )
+
+hk_summary
+
+hk_test <- purrr::map_dfr(celltypes, function(ct) {
+  sub_meta <- control_cells@meta.data %>% dplyr::filter(new_celltypes == ct)
+
+  wt <- wilcox.test(hk_score ~ stage, data = sub_meta)
+
+  e11_mean <- mean(sub_meta$hk_score[sub_meta$stage == "e11"])
+  e12_mean <- mean(sub_meta$hk_score[sub_meta$stage == "e12"])
+
+  tibble::tibble(
+    cell_type   = ct,
+    e11_mean_hk = e11_mean,
+    e12_mean_hk = e12_mean,
+    diff_e11_minus_e12 = e11_mean - e12_mean,
+    wilcoxon_p  = wt$p.value
+  )
+}) %>%
+  dplyr::mutate(p_adj_BH = p.adjust(wilcoxon_p, method = "BH"))
+
+hk_test
+
+write_csv(hk_test, file.path(out_dir, "07-housekeeping_stage_shift_summary.csv"))
+```
+
+## Visualise
+
+```{r housekeeping-plot, fig.width=10, fig.height=5}
+hk_plot <- control_cells@meta.data %>%
+  dplyr::filter(new_celltypes %in% celltypes) %>%
+  ggplot(aes(x = new_celltypes, y = hk_score, fill = stage)) +
+  geom_violin(position = position_dodge(width = 0.8), scale = "width") +
+  geom_boxplot(position = position_dodge(width = 0.8), width = 0.1, outlier.shape = NA, fill = "white") +
+  theme_bw(base_size = 13) +
+  labs(
+    title = "Housekeeping panel score, control cells only, e11 vs e12",
+    subtitle = "Mean log-normalised expression across a 15-gene reference panel",
+    x = NULL,
+    y = "Housekeeping panel score"
+  )
+
+hk_plot
+
+ggsave(
+  filename = file.path(out_dir, "07-housekeeping_stage_shift_violin.png"),
+  plot = hk_plot,
+  width = 10,
+  height = 5,
+  dpi = 300
+)
+```

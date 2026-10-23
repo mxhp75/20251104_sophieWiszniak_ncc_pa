@@ -1,0 +1,347 @@
+---
+title: "16-celltype_subtype_composition_barchart"
+author: "Melanie Smith"
+date: "2026-10-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Purpose: replacement for the deck slide "Cell-type proportions shift
+modestly, in different directions at each stage" - a two-panel figure:
+
+- Panel A: the original 5 broad cell-type stacked bar (% of total cells
+  per sample), unchanged in content from the current deck slide.
+- Panel B: Endocardium and Mesenchyme subtype composition (Sophie's marker
+  gene sets, corrected this session - no more "Endocardium_unclassified",
+  Endocardium properly labelled rather than grey "other"), each bar % of
+  that parent cell type specifically, same 4-sample x-axis as Panel A.
+
+Panel B uses a different colour palette entirely from Panel A so nothing
+looks like it means the same thing across the two panels (the source
+Python scripts' subtype colours happen to reuse some of the same hex
+values as the main cell-type palette for unrelated categories).
+
+**Standalone script** - reads already-saved objects/outputs, does not
+modify any existing script.
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE)
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(Seurat)
+library(patchwork)
+```
+
+# Set project directories and file paths
+
+```{r}
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+main_data_dir <- file.path(project_repo_dir, "outDir", "06-cluster_marker_genes")
+subtype_csv_path <- file.path(
+  project_repo_dir, "outDir", "14-rna_velocity", "endocardial_mesenchymal_egfp",
+  "subtype_proportions_bootstrap", "all_samples_subtype_metadata.csv"
+)
+out_dir <- file.path(project_repo_dir, "outDir", "16-lab_meeting_deck", "celltype_subtype_composition")
+
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir, recursive = TRUE)
+}
+
+sample_labels <- c(
+  "e11_control" = "E11.5 Ctrl",
+  "e11_ko"      = "E11.5 KO",
+  "e12_control" = "E12.5 Ctrl",
+  "e12_ko"      = "E12.5 KO"
+)
+sample_order <- names(sample_labels)
+```
+
+# Panel A: broad cell-type composition (5 types, % of total cells per sample)
+
+```{r panel-a-data}
+re_embed_interesting_cells <- readRDS(file.path(main_data_dir, "final_interesting_cells_0.6.rds"))
+stopifnot(inherits(re_embed_interesting_cells, "Seurat"))
+
+celltype_cols <- c(
+  "Myocardium"  = "#E41A1C",
+  "VSMC"        = "#984EA3",
+  "Epicardium"  = "#FF7F00",
+  "Mesenchyme"  = "#4DAF4A",
+  "Endocardium" = "#377EB8"
+)
+
+panel_a_data <- re_embed_interesting_cells@meta.data %>%
+  dplyr::count(orig.ident, new_celltypes, name = "n") %>%
+  dplyr::group_by(orig.ident) %>%
+  dplyr::mutate(pct = 100 * n / sum(n)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(
+    sample_label = factor(sample_labels[orig.ident], levels = sample_labels[sample_order]),
+    new_celltypes = factor(new_celltypes, levels = names(celltype_cols))
+  )
+
+panel_a_data
+```
+
+```{r panel-a-plot, fig.width=6, fig.height=6}
+p_panel_a <- ggplot(panel_a_data, aes(x = sample_label, y = pct, fill = new_celltypes)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = paste0(round(pct), "%")), position = position_stack(vjust = 0.5), size = 3) +
+  scale_fill_manual(values = celltype_cols, name = NULL) +
+  labs(
+    title = "Cell type",
+    x = NULL,
+    y = "% of cells per sample"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1),
+    legend.position = "bottom"
+  ) +
+  guides(fill = guide_legend(nrow = 2))
+
+p_panel_a
+```
+
+# Panel B: Endocardium and Mesenchyme subtype composition
+
+```{r panel-b-data}
+subtype_meta <- read_csv(subtype_csv_path) %>%
+  dplyr::rename(barcode = `...1`) %>%
+  dplyr::mutate(
+    sample_label = factor(sample_labels[orig.ident], levels = sample_labels[sample_order])
+  )
+
+endocardial_order <- c("Ventricular", "Angiogenic", "Valve", "Arterial")
+endocardial_cols <- c(
+  "Ventricular" = "#66C2A5",
+  "Angiogenic"  = "#FC8D62",
+  "Valve"       = "#8DA0CB",
+  "Arterial"    = "#E78AC3"
+)
+
+mesenchyme_order <- c(
+  "EndoMT_derived", "EndoMT_derived (proliferating)",
+  "E11_NCC", "E11_NCC (proliferating)",
+  "E12_NCC_Vegfa", "E12_NCC_Sema3c"
+)
+mesenchyme_cols <- c(
+  "EndoMT_derived"                  = "#1B9E77",
+  "EndoMT_derived (proliferating)"  = "#D95F02",
+  "E11_NCC"                         = "#7570B3",
+  "E11_NCC (proliferating)"         = "#E7298A",
+  "E12_NCC_Vegfa"                   = "#66A61E",
+  "E12_NCC_Sema3c"                  = "#E6AB02"
+)
+
+endocardial_data <- subtype_meta %>%
+  dplyr::filter(new_celltypes == "Endocardium") %>%
+  dplyr::count(sample_label, endocardial_subtype, name = "n") %>%
+  dplyr::group_by(sample_label) %>%
+  dplyr::mutate(pct = 100 * n / sum(n)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(endocardial_subtype = factor(endocardial_subtype, levels = endocardial_order))
+
+mesenchyme_data <- subtype_meta %>%
+  dplyr::filter(new_celltypes == "Mesenchyme") %>%
+  dplyr::count(sample_label, mesenchyme_subtype, name = "n") %>%
+  dplyr::group_by(sample_label) %>%
+  dplyr::mutate(pct = 100 * n / sum(n)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(mesenchyme_subtype = factor(mesenchyme_subtype, levels = mesenchyme_order))
+
+endocardial_data
+mesenchyme_data
+```
+
+```{r panel-b-plot, fig.width=10, fig.height=6}
+p_panel_b1 <- ggplot(endocardial_data, aes(x = sample_label, y = pct, fill = endocardial_subtype)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = paste0(round(pct), "%")), position = position_stack(vjust = 0.5), size = 2.8) +
+  scale_fill_manual(values = endocardial_cols, name = NULL) +
+  labs(
+    title = "Endocardium subtypes",
+    x = NULL,
+    y = "% of Endocardium cells per sample"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1),
+    legend.position = "bottom"
+  ) +
+  guides(fill = guide_legend(ncol = 2))
+
+p_panel_b2 <- ggplot(mesenchyme_data, aes(x = sample_label, y = pct, fill = mesenchyme_subtype)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = paste0(round(pct), "%")), position = position_stack(vjust = 0.5), size = 2.5) +
+  scale_fill_manual(values = mesenchyme_cols, name = NULL) +
+  labs(
+    title = "Mesenchyme subtypes",
+    x = NULL,
+    y = "% of Mesenchyme cells per sample"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1),
+    legend.position = "bottom"
+  ) +
+  guides(fill = guide_legend(ncol = 1))
+
+p_panel_b <- p_panel_b1 + p_panel_b2
+
+p_panel_b
+```
+
+# Combined figure
+
+```{r combined-plot, fig.width=16, fig.height=7}
+p_combined <- p_panel_a + p_panel_b +
+  patchwork::plot_layout(widths = c(1, 2.2)) +
+  patchwork::plot_annotation(
+    title = "Cell-type and subtype composition by sample",
+    caption = "Endocardium/Mesenchyme subtypes per Sophie's marker gene sets"
+  )
+
+p_combined
+
+ggsave(
+  filename = file.path(out_dir, "16-celltype_subtype_composition_barchart.png"),
+  plot = p_combined,
+  width = 16,
+  height = 7,
+  dpi = 300
+)
+```
+
+# Individual panels, saved separately
+
+- Not thrown away - the panel plot above is kept as-is. These are the same
+  three plots (`p_panel_a`, `p_panel_b1`, `p_panel_b2`) saved individually,
+  in case the combined layout isn't what's wanted but the panels themselves
+  are still useful.
+
+```{r save-individual-panels}
+ggsave(
+  filename = file.path(out_dir, "16-panel_a_celltype.png"),
+  plot = p_panel_a,
+  width = 6,
+  height = 6,
+  dpi = 300
+)
+
+ggsave(
+  filename = file.path(out_dir, "16-panel_b1_endocardium_subtypes.png"),
+  plot = p_panel_b1,
+  width = 5,
+  height = 6,
+  dpi = 300
+)
+
+ggsave(
+  filename = file.path(out_dir, "16-panel_b2_mesenchyme_subtypes.png"),
+  plot = p_panel_b2,
+  width = 5,
+  height = 6,
+  dpi = 300
+)
+```
+
+# =============================================================================
+# Single combined stacked bar: Myocardium/VSMC/Epicardium as-is,
+# Endocardium and Mesenchyme broken down into their subtypes
+# =============================================================================
+
+- One composite cell-type/subtype label per cell: Myocardium/VSMC/Epicardium
+  cells keep their broad label; Endocardium cells get their
+  `endocardial_subtype`; Mesenchyme cells get their `mesenchyme_subtype`.
+  Every segment here is % of the WHOLE sample (not % within a parent cell
+  type, unlike Panel B above), so the bar still sums to 100%.
+
+```{r single-stack-data}
+subtype_lookup <- subtype_meta %>%
+  dplyr::select(barcode, endocardial_subtype, mesenchyme_subtype)
+
+single_stack_data <- re_embed_interesting_cells@meta.data %>%
+  tibble::rownames_to_column("barcode") %>%
+  dplyr::left_join(subtype_lookup, by = "barcode") %>%
+  dplyr::mutate(
+    composite_celltype = dplyr::case_when(
+      new_celltypes == "Endocardium" ~ endocardial_subtype,
+      new_celltypes == "Mesenchyme"  ~ mesenchyme_subtype,
+      TRUE                           ~ as.character(new_celltypes)
+    )
+  )
+
+# sanity check - every cell should have a composite label, and counts per
+# sample should still total the original sample sizes
+stopifnot(!anyNA(single_stack_data$composite_celltype))
+
+composite_order <- c("Myocardium", "VSMC", "Epicardium", endocardial_order, mesenchyme_order)
+composite_cols <- c(
+  "Myocardium" = celltype_cols[["Myocardium"]],
+  "VSMC"       = celltype_cols[["VSMC"]],
+  "Epicardium" = celltype_cols[["Epicardium"]],
+  endocardial_cols,
+  mesenchyme_cols
+)
+
+single_stack_summary <- single_stack_data %>%
+  dplyr::count(orig.ident, composite_celltype, name = "n") %>%
+  dplyr::group_by(orig.ident) %>%
+  dplyr::mutate(pct = 100 * n / sum(n)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(
+    sample_label = factor(sample_labels[orig.ident], levels = sample_labels[sample_order]),
+    composite_celltype = factor(composite_celltype, levels = composite_order)
+  )
+
+single_stack_summary
+```
+
+```{r single-stack-plot, fig.width=10, fig.height=9}
+p_single_stack <- ggplot(single_stack_summary, aes(x = sample_label, y = pct, fill = composite_celltype)) +
+  geom_col(width = 0.7) +
+  geom_text(
+    aes(label = ifelse(pct >= 2, paste0(round(pct), "%"), "")),
+    position = position_stack(vjust = 0.5), size = 2.6
+  ) +
+  scale_fill_manual(values = composite_cols, name = NULL) +
+  labs(
+    title = "Cell-type proportions, with Endocardium and Mesenchyme broken into subtypes",
+    x = NULL,
+    y = "% of cells per sample",
+    caption = "Endocardium/Mesenchyme subtypes per Sophie's marker gene sets"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1),
+    legend.position = "right"
+  ) +
+  guides(fill = guide_legend(ncol = 1))
+
+p_single_stack
+
+ggsave(
+  filename = file.path(out_dir, "16-single_stack_celltype_subtype_breakdown.png"),
+  plot = p_single_stack,
+  width = 10,
+  height = 9,
+  dpi = 300
+)
+```

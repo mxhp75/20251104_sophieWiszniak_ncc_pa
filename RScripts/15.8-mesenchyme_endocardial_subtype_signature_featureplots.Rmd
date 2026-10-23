@@ -1,0 +1,241 @@
+---
+title: "15.8-mesenchyme_endocardial_subtype_signature_featureplots"
+author: "Melanie Smith"
+date: "2026-10-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Purpose: `FeaturePlot`s of the individual genes making up Sophie's subtype
+signatures (`PScripts/14.5-endocardial_mesenchymal_egfp_analysis.py`), on
+the Endocardium + Mesenchyme, all-samples, cell-cycle-genes-removed object.
+14.5 already plots the *combined* signature score per subtype
+(`sc.tl.score_genes()`, one value per cell); this instead shows each
+contributing gene as its own panel, same style as `15.7`'s c0-c12 plots.
+
+Note: `Esco2` (Proliferating signature) is not present in this object's
+feature set, so that panel is 1 gene (Hist1h2ap) only. None of these genes
+are flagged as negative markers in the source script - `sc.tl.score_genes()`
+treats the whole list as one positive-direction signature - so no +/-
+labelling here, unlike the c0-c12 plots.
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE)
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(Seurat)
+library(patchwork)
+```
+
+# User defined functions
+
+```{r}
+save_if <- function(plot_object, filename, width, height, ...) {
+  if (save_plots) {
+    ggsave(plot = plot_object,
+           filename = filename,
+           width = width,
+           height = height,
+           dpi = 300)
+  }
+}
+save_plots <- TRUE
+```
+
+# Set project directories and file paths
+
+```{r}
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+data_dir <- file.path(project_repo_dir, "outDir", "15-rna_velocity")
+new_out_dir <- file.path(data_dir, "subcluster_marker_featureplots")
+
+if (!dir.exists(new_out_dir)) {
+  dir.create(new_out_dir, recursive = TRUE)
+}
+```
+
+# Load required object
+- Endocardium + Mesenchyme, all 4 samples, cell-cycle genes removed, from
+  `15.1-add_EGFP_metadata_subset_endocardium_mesenchyme_no_cc.Rmd` - same
+  object used in `15.7`.
+
+```{r}
+all_samples_endo_mesen_no_cc <- readRDS(file.path(data_dir, "all_samples_endo_mesen_no_cc_re_embed.rds"))
+stopifnot(inherits(all_samples_endo_mesen_no_cc, "Seurat"))
+
+"umap_endo_mesen" %in% Reductions(all_samples_endo_mesen_no_cc)
+table(all_samples_endo_mesen_no_cc$new_celltypes)
+```
+
+# Shared plot builder
+
+```{r}
+make_signature_featureplot <- function(object, genes, title) {
+  FeaturePlot(
+    object = object,
+    features = genes,
+    reduction = "umap_endo_mesen",
+    ncol = 2,
+    order = TRUE
+    ) &
+    scale_colour_gradientn(
+      colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+      name = "Expression"
+    ) &
+    plot_annotation(
+      title = title,
+      caption = "Endocardium + Mesenchyme, all samples, cell-cycle genes removed"
+    ) &
+    theme_bw(base_size = 14) &
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      plot.subtitle = element_text(hjust = 0.5)
+    )
+}
+```
+
+## Endocardial subtype signatures
+
+- Ventricular
+
+```{r}
+ventricular_markers <- make_signature_featureplot(
+  all_samples_endo_mesen_no_cc,
+  c("Irx5", "Tgfbr3", "Emcn", "Frem1"),
+  "Ventricular signature markers"
+)
+save_if(ventricular_markers,
+       filename = file.path(new_out_dir, "15-umap.ventricular_markers.png"),
+       width = 12,
+       height = 10)
+```
+
+- Angiogenic
+
+```{r}
+angiogenic_markers <- make_signature_featureplot(
+  all_samples_endo_mesen_no_cc,
+  c("Apln", "Col15a1", "Kcne3", "Clec1b", "Fabp4", "Dll4", "Nrp2"),
+  "Angiogenic signature markers"
+)
+save_if(angiogenic_markers,
+       filename = file.path(new_out_dir, "15-umap.angiogenic_markers.png"),
+       width = 12,
+       height = 16)
+```
+
+- Valve
+
+```{r}
+valve_markers <- make_signature_featureplot(
+  all_samples_endo_mesen_no_cc,
+  c("Wnt9b", "Adam23", "Adamts8", "Fam155a", "Wnt4"),
+  "Valve signature markers"
+)
+save_if(valve_markers,
+       filename = file.path(new_out_dir, "15-umap.valve_markers.png"),
+       width = 12,
+       height = 13)
+```
+
+- Arterial
+
+```{r}
+arterial_markers <- make_signature_featureplot(
+  all_samples_endo_mesen_no_cc,
+  c("Pak7", "Fbln5", "Rtl4", "Isl1", "Trpc5", "Gja4"),
+  "Arterial signature markers"
+)
+save_if(arterial_markers,
+       filename = file.path(new_out_dir, "15-umap.arterial_markers.png"),
+       width = 12,
+       height = 13)
+```
+
+## Mesenchyme subtype signatures
+
+- EndoMT_derived
+
+```{r}
+endomt_derived_markers <- make_signature_featureplot(
+  all_samples_endo_mesen_no_cc,
+  c("Sall3", "Rapgef4", "Bmp6", "Htra1", "Lef1", "Nkain4"),
+  "EndoMT_derived signature markers"
+)
+save_if(endomt_derived_markers,
+       filename = file.path(new_out_dir, "15-umap.endomt_derived_markers.png"),
+       width = 12,
+       height = 13)
+```
+
+- Proliferating (Esco2 dropped - not present in this object's feature set)
+
+```{r}
+proliferating_markers <- make_signature_featureplot(
+  all_samples_endo_mesen_no_cc,
+  c("Hist1h2ap"),
+  "Proliferating signature markers"
+)
+save_if(proliferating_markers,
+       filename = file.path(new_out_dir, "15-umap.proliferating_markers.png"),
+       width = 8,
+       height = 7)
+```
+
+- E11_NCC
+
+```{r}
+e11_ncc_markers <- make_signature_featureplot(
+  all_samples_endo_mesen_no_cc,
+  c("Plxna2", "Ramp1", "Kif26a", "Itga4"),
+  "E11_NCC signature markers"
+)
+save_if(e11_ncc_markers,
+       filename = file.path(new_out_dir, "15-umap.e11_ncc_markers.png"),
+       width = 12,
+       height = 10)
+```
+
+- E12_NCC_Vegfa
+
+```{r}
+e12_ncc_vegfa_markers <- make_signature_featureplot(
+  all_samples_endo_mesen_no_cc,
+  c("Vegfa", "Sema3d", "Ndufa4l2", "Chrm3", "Ctnna2"),
+  "E12_NCC_Vegfa signature markers"
+)
+save_if(e12_ncc_vegfa_markers,
+       filename = file.path(new_out_dir, "15-umap.e12_ncc_vegfa_markers.png"),
+       width = 12,
+       height = 13)
+```
+
+- E12_NCC_Sema3c
+
+```{r}
+e12_ncc_sema3c_markers <- make_signature_featureplot(
+  all_samples_endo_mesen_no_cc,
+  c("Sema3c", "Cntn4", "Cntn6", "Syt1", "Penk"),
+  "E12_NCC_Sema3c signature markers"
+)
+save_if(e12_ncc_sema3c_markers,
+       filename = file.path(new_out_dir, "15-umap.e12_ncc_sema3c_markers.png"),
+       width = 12,
+       height = 13)
+```

@@ -1,0 +1,382 @@
+---
+title: "06-cell_marker_genes_final"
+author: "Melanie Smith"
+date: "2026-10-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Purpose: re-run the curated cell-type marker gene `FeaturePlot`s from
+`05-curated_cell_type_marker_genes.Rmd` on the final object
+(`final_interesting_cells_0.6.rds`), rather than the pre-final-clustering
+object those plots were originally made from. Only the 5 cell types retained
+in the final object are plotted here (Mesenchyme, Myocardium, Endocardium,
+VSMC, Epicardium) - Macrophage, RBC and Platelet markers are dropped since
+those populations were filtered out and aren't present in this object.
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+
+# additional plotting functions
+library(patchwork)
+```
+
+# User defined functions
+
+```{r}
+# Helper function (put this at the top of your script)
+save_if <- function(plot_object, filename, width, height, ...) {
+  if (save_plots) {
+    ggsave(plot = plot_object,
+           filename = filename,
+           width = width,
+           height = height,
+           dpi = 300)
+  }
+}
+# change to TRUE to save plots
+save_plots <- TRUE
+
+```
+
+# Set project directories and file paths
+
+```{r}
+project_name <- "20251104_sophieWiszniak_ncc_pa"
+
+base_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak"
+project_repo_dir <- file.path(base_repo_dir, project_name)
+out_dir <- file.path(project_repo_dir, "outDir")
+
+data_dir <- file.path(out_dir, "06-cluster_marker_genes")
+new_out_dir <- file.path(data_dir, "curated_marker_genes")
+
+if (!dir.exists(new_out_dir)) {
+  dir.create(new_out_dir, recursive = TRUE)
+}
+```
+
+# Load required objects
+- Final object: post-QC, post-filtering, 5 retained cell types (Mesenchyme,
+  Myocardium, Endocardium, VSMC, Epicardium), clustered at resolution 0.6.
+
+```{r}
+final_interesting_cells_0.6 <- readRDS(file = file.path(data_dir, "final_interesting_cells_0.6.rds"))
+stopifnot(inherits(final_interesting_cells_0.6, "Seurat"))
+
+table(final_interesting_cells_0.6$new_celltypes)
+```
+
+## Plot cell-type marker genes
+nb: The marker genes used here are from [Single-cell RNA-Seq of the developing cardiac outflow tract reveals convergent development of the vascular smooth muscle cells](https://www.sciencedirect.com/science/article/pii/S2211124719308721?via%3Dihub#fig5)
+
+- Epicardial lineage
+
+```{r}
+epicardial_markers <- FeaturePlot(
+  object = final_interesting_cells_0.6,
+  features = c("Upk3b", "Upk1b"),
+  ncol = 2,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "Epicardial lineage markers",
+    caption = "Final object: 5 retained cell types, cluster resolution 0.6"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(epicardial_markers,
+       filename = file.path(new_out_dir, "06-umap.epicardial_genes.png"),
+       width = 16,
+       height = 8)
+```
+
+- Mesenchymal lineage
+
+```{r}
+mesenchymal_markers <- FeaturePlot(
+  object = final_interesting_cells_0.6,
+  features = c("Postn", "Cthrc1"),
+  ncol = 2,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "Mesenchymal lineage markers",
+    caption = "Final object: 5 retained cell types, cluster resolution 0.6"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(mesenchymal_markers,
+       filename = file.path(new_out_dir, "06-umap.mesenchymal_genes.png"),
+       width = 16,
+       height = 8)
+```
+
+- Myocardial lineage
+
+```{r}
+myocardial_markers <- FeaturePlot(
+  object = final_interesting_cells_0.6,
+  features = c("Myh7", "Myl4"),
+  ncol = 2,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "Myocardial lineage markers",
+    caption = "Final object: 5 retained cell types, cluster resolution 0.6"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(myocardial_markers,
+       filename = file.path(new_out_dir, "06-umap.myocardial_genes.png"),
+       width = 16,
+       height = 8)
+```
+
+- Endocardial lineage
+
+```{r}
+endocardial_markers <- FeaturePlot(
+  object = final_interesting_cells_0.6,
+  features = c("Ecscr", "Cdh5"),
+  ncol = 2,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "Endocardial lineage markers",
+    caption = "Final object: 5 retained cell types, cluster resolution 0.6"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(endocardial_markers,
+       filename = file.path(new_out_dir, "06-umap.endocardial_genes.png"),
+       width = 16,
+       height = 8)
+```
+
+- VSMC lineage
+
+```{r}
+vsmc_markers <- FeaturePlot(
+  object = final_interesting_cells_0.6,
+  features = c("Cxcl12", "Rgs5"),
+  ncol = 2,                      # side-by-side panels
+  order = TRUE                   # high-expression cells on top
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "VSMC lineage markers",
+    caption = "Final object: 5 retained cell types, cluster resolution 0.6"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(vsmc_markers,
+       filename = file.path(new_out_dir, "06-umap.vsmc_genes.png"),
+       width = 16,
+       height = 8)
+```
+
+## Four-panel core marker FeaturePlots
+
+- Core 4-gene marker set per cell type, read directly from the dot plot on
+  slide 7 of the lab meeting deck (`outDir/16-lab_meeting_deck/`) - no
+  equivalent list exists as a reusable variable anywhere in the codebase, so
+  this is transcribed from that figure.
+
+- Myocardium
+
+```{r}
+myocardium_4marker <- FeaturePlot(
+  object = final_interesting_cells_0.6,
+  features = c("Myh7", "Myl4", "Ttn", "Pln"),
+  ncol = 2,
+  order = TRUE
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "Myocardium core markers",
+    caption = "Final object: 5 retained cell types, cluster resolution 0.6"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(myocardium_4marker,
+       filename = file.path(new_out_dir, "06-umap.myocardium_4marker_genes.png"),
+       width = 12,
+       height = 10)
+```
+
+- VSMC
+
+```{r}
+vsmc_4marker <- FeaturePlot(
+  object = final_interesting_cells_0.6,
+  features = c("Rgs5", "Cxcl12", "Iigp1", "Eln"),
+  ncol = 2,
+  order = TRUE
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "VSMC core markers",
+    caption = "Final object: 5 retained cell types, cluster resolution 0.6"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(vsmc_4marker,
+       filename = file.path(new_out_dir, "06-umap.vsmc_4marker_genes.png"),
+       width = 12,
+       height = 10)
+```
+
+- Endocardium
+
+```{r}
+endocardium_4marker <- FeaturePlot(
+  object = final_interesting_cells_0.6,
+  features = c("Ecscr", "Cdh5", "Tie1", "Rasip1"),
+  ncol = 2,
+  order = TRUE
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "Endocardium core markers",
+    caption = "Final object: 5 retained cell types, cluster resolution 0.6"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(endocardium_4marker,
+       filename = file.path(new_out_dir, "06-umap.endocardium_4marker_genes.png"),
+       width = 12,
+       height = 10)
+```
+
+- Epicardium
+
+```{r}
+epicardium_4marker <- FeaturePlot(
+  object = final_interesting_cells_0.6,
+  features = c("Wt1", "Upk3b", "Upk1b", "Aldh1a2"),
+  ncol = 2,
+  order = TRUE
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "Epicardium core markers",
+    caption = "Final object: 5 retained cell types, cluster resolution 0.6"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(epicardium_4marker,
+       filename = file.path(new_out_dir, "06-umap.epicardium_4marker_genes.png"),
+       width = 12,
+       height = 10)
+```
+
+- Mesenchyme
+
+```{r}
+mesenchyme_4marker <- FeaturePlot(
+  object = final_interesting_cells_0.6,
+  features = c("Postn", "Cthrc1", "Vcan", "Papss2"),
+  ncol = 2,
+  order = TRUE
+  ) &
+  scale_colour_gradientn(
+    colours = rev(RColorBrewer::brewer.pal(11, "Spectral")),
+    name = "Expression"
+  ) &
+  plot_annotation(
+    title = "Mesenchyme core markers",
+    caption = "Final object: 5 retained cell types, cluster resolution 0.6"
+  ) &
+  theme_bw(base_size = 14) &
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+save_if(mesenchyme_4marker,
+       filename = file.path(new_out_dir, "06-umap.mesenchyme_4marker_genes.png"),
+       width = 12,
+       height = 10)
+```

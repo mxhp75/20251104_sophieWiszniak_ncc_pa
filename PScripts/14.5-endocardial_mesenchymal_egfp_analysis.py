@@ -184,11 +184,15 @@ try:
 
     score_df = adata.obs[list(signatures.keys())]
     argmax_sig = score_df.idxmax(axis=1)
-    max_score  = score_df.max(axis=1)
 
+    # every Endocardium cell gets its best-fitting (argmax) signature,
+    # regardless of sign - a cell with all-negative scores still has a
+    # clear best-fitting subtype among the four, so there's no principled
+    # reason to leave it unclassified. (Previously gated on max_score > 0,
+    # which left 110 cells as "Endocardium_unclassified".)
     endocardial_subtype = np.where(
         adata.obs["new_celltypes"] == "Endocardium",
-        np.where(max_score > 0, argmax_sig, "Endocardium_unclassified"),
+        argmax_sig,
         adata.obs["new_celltypes"].astype(str)
     )
     adata.obs["endocardial_subtype"] = pd.Categorical(endocardial_subtype)
@@ -206,7 +210,6 @@ try:
         "Angiogenic":  "#FF7F00",
         "Valve":       "#377EB8",
         "Arterial":    "#E41A1C",
-        "Endocardium_unclassified": "#999999",
         "Mesenchyme":  "#4DAF4A",
     }
     palette = [subtype_colours[c] for c in adata.obs["endocardial_subtype"].cat.categories]

@@ -1,0 +1,237 @@
+---
+title:  "Harmony batch-integration check"
+author: "Melanie Smith"
+date:   "2026-10-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Purpose: the project has used a plain merged (not integrated) Seurat object
+throughout, on the basis of an earlier visual-only check (PCA/UMAP coloured
+by `orig.ident` in `02-initial_QC.Rmd`) that batch effects weren't an issue.
+Sophie is now asking questions about transitions within the mesenchyme, so
+before looking at that we're revisiting whether integration changes the
+picture. Batch is defined here as **sequencing run** (E11.5 vs E12.5 - the
+two stages were sequenced separately), not individual sample, per discussion
+2026-10-21.
+
+This does NOT replace `final_interesting_cells_0.6.rds` - it produces a
+separate, comparable object with the same clustering parameters (dims = 30,
+resolution = 0.6, matching `06-cellType_filter.Rmd`) so the two can be
+compared side by side before deciding whether integration should become the
+new baseline.
+
+# Clean-up environment
+
+```{r clean-up}
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE)
+set.seed(42) # set seed for reproducibility
+```
+
+# Load libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+
+# Core single cell
+library(Seurat)
+library(harmony)
+
+# additional plotting functions
+library(patchwork)
+```
+
+# Set project directories
+
+```{r}
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+data_dir <- file.path(project_repo_dir, "outDir", "06-cluster_marker_genes")
+out_dir  <- file.path(project_repo_dir, "outDir", "06.5-harmony_batch_integration_check")
+
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir, recursive = TRUE)
+}
+```
+
+# Load the full merged object
+
+- Same object used by every `07.x`/`08.x` script - post-QC, post-filtering,
+  single joined `RNA` layer across all 4 samples, clustered at resolution
+  0.6 (30 PCs) in `06-cellType_filter.Rmd`.
+
+```{r}
+re_embed_interesting_cells <- readRDS(file.path(data_dir, "final_interesting_cells_0.6.rds"))
+stopifnot(inherits(re_embed_interesting_cells, "Seurat"))
+
+DefaultAssay(re_embed_interesting_cells) <- "RNA"
+
+# sanity check: batch variable (sequencing run = stage)
+table(re_embed_interesting_cells$stage, re_embed_interesting_cells$orig.ident)
+```
+
+# Re-split the RNA layer by sequencing run (stage)
+
+- `IntegrateLayers()` requires per-batch split layers. The object currently
+  has a single joined layer (`JoinLayers()` was called when it was first
+  merged in `02-initial_QC.Rmd`), so split it back out by `stage`
+  (e11 vs e12 = the two sequencing runs).
+
+```{r}
+re_embed_interesting_cells[["RNA"]] <- split(
+  re_embed_interesting_cells[["RNA"]],
+  f = re_embed_interesting_cells$stage
+)
+
+# confirm the split worked - should see per-stage layers now
+re_embed_interesting_cells[["RNA"]]
+```
+
+# Pre-integration processing
+
+- Same `LogNormalize` approach used throughout this project (no SCTransform
+  anywhere in the pipeline) - `NormalizeData -> FindVariableFeatures ->
+  ScaleData -> RunPCA`, run on the split-layer object as Seurat v5's
+  integration workflow expects.
+
+```{r pre-integration-processing}
+re_embed_interesting_cells <- NormalizeData(re_embed_interesting_cells)
+re_embed_interesting_cells <- FindVariableFeatures(re_embed_interesting_cells)
+re_embed_interesting_cells <- ScaleData(re_embed_interesting_cells)
+re_embed_interesting_cells <- RunPCA(re_embed_interesting_cells)
+```
+
+# Harmony integration
+
+```{r harmony-integration}
+re_embed_interesting_cells <- IntegrateLayers(
+  object         = re_embed_interesting_cells,
+  method         = HarmonyIntegration,
+  orig.reduction = "pca",
+  new.reduction  = "harmony",
+  verbose        = FALSE
+)
+
+# re-join layers after integration
+re_embed_interesting_cells[["RNA"]] <- JoinLayers(re_embed_interesting_cells[["RNA"]])
+```
+
+# Cluster and embed on the Harmony-corrected space
+
+- Same `dims`/resolution as the original clustering (`06-cellType_filter.Rmd`:
+  `dims = 1:30`, `resolution = 0.6`) for a fair before/after comparison.
+  Stored under new names so the original `umap`/`seurat_clusters` used
+  everywhere downstream are left untouched.
+
+```{r cluster-harmony}
+re_embed_interesting_cells <- FindNeighbors(re_embed_interesting_cells, reduction = "harmony", dims = 1:30)
+re_embed_interesting_cells <- FindClusters(re_embed_interesting_cells, resolution = 0.6, cluster.name = "harmony_clusters")
+re_embed_interesting_cells <- RunUMAP(re_embed_interesting_cells, reduction = "harmony", dims = 1:30, reduction.name = "umap.harmony")
+```
+
+# Save the integrated object
+
+```{r}
+saveRDS(
+  re_embed_interesting_cells,
+  file = file.path(out_dir, "final_interesting_cells_0.6_harmony_integrated.rds")
+)
+```
+
+# Compare: original merge vs Harmony integration
+
+## UMAP coloured by sequencing run (stage) - the batch-mixing check
+
+```{r compare-batch-mixing, fig.width=14, fig.height=6}
+p1 <- DimPlot(re_embed_interesting_cells, reduction = "umap", group.by = "stage") +
+  ggtitle("Original (merged, not integrated)")
+
+p2 <- DimPlot(re_embed_interesting_cells, reduction = "umap.harmony", group.by = "stage") +
+  ggtitle("Harmony-integrated")
+
+p_batch <- p1 + p2
+ggsave(
+  plot = p_batch,
+  filename = file.path(out_dir, "compare_umap_by_stage.png"),
+  width = 14, height = 6
+)
+p_batch
+```
+
+## UMAP coloured by cell type - did biology survive integration?
+
+```{r compare-celltypes, fig.width=14, fig.height=6}
+p3 <- DimPlot(re_embed_interesting_cells, reduction = "umap", group.by = "new_celltypes") +
+  ggtitle("Original - cell type")
+
+p4 <- DimPlot(re_embed_interesting_cells, reduction = "umap.harmony", group.by = "new_celltypes") +
+  ggtitle("Harmony-integrated - cell type")
+
+p_celltype <- p3 + p4
+ggsave(
+  plot = p_celltype,
+  filename = file.path(out_dir, "compare_umap_by_celltype.png"),
+  width = 14, height = 6
+)
+p_celltype
+```
+
+## UMAP coloured by genotype
+
+```{r compare-genotype, fig.width=14, fig.height=6}
+p5 <- DimPlot(re_embed_interesting_cells, reduction = "umap", group.by = "genotype") +
+  ggtitle("Original - genotype")
+
+p6 <- DimPlot(re_embed_interesting_cells, reduction = "umap.harmony", group.by = "genotype") +
+  ggtitle("Harmony-integrated - genotype")
+
+p_genotype <- p5 + p6
+ggsave(
+  plot = p_genotype,
+  filename = file.path(out_dir, "compare_umap_by_genotype.png"),
+  width = 14, height = 6
+)
+p_genotype
+```
+
+## Cluster composition: original vs Harmony clusters
+
+- Does Harmony clustering (at the same resolution) recover materially the
+  same groups, or does it split/merge things differently?
+
+```{r compare-clusters}
+cluster_crosstab <- table(
+  original = re_embed_interesting_cells$seurat_clusters,
+  harmony  = re_embed_interesting_cells$harmony_clusters
+)
+
+cluster_crosstab
+
+write.csv(
+  as.data.frame.matrix(cluster_crosstab),
+  file.path(out_dir, "cluster_crosstab_original_vs_harmony.csv")
+)
+
+# how many cells per original cell type land in each harmony cluster
+celltype_harmony_crosstab <- table(
+  new_celltypes   = re_embed_interesting_cells$new_celltypes,
+  harmony_cluster = re_embed_interesting_cells$harmony_clusters
+)
+
+celltype_harmony_crosstab
+
+write.csv(
+  as.data.frame.matrix(celltype_harmony_crosstab),
+  file.path(out_dir, "celltype_by_harmony_cluster.csv")
+)
+```

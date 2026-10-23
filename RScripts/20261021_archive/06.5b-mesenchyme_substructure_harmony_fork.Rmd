@@ -1,0 +1,137 @@
+---
+title:  "Mesenchyme sub-structure before/after Harmony (exploratory fork)"
+author: "Melanie Smith"
+date:   "2026-10-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Purpose: follow-up to `06.5-harmony_batch_integration_check.Rmd`, which found
+a stage-driven (e11 vs e12) separation concentrated specifically in the
+Mesenchyme population on the original merged UMAP, resolved by Harmony
+integration. This script visualises the existing mesenchyme subtype labels
+(EndoMT_derived / E11_NCC / E12_NCC_Vegfa / etc., from
+`14.9-export_subtype_metadata_for_propeller.py`) on both the original and
+Harmony-integrated full-dataset UMAPs, to see whether that sub-structure
+looks different before vs after integration.
+
+**This is a standalone exploratory fork** - it only reads already-saved
+outputs (the Harmony-integrated object from `06.5` and the subtype CSV from
+`14.9`) and does not modify, re-run, or feed back into any existing script
+or pipeline object.
+
+# Clean-up environment
+
+```{r clean-up}
+rm(list = ls(all.names = TRUE))
+gc()
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE)
+set.seed(42)
+```
+
+# Load libraries
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(Seurat)
+library(patchwork)
+```
+
+# Set project directories
+
+```{r}
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+harmony_dir <- file.path(project_repo_dir, "outDir", "06.5-harmony_batch_integration_check")
+subtype_csv <- file.path(
+  project_repo_dir, "outDir", "14-rna_velocity", "endocardial_mesenchymal_egfp",
+  "subtype_proportions_bootstrap", "all_samples_subtype_metadata.csv"
+)
+out_dir <- harmony_dir # same exploratory output folder, no new pipeline step
+```
+
+# Load the Harmony-integrated object and mesenchyme subtype labels
+
+```{r}
+obj <- readRDS(file.path(harmony_dir, "final_interesting_cells_0.6_harmony_integrated.rds"))
+
+subtype_meta <- read.csv(subtype_csv, row.names = 1)
+
+# confirm every subtype-labelled barcode exists in this object (same cells,
+# same barcode format - the 14.x velocity object was built from this one)
+stopifnot(all(rownames(subtype_meta) %in% colnames(obj)))
+
+# join mesenchyme_subtype onto the full object; non-mesenchyme cells get NA
+obj$mesenchyme_subtype <- subtype_meta[colnames(obj), "mesenchyme_subtype"]
+
+table(obj$mesenchyme_subtype, useNA = "ifany")
+```
+
+# Mesenchyme sub-structure on the full-dataset UMAPs, before vs after Harmony
+
+- Full dataset shown (all 5 cell types, matching the earlier comparison
+  plots) - non-Mesenchyme cells greyed out, Mesenchyme cells coloured by
+  subtype.
+
+```{r mesenchyme-substructure, fig.width=16, fig.height=7}
+subtype_cols <- c(
+  "EndoMT_derived"                  = "#E41A1C",
+  "EndoMT_derived (proliferating)"  = "#FF7F00",
+  "E11_NCC"                         = "#4DAF4A",
+  "E11_NCC (proliferating)"         = "#984EA3",
+  "E12_NCC_Vegfa"                   = "#377EB8",
+  "E12_NCC_Sema3c"                  = "#A65628"
+)
+
+p_original <- DimPlot(
+  obj, reduction = "umap", group.by = "mesenchyme_subtype",
+  cols = subtype_cols, na.value = "grey85", order = TRUE, pt.size = 0.3
+) +
+  ggtitle("Original (merged, not integrated)") +
+  theme(legend.position = "bottom")
+
+p_harmony <- DimPlot(
+  obj, reduction = "umap.harmony", group.by = "mesenchyme_subtype",
+  cols = subtype_cols, na.value = "grey85", order = TRUE, pt.size = 0.3
+) +
+  ggtitle("Harmony-integrated") +
+  theme(legend.position = "bottom")
+
+p_substructure <- p_original + p_harmony
+ggsave(
+  plot = p_substructure,
+  filename = file.path(out_dir, "compare_umap_mesenchyme_subtype.png"),
+  width = 16, height = 7
+)
+p_substructure
+```
+
+# Same thing, split by stage - does the subtype structure separate by e11/e12 within Mesenchyme specifically
+
+```{r mesenchyme-substructure-by-stage, fig.width=16, fig.height=14}
+p_original_stage <- DimPlot(
+  obj, reduction = "umap", group.by = "mesenchyme_subtype", split.by = "stage",
+  cols = subtype_cols, na.value = "grey85", order = TRUE, pt.size = 0.3
+) +
+  plot_annotation(title = "Original (merged, not integrated) — split by stage")
+
+p_harmony_stage <- DimPlot(
+  obj, reduction = "umap.harmony", group.by = "mesenchyme_subtype", split.by = "stage",
+  cols = subtype_cols, na.value = "grey85", order = TRUE, pt.size = 0.3
+) +
+  plot_annotation(title = "Harmony-integrated — split by stage")
+
+p_substructure_stage <- wrap_elements(p_original_stage) / wrap_elements(p_harmony_stage)
+ggsave(
+  plot = p_substructure_stage,
+  filename = file.path(out_dir, "compare_umap_mesenchyme_subtype_by_stage.png"),
+  width = 16, height = 14
+)
+p_substructure_stage
+```
