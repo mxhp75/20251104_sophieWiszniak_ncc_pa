@@ -330,11 +330,12 @@ p_combined
 ```
 
 # =============================================================================
-# By stage (e11, e12 separately)
+# By stage (e11, e12 side by side - matches the original deck slide 10 layout)
 # =============================================================================
 
 ```{r bootstrap-by-stage, message=FALSE, warning=FALSE}
 stages <- c("e11", "e12")
+stage_labels <- c(e11 = "E11", e12 = "E12")
 
 by_stage_results <- setNames(
   lapply(stages, function(stg) {
@@ -351,19 +352,69 @@ saveRDS(
   file = file.path(out_dir, "16-bootstrap_propeller_celltype_subtype_by_stage.rds")
 )
 
-stage_plots <- lapply(stages, function(stg) {
-  make_bootstrap_plot(
-    by_stage_results[[stg]]$raw_results,
-    title = glue::glue("Cell-type/subtype proportions — Mib1-KO vs control ({stg})")
-  )
-})
+# single faceted plot (not two separately-scaled plots glued together) so
+# both panels share one x-axis range and one category order, matching the
+# side-by-side E11/E12 style of the original deck slide 10 chart
+raw_combined <- dplyr::bind_rows(
+  lapply(stages, function(stg) {
+    by_stage_results[[stg]]$raw_results %>% dplyr::mutate(stage = stage_labels[[stg]])
+  })
+)
 
-p_by_stage <- patchwork::wrap_plots(stage_plots, ncol = 1)
+# consistent category order across both facets: median PropRatio pooled
+# across stages (not each facet's own order, which would make the two
+# panels harder to compare directly)
+cat_order <- raw_combined %>%
+  dplyr::group_by(BaselineProp.clusters) %>%
+  dplyr::summarise(med = median(PropRatio, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::arrange(med) %>%
+  dplyr::pull(BaselineProp.clusters)
+
+outlier_fence <- 3
+n_before <- nrow(raw_combined)
+raw_filtered <- raw_combined %>%
+  dplyr::mutate(log2PR = log2(PropRatio)) %>%
+  dplyr::filter(is.finite(log2PR)) %>%
+  dplyr::group_by(stage, BaselineProp.clusters) %>%
+  dplyr::mutate(
+    q1  = quantile(log2PR, 0.25, na.rm = TRUE),
+    q3  = quantile(log2PR, 0.75, na.rm = TRUE),
+    iqr = q3 - q1
+  ) %>%
+  dplyr::filter(
+    iqr == 0 | dplyr::between(log2PR, q1 - outlier_fence * iqr, q3 + outlier_fence * iqr)
+  ) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(BaselineProp.clusters = factor(BaselineProp.clusters, levels = cat_order))
+
+n_dropped <- n_before - nrow(raw_filtered)
+if (n_dropped > 0) {
+  message(glue::glue("by-stage: dropped {n_dropped} bootstrap draw(s) (non-finite or extreme outlier) before plotting"))
+}
+
+p_by_stage <- ggplot(raw_filtered, aes(x = log2(PropRatio), y = BaselineProp.clusters, fill = BaselineProp.clusters)) +
+  ggdist::stat_halfeye(
+    adjust = 0.7, width = 0.6, justification = -0.2,
+    .width = c(0.5, 0.95), point_colour = NA, alpha = 0.8
+  ) +
+  scale_fill_manual(values = composite_cols, guide = "none") +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "red") +
+  facet_wrap(~stage, ncol = 2) +
+  labs(
+    title = "Cell-type/subtype proportions — Mib1-KO vs control",
+    x     = expression(Log[2]~"Proportion Ratio (Mib1 KO / Control), 100 bootstraps"),
+    y     = NULL
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    strip.text = element_text(face = "bold", size = 12)
+  )
 
 ggsave(
   plot = p_by_stage,
   filename = file.path(out_dir, "16-bootstrap_celltype_subtype_by_stage.png"),
-  width = 9, height = 14
+  width = 13, height = 7, dpi = 300
 )
 
 p_by_stage

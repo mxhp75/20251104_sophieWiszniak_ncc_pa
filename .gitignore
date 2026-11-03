@@ -6,6 +6,13 @@
 .RData
 .Ruserdata
 
+# Python
+__pycache__/
+*.pyc
+
+# IDE
+.idea/
+
 # Data files (add your patterns)
 *.csv
 *.rds

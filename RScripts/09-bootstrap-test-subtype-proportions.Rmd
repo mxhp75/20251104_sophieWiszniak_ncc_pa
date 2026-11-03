@@ -65,9 +65,37 @@ data_dir <- file.path(
 )
 out_dir <- data_dir
 
+# plots (not .rds results) are also saved here, alongside the composition
+# bar charts and the combined 13-category propeller plot
+# (16-celltype_subtype_composition_barchart.Rmd /
+# 16-propeller_celltype_subtype_breakdown.Rmd) - single canonical location
+# for everything presentation-facing, same colour palette throughout
+deck_dir <- file.path(project_repo_dir, "outDir", "16-lab_meeting_deck", "celltype_subtype_composition")
+
 if (!dir.exists(out_dir)) {
   dir.create(out_dir, recursive = TRUE)
 }
+if (!dir.exists(deck_dir)) {
+  dir.create(deck_dir, recursive = TRUE)
+}
+
+# same palette as 16-celltype_subtype_composition_barchart.Rmd /
+# 16-propeller_celltype_subtype_breakdown.Rmd and the Python FDG scripts
+# (14.5/14.8/14.12)
+endocardial_cols <- c(
+  "Ventricular" = "#66C2A5",
+  "Angiogenic"  = "#FC8D62",
+  "Valve"       = "#8DA0CB",
+  "Arterial"    = "#E78AC3"
+)
+mesenchyme_cols <- c(
+  "EndoMT_derived"                  = "#1B9E77",
+  "EndoMT_derived (proliferating)"  = "#D95F02",
+  "E11_NCC"                         = "#7570B3",
+  "E11_NCC (proliferating)"         = "#E7298A",
+  "E12_NCC_Vegfa"                   = "#66A61E",
+  "E12_NCC_Sema3c"                  = "#E6AB02"
+)
 ```
 
 # Load per-cell subtype metadata
@@ -198,8 +226,9 @@ run_bootstrap_propeller <- function(meta, cluster_col, n_bootstraps = 100, n_pse
 
 # shared plot builder — one halfeye distribution per subtype, log2(PropRatio)
 # PropRatio is Mib1_KO / control (see genotype factor levels above), so
-# positive values = more of that subtype in the KO
-make_subtype_bootstrap_plot <- function(raw_results, title, outlier_fence = 3) {
+# positive values = more of that subtype in the KO. fill_values is a named
+# colour vector keyed by subtype (endocardial_cols or mesenchyme_cols).
+make_subtype_bootstrap_plot <- function(raw_results, title, fill_values, outlier_fence = 3) {
 
   n_before <- nrow(raw_results)
 
@@ -239,7 +268,7 @@ make_subtype_bootstrap_plot <- function(raw_results, title, outlier_fence = 3) {
 
   ggplot(
     raw_results,
-    aes(x = log2(PropRatio), y = BaselineProp.clusters)
+    aes(x = log2(PropRatio), y = BaselineProp.clusters, fill = BaselineProp.clusters)
   ) +
     ggdist::stat_halfeye(
       adjust        = 0.7,
@@ -247,9 +276,9 @@ make_subtype_bootstrap_plot <- function(raw_results, title, outlier_fence = 3) {
       justification = -0.2,
       .width        = c(0.5, 0.95),
       point_colour  = NA,
-      alpha         = 0.8,
-      fill          = "#377EB8"
+      alpha         = 0.8
     ) +
+    scale_fill_manual(values = fill_values, guide = "none") +
     geom_vline(xintercept = 0, linetype = "dashed", colour = "red") +
     labs(
       title = title,
@@ -286,13 +315,19 @@ saveRDS(
 
 p_endocardial_combined <- make_subtype_bootstrap_plot(
   endocardial_combined$raw_results,
-  title = "Endocardial subtype proportions — Mib1-KO vs control (e11 + e12 combined)"
+  title = "Endocardial subtype proportions — Mib1-KO vs control (e11 + e12 combined)",
+  fill_values = endocardial_cols
 )
 
 ggsave(
   plot     = p_endocardial_combined,
   filename = file.path(out_dir, "bootstrap_endocardial_subtype_combined.png"),
-  width = 8, height = 5
+  width = 9.5, height = 5, dpi = 300
+)
+ggsave(
+  plot     = p_endocardial_combined,
+  filename = file.path(deck_dir, "16-bootstrap_endocardial_subtype_combined.png"),
+  width = 9.5, height = 5, dpi = 300
 )
 
 p_endocardial_combined
@@ -323,13 +358,19 @@ saveRDS(
 
 p_mesenchyme_combined <- make_subtype_bootstrap_plot(
   mesenchyme_combined$raw_results,
-  title = "Mesenchyme subtype proportions — Mib1-KO vs control (e11 + e12 combined)"
+  title = "Mesenchyme subtype proportions — Mib1-KO vs control (e11 + e12 combined)",
+  fill_values = mesenchyme_cols
 )
 
 ggsave(
   plot     = p_mesenchyme_combined,
   filename = file.path(out_dir, "bootstrap_mesenchyme_subtype_combined.png"),
-  width = 8, height = 5
+  width = 9.5, height = 5, dpi = 300
+)
+ggsave(
+  plot     = p_mesenchyme_combined,
+  filename = file.path(deck_dir, "16-bootstrap_mesenchyme_subtype_combined.png"),
+  width = 9.5, height = 5, dpi = 300
 )
 
 p_mesenchyme_combined
@@ -348,6 +389,7 @@ p_mesenchyme_combined
 
 ```{r bootstrap-endocardial-by-stage, message=FALSE, warning=FALSE}
 stages <- unique(subtype_meta$stage)
+stage_labels <- c(e11 = "E11", e12 = "E12")
 
 endocardial_by_stage <- setNames(
   lapply(stages, function(stg) {
@@ -367,19 +409,58 @@ saveRDS(
   file = file.path(out_dir, "bootstrap_propeller_endocardial_subtype_by_stage.rds")
 )
 
-endocardial_stage_plots <- lapply(stages, function(stg) {
-  make_subtype_bootstrap_plot(
-    endocardial_by_stage[[stg]]$raw_results,
-    title = glue::glue("Endocardial subtypes — Mib1-KO vs control ({stg})")
-  )
-})
+# single faceted plot (shared x-axis, consistent category order across both
+# panels) rather than two separately-scaled plots stacked vertically -
+# matches the side-by-side E11/E12 style used for the combined 13-category
+# plot in 16-propeller_celltype_subtype_breakdown.Rmd
+endo_raw_combined <- dplyr::bind_rows(
+  lapply(stages, function(stg) {
+    endocardial_by_stage[[stg]]$raw_results %>% dplyr::mutate(stage = stage_labels[[stg]])
+  })
+)
 
-p_endocardial_by_stage <- patchwork::wrap_plots(endocardial_stage_plots, ncol = 1)
+endo_cat_order <- endo_raw_combined %>%
+  dplyr::group_by(BaselineProp.clusters) %>%
+  dplyr::summarise(med = median(PropRatio, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::arrange(med) %>%
+  dplyr::pull(BaselineProp.clusters)
+
+outlier_fence <- 3
+endo_raw_filtered <- endo_raw_combined %>%
+  dplyr::mutate(log2PR = log2(PropRatio)) %>%
+  dplyr::filter(is.finite(log2PR)) %>%
+  dplyr::group_by(stage, BaselineProp.clusters) %>%
+  dplyr::mutate(
+    q1  = quantile(log2PR, 0.25, na.rm = TRUE),
+    q3  = quantile(log2PR, 0.75, na.rm = TRUE),
+    iqr = q3 - q1
+  ) %>%
+  dplyr::filter(iqr == 0 | dplyr::between(log2PR, q1 - outlier_fence * iqr, q3 + outlier_fence * iqr)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(BaselineProp.clusters = factor(BaselineProp.clusters, levels = endo_cat_order))
+
+p_endocardial_by_stage <- ggplot(endo_raw_filtered, aes(x = log2(PropRatio), y = BaselineProp.clusters, fill = BaselineProp.clusters)) +
+  ggdist::stat_halfeye(adjust = 0.7, width = 0.6, justification = -0.2, .width = c(0.5, 0.95), point_colour = NA, alpha = 0.8) +
+  scale_fill_manual(values = endocardial_cols, guide = "none") +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "red") +
+  facet_wrap(~stage, ncol = 2) +
+  labs(
+    title = "Endocardial subtype proportions — Mib1-KO vs control",
+    x     = expression(Log[2]~"Proportion Ratio (Mib1 KO / Control), 100 bootstraps"),
+    y     = NULL
+  ) +
+  theme_bw() +
+  theme(panel.grid.major.y = element_blank(), strip.text = element_text(face = "bold", size = 12))
 
 ggsave(
   plot     = p_endocardial_by_stage,
   filename = file.path(out_dir, "bootstrap_endocardial_subtype_by_stage.png"),
-  width = 8, height = 5 * length(stages)
+  width = 13, height = 7, dpi = 300
+)
+ggsave(
+  plot     = p_endocardial_by_stage,
+  filename = file.path(deck_dir, "16-bootstrap_endocardial_subtype_by_stage.png"),
+  width = 13, height = 7, dpi = 300
 )
 
 p_endocardial_by_stage
@@ -409,19 +490,53 @@ saveRDS(
   file = file.path(out_dir, "bootstrap_propeller_mesenchyme_subtype_by_stage.rds")
 )
 
-mesenchyme_stage_plots <- lapply(stages, function(stg) {
-  make_subtype_bootstrap_plot(
-    mesenchyme_by_stage[[stg]]$raw_results,
-    title = glue::glue("Mesenchyme subtypes — Mib1-KO vs control ({stg})")
-  )
-})
+mes_raw_combined <- dplyr::bind_rows(
+  lapply(stages, function(stg) {
+    mesenchyme_by_stage[[stg]]$raw_results %>% dplyr::mutate(stage = stage_labels[[stg]])
+  })
+)
 
-p_mesenchyme_by_stage <- patchwork::wrap_plots(mesenchyme_stage_plots, ncol = 1)
+mes_cat_order <- mes_raw_combined %>%
+  dplyr::group_by(BaselineProp.clusters) %>%
+  dplyr::summarise(med = median(PropRatio, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::arrange(med) %>%
+  dplyr::pull(BaselineProp.clusters)
+
+mes_raw_filtered <- mes_raw_combined %>%
+  dplyr::mutate(log2PR = log2(PropRatio)) %>%
+  dplyr::filter(is.finite(log2PR)) %>%
+  dplyr::group_by(stage, BaselineProp.clusters) %>%
+  dplyr::mutate(
+    q1  = quantile(log2PR, 0.25, na.rm = TRUE),
+    q3  = quantile(log2PR, 0.75, na.rm = TRUE),
+    iqr = q3 - q1
+  ) %>%
+  dplyr::filter(iqr == 0 | dplyr::between(log2PR, q1 - outlier_fence * iqr, q3 + outlier_fence * iqr)) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(BaselineProp.clusters = factor(BaselineProp.clusters, levels = mes_cat_order))
+
+p_mesenchyme_by_stage <- ggplot(mes_raw_filtered, aes(x = log2(PropRatio), y = BaselineProp.clusters, fill = BaselineProp.clusters)) +
+  ggdist::stat_halfeye(adjust = 0.7, width = 0.6, justification = -0.2, .width = c(0.5, 0.95), point_colour = NA, alpha = 0.8) +
+  scale_fill_manual(values = mesenchyme_cols, guide = "none") +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "red") +
+  facet_wrap(~stage, ncol = 2) +
+  labs(
+    title = "Mesenchyme subtype proportions — Mib1-KO vs control",
+    x     = expression(Log[2]~"Proportion Ratio (Mib1 KO / Control), 100 bootstraps"),
+    y     = NULL
+  ) +
+  theme_bw() +
+  theme(panel.grid.major.y = element_blank(), strip.text = element_text(face = "bold", size = 12))
 
 ggsave(
   plot     = p_mesenchyme_by_stage,
   filename = file.path(out_dir, "bootstrap_mesenchyme_subtype_by_stage.png"),
-  width = 8, height = 5 * length(stages)
+  width = 13, height = 7, dpi = 300
+)
+ggsave(
+  plot     = p_mesenchyme_by_stage,
+  filename = file.path(deck_dir, "16-bootstrap_mesenchyme_subtype_by_stage.png"),
+  width = 13, height = 7, dpi = 300
 )
 
 p_mesenchyme_by_stage

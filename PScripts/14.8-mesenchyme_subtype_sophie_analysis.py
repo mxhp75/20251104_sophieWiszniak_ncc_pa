@@ -93,14 +93,19 @@ cluster_to_name = {
     "10": "E12_NCC_Sema3c",
 }
 
+# same palette as the R-side propeller/bar-chart scripts
+# (16-celltype_subtype_composition_barchart.Rmd's mesenchyme_cols) -
+# deliberately distinct from celltype_cols (Myocardium/VSMC/Epicardium
+# haven't been subtyped, so they keep their original broad-cluster colours
+# and shouldn't collide with these)
 subtype_colours = {
-    "EndoMT_derived":                "#E41A1C",
-    "EndoMT_derived (proliferating)": "#FF7F00",
-    "E11_NCC":                        "#4DAF4A",
-    "E11_NCC (proliferating)":        "#984EA3",
-    "E12_NCC_Vegfa":                  "#377EB8",
-    "E12_NCC_Sema3c":                 "#A65628",
-    "Endocardium":                    "#F781BF",
+    "EndoMT_derived":                "#1B9E77",
+    "EndoMT_derived (proliferating)": "#D95F02",
+    "E11_NCC":                        "#7570B3",
+    "E11_NCC (proliferating)":        "#E7298A",
+    "E12_NCC_Vegfa":                  "#66A61E",
+    "E12_NCC_Sema3c":                 "#E6AB02",
+    "Endocardium":                    "#D3D3D3",
     "other":                          (0.85, 0.85, 0.85, 1.0),  # defensive fallback only - empirically unused (every Mesenchyme cell maps to one of the 6 clusters above)
 }
 
@@ -147,12 +152,22 @@ pct_by_genotype.to_csv(os.path.join(analysis_dir, "mesenchyme_subtype_pct_by_gen
 # same style as 14.5's endocardial_subtype plot
 #-----------------------------------------------------------------------------------
 
-palette = [subtype_colours[c] for c in adata.obs["mesenchyme_subtype"].cat.categories]
+mesenchyme_categories = list(adata.obs["mesenchyme_subtype"].cat.categories)
+palette = [subtype_colours[c] for c in mesenchyme_categories]
 
 for basis, basis_label in [("draw_graph_fa", "fdg"), ("umap_spliced", "umap")]:
-    sc.pl.embedding(
+    ax = sc.pl.embedding(
         adata, basis=basis, color="mesenchyme_subtype", palette=palette,
-        title=f"all_samples - Mesenchyme subtype (Sophie) - {basis_label}", show=False
+        legend_loc=None, title="", show=False
+    )
+    legend_handles = [
+        plt.Line2D([0], [0], marker="o", linestyle="", markersize=8, color=subtype_colours[c])
+        for c in mesenchyme_categories
+    ]
+    ax.legend(
+        handles=legend_handles, labels=mesenchyme_categories,
+        loc="upper center", bbox_to_anchor=(0.5, -0.1),
+        ncol=min(len(mesenchyme_categories), 4), frameon=False, fontsize=9
     )
     plt.savefig(
         os.path.join(analysis_dir, f"all_samples_mesenchyme_subtype_sophie_{basis_label}.png"),
@@ -160,5 +175,32 @@ for basis, basis_label in [("draw_graph_fa", "fdg"), ("umap_spliced", "umap")]:
     )
     plt.close()
 
+# e11 / e12 side by side, same shared embedding (not re-fit per stage) -
+# same style as the genotype-split EGFP FDG (14.10)
+for basis, basis_label in [("draw_graph_fa", "fdg"), ("umap_spliced", "umap")]:
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    for ax, stg in zip(axes, ["e11", "e12"]):
+        sub = adata[adata.obs["stage"] == stg]
+        sc.pl.embedding(
+            sub, basis=basis, color="mesenchyme_subtype", palette=palette,
+            legend_loc=None, title=stg.upper(), ax=ax, show=False
+        )
+    legend_handles = [
+        plt.Line2D([0], [0], marker="o", linestyle="", markersize=8, color=subtype_colours[c])
+        for c in mesenchyme_categories
+    ]
+    fig.legend(
+        handles=legend_handles, labels=mesenchyme_categories,
+        loc="lower center", ncol=min(len(mesenchyme_categories), 4),
+        frameon=False, fontsize=9, bbox_to_anchor=(0.5, -0.05)
+    )
+    fig.tight_layout()
+    fig.savefig(
+        os.path.join(analysis_dir, f"all_samples_mesenchyme_subtype_sophie_{basis_label}_by_stage.png"),
+        dpi=300, bbox_inches="tight"
+    )
+    plt.close(fig)
+
+print("Saved mesenchyme_subtype by-stage plots")
 print("\nSaved mesenchyme_subtype plots and genotype breakdown CSVs")
 print("Finished: 14.8 Mesenchyme subtype (Sophie) analysis")

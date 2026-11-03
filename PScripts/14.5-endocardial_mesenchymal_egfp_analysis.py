@@ -205,19 +205,35 @@ try:
         os.path.join(analysis_dir, "all_samples_endocardial_subtype_assignments.csv")
     )
 
+    # same palette as the R-side propeller/bar-chart scripts
+    # (16-celltype_subtype_composition_barchart.Rmd's endocardial_cols) -
+    # deliberately distinct from celltype_cols (Myocardium/VSMC/Epicardium
+    # haven't been subtyped, so they keep their original broad-cluster
+    # colours and shouldn't collide with these)
     subtype_colours = {
-        "Ventricular": "#984EA3",
-        "Angiogenic":  "#FF7F00",
-        "Valve":       "#377EB8",
-        "Arterial":    "#E41A1C",
-        "Mesenchyme":  "#4DAF4A",
+        "Ventricular": "#66C2A5",
+        "Angiogenic":  "#FC8D62",
+        "Valve":       "#8DA0CB",
+        "Arterial":    "#E78AC3",
+        "Mesenchyme":  "#D3D3D3",
     }
     palette = [subtype_colours[c] for c in adata.obs["endocardial_subtype"].cat.categories]
 
+    endo_categories = list(adata.obs["endocardial_subtype"].cat.categories)
+
     for basis, basis_label in [("draw_graph_fa", "fdg"), ("umap_spliced", "umap")]:
-        sc.pl.embedding(
+        ax = sc.pl.embedding(
             adata, basis=basis, color="endocardial_subtype", palette=palette,
-            title=f"all_samples — endocardial subtype — {basis_label}", show=False
+            legend_loc=None, title="", show=False
+        )
+        legend_handles = [
+            plt.Line2D([0], [0], marker="o", linestyle="", markersize=8, color=subtype_colours[c])
+            for c in endo_categories
+        ]
+        ax.legend(
+            handles=legend_handles, labels=endo_categories,
+            loc="upper center", bbox_to_anchor=(0.5, -0.1),
+            ncol=min(len(endo_categories), 4), frameon=False, fontsize=9
         )
         plt.savefig(
             os.path.join(label_dir, f"all_samples_endocardial_subtype_{basis_label}.png"),
@@ -226,6 +242,34 @@ try:
         plt.close()
 
     print("Saved endocardial_subtype plots")
+
+    # e11 / e12 side by side, same shared embedding (not re-fit per stage) -
+    # same style as the genotype-split EGFP FDG (14.10)
+    for basis, basis_label in [("draw_graph_fa", "fdg"), ("umap_spliced", "umap")]:
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        for ax, stg in zip(axes, ["e11", "e12"]):
+            sub = adata[adata.obs["stage"] == stg]
+            sc.pl.embedding(
+                sub, basis=basis, color="endocardial_subtype", palette=palette,
+                legend_loc=None, title=stg.upper(), ax=ax, show=False
+            )
+        legend_handles = [
+            plt.Line2D([0], [0], marker="o", linestyle="", markersize=8, color=subtype_colours[c])
+            for c in endo_categories
+        ]
+        fig.legend(
+            handles=legend_handles, labels=endo_categories,
+            loc="lower center", ncol=min(len(endo_categories), 4),
+            frameon=False, fontsize=9, bbox_to_anchor=(0.5, -0.05)
+        )
+        fig.tight_layout()
+        fig.savefig(
+            os.path.join(label_dir, f"all_samples_endocardial_subtype_{basis_label}_by_stage.png"),
+            dpi=300, bbox_inches="tight"
+        )
+        plt.close(fig)
+
+    print("Saved endocardial_subtype by-stage plots")
 
 except Exception as e:
     plt.close("all")

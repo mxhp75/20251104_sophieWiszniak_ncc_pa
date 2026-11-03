@@ -323,25 +323,66 @@ p_single_stack <- ggplot(single_stack_summary, aes(x = sample_label, y = pct, fi
   ) +
   scale_fill_manual(values = composite_cols, name = NULL) +
   labs(
-    title = "Cell-type proportions, with Endocardium and Mesenchyme broken into subtypes",
     x = NULL,
-    y = "% of cells per sample",
-    caption = "Endocardium/Mesenchyme subtypes per Sophie's marker gene sets"
+    y = "% of cells per sample"
   ) +
   theme_bw(base_size = 12) +
   theme(
     axis.text.x = element_text(angle = 30, hjust = 1),
-    legend.position = "right"
+    legend.position = "bottom",
+    legend.text = element_text(size = 8)
   ) +
-  guides(fill = guide_legend(ncol = 1))
+  guides(fill = guide_legend(nrow = 4))
 
 p_single_stack
 
 ggsave(
   filename = file.path(out_dir, "16-single_stack_celltype_subtype_breakdown.png"),
   plot = p_single_stack,
-  width = 10,
+  width = 8,
   height = 9,
+  dpi = 300
+)
+```
+
+# =============================================================================
+# Full-dataset UMAP with the composite cell-type/subtype label
+# =============================================================================
+
+- Same composite label as the single-stack bar chart, plotted on the final
+  object's own UMAP (all 24,327 cells, all 5 broad cell types) - Myocardium/
+  VSMC/Epicardium appear as their usual single-colour islands, while the
+  Endocardium and Mesenchyme islands are subdivided by subtype.
+
+```{r full-umap-data}
+re_embed_interesting_cells$composite_celltype <- factor(
+  single_stack_data$composite_celltype[
+    match(colnames(re_embed_interesting_cells), single_stack_data$barcode)
+  ],
+  levels = composite_order
+)
+stopifnot(!anyNA(re_embed_interesting_cells$composite_celltype))
+```
+
+```{r full-umap-plot, fig.width=10, fig.height=8}
+p_full_umap <- DimPlot(
+  re_embed_interesting_cells,
+  reduction = "umap",
+  group.by = "composite_celltype",
+  cols = composite_cols,
+  pt.size = 0.3
+) +
+  labs(title = NULL) +
+  theme(legend.position = "bottom") +
+  guides(colour = guide_legend(nrow = 4, override.aes = list(size = 3)))
+
+p_full_umap
+
+ggsave(
+  filename = file.path(out_dir, "16-full_dataset_umap_celltype_subtype.png"),
+  plot = p_full_umap,
+  width = 10,
+  height = 8,
   dpi = 300
 )
 ```

@@ -40,7 +40,12 @@ human_genes_to_mouse <- function(human_genes){
 
 # Function to create QC metrics then plot them --------------------------------------------------------------------
 
-perform_qc <- function(object, n_dims = 30, clustering_resolution = 0.8, grouping_variable = NULL, dim_reduction = FALSE, plot_out_dir){
+perform_qc <- function(object,
+                       n_dims = 30,
+                       clustering_resolution = 0.8,
+                       grouping_variable = NULL,
+                       dim_reduction = FALSE,
+                       plot_out_dir){
   
   ##########
   ### Checks
@@ -234,13 +239,13 @@ perform_qc <- function(object, n_dims = 30, clustering_resolution = 0.8, groupin
   message("Producing ungrouped QC plots")
   
   p <- object[[]] %>%
-    as_tibble(rownames = "barcode") %>%
-    select(barcode, all_of(qc_metrics)) %>%
-    pivot_longer(-barcode, names_to = "metric", values_to = "value") %>%
-    ggplot(aes(x = metric, y = value)) +
+    tibble::as_tibble(rownames = "barcode") %>%
+    dplyr::select(barcode, all_of(qc_metrics)) %>%
+    tidyr::pivot_longer(-barcode, names_to = "metric", values_to = "value") %>%
+    ggplot2::ggplot(aes(x = metric, y = value)) +
     
     # Right half: density + median line
-    stat_halfeye(
+    ggdist::stat_halfeye(
       side = "right",
       fill = "dodgerblue",
       alpha = 0.5,
@@ -252,7 +257,7 @@ perform_qc <- function(object, n_dims = 30, clustering_resolution = 0.8, groupin
     ) +
     
     # Left half: dots
-    stat_dots(
+    ggdist::stat_dots(
       side = "left",
       alpha = 0.3,
       justification = 1.25,
@@ -268,7 +273,7 @@ perform_qc <- function(object, n_dims = 30, clustering_resolution = 0.8, groupin
     )
   
   print(p)
-  ggsave(
+  ggplot2::ggsave(
     filename = file.path(basic_plot_dir, "02-Violin-ungrouped_QC_metrics.png"),
     plot = p,
     width = 11, height = 9, dpi = 300
@@ -308,17 +313,17 @@ perform_qc <- function(object, n_dims = 30, clustering_resolution = 0.8, groupin
     group_var_sym <- sym(grouping_variable)
     
     p <- object[[]] %>%
-      as_tibble(rownames = "barcode") %>%
-      select(barcode, !!group_var_sym, all_of(qc_metrics)) %>%
-      pivot_longer(
+      tibble::as_tibble(rownames = "barcode") %>%
+      dplyr::select(barcode, !!group_var_sym, all_of(qc_metrics)) %>%
+      tidyr::pivot_longer(
         cols = -c(barcode, !!group_var_sym),
         names_to = "metric",
         values_to = "values"
       ) %>%
-      ggplot(aes(x = !!group_var_sym, y = values)) +
+      ggplot2::ggplot(aes(x = !!group_var_sym, y = values)) +
       
       # Right half: density + median
-      stat_halfeye(
+      ggdist::stat_halfeye(
         side = "right",
         fill = "dodgerblue",
         alpha = 0.5,
@@ -330,7 +335,7 @@ perform_qc <- function(object, n_dims = 30, clustering_resolution = 0.8, groupin
       ) +
       
       # Left half: dots (fixed for categorical x)
-      stat_dots(
+      ggdist::stat_dots(
         side = "left",
         alpha = 0.3,
         justification = 1.25,
@@ -347,7 +352,7 @@ perform_qc <- function(object, n_dims = 30, clustering_resolution = 0.8, groupin
       labs(x = grouping_variable, y = "Value")
     
     print(p)
-    ggsave(
+    ggplot2::ggsave(
       filename = file.path(basic_plot_dir, paste0("03-Violin-QC_metric_by_", grouping_variable, ".png")),
       plot = p,
       width = 13, height = 9, dpi = 300

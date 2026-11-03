@@ -202,8 +202,8 @@ rm(merged)
 gc()
 
 # Store this for now
-dir.create(file.path(out_dir, "03-merged_initial_QC"))
-write_rds(x = joined, file = file.path(out_dir, "03-merged_initial_QC", "joined.rds"))
+# dir.create(file.path(out_dir, "03-merged_initial_QC"))
+# write_rds(x = joined, file = file.path(out_dir, "03-merged_initial_QC", "joined.rds"))
 
 # Initial QC --------------------------------------------------------------
 
@@ -220,8 +220,8 @@ joined <- perform_qc(object = joined,
 gc()
 
 # Store this object
-write_rds(joined,
-          file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.rds"))
+# write_rds(joined,
+#           file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.rds"))
 
 reload <- TRUE
 # Can be useful to close everything down at this point and reload the data below
@@ -885,6 +885,157 @@ joined@meta.data <- joined@meta.data %>%
   dplyr::ungroup() %>%
   tibble::column_to_rownames("cell_id") # put the rownames backn
 
+# violin on nFeatures by doublet status with top >0.5% nFeatures cell highlighted
+# Step 1: Add a highlight metadata column (factor for ggplot coloring)
+joined <- AddMetaData(
+  object = joined,
+  metadata = joined@meta.data$nFeature_filter,
+  col.name = "highlight_nFeature"
+)
+
+# Convert to factor so we can assign specific colors easily
+plot_df <- FetchData(
+  joined,
+  vars = c("nFeature_RNA", "any_doublet", "nFeature_filter", "seurat_clusters")
+)
+
+p <- VlnPlot(
+  joined,
+  features = "nFeature_RNA",
+  group.by = "seurat_clusters",
+  pt.size = 1
+) +
+  scale_y_log10(labels = scales::comma) +
+  labs(
+    title = "nFeature_RNA by Doublet Status (log10 scale)",
+    x = "Doublet Status",
+    y = "Total UMI Counts per Cell (log10)"
+  ) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+p +
+  geom_jitter(
+    data = subset(plot_df, nFeature_filter == TRUE),
+    aes(x = seurat_clusters,
+        y = nFeature_RNA),
+    # color = "red",
+    shape = 21,
+    fill = "red",
+    color = "black",
+    stroke = 0.3,
+    inherit.aes = FALSE
+  ) +
+  NoLegend()
+
+
+# we can also see the high nFeature cells on the umap
+# DimPlot(joined,
+#         group.by = "nFeature_filter")
+# 
+# DimPlot(
+#   joined,
+#   cells.highlight = cells_flagged,
+#   cols.highlight = "red",
+#   cols = "grey80",
+#   pt.size = 0.5
+#   ) + 
+#   labs(title = "UMAP Coloured by High nFeatures",
+#            subtitle = "All Cells",
+#            caption = "Unfiltered, no QC")
+
+DimPlot(joined,
+        reduction = "umap",
+        group.by = "nFeature_filter",
+        label = FALSE,
+        label.size = 7,
+        repel = TRUE,
+        pt.size = 0.5,
+        cols = c("TRUE" = "red",          # red
+                 "FALSE" = "grey70")) +  # light grey
+  labs(title = "UMAP Coloured by High nFeatures",
+       subtitle = "All Cells",
+       caption = "Unfiltered, no QC")
+
+DimPlot(joined,
+        reduction = "umap",
+        group.by = "any_doublet",
+        label = FALSE,
+        label.size = 7,
+        repel = TRUE,
+        pt.size = 0.5,
+        cols = c("TRUE" = "red",          # red
+                 "FALSE" = "grey70")) +  # light grey
+  labs(title = "UMAP Coloured by Any Doublet",
+       subtitle = "All Cells",
+       caption = "Unfiltered, no QC")
+
+DimPlot(joined,
+        reduction = "umap",
+        group.by = "scDblFinder.class",
+        label = FALSE,
+        label.size = 7,
+        repel = TRUE,
+        pt.size = 0.5,
+        cols = c("doublet" = "red",          # red
+                 "singlet" = "grey70")) +  # light grey
+  labs(title = "UMAP Coloured by Expression Doublet",
+       subtitle = "All Cells",
+       caption = "Unfiltered, no QC")
+
+DimPlot(joined,
+        reduction = "umap",
+        group.by = "mf_dbl_prediction.no_qc",
+        label = FALSE,
+        label.size = 7,
+        repel = TRUE,
+        pt.size = 0.5,
+        cols = c("Doublet" = "red",          # red
+                 "Singlet" = "grey70")) +  # light grey
+  labs(title = "UMAP Coloured by Sex Doublet",
+       subtitle = "All Cells",
+       caption = "Unfiltered, no QC")
+
+# which cells are ID'd by both or only one doublet algorithm??
+joined$doublet_combo <- "None"
+
+joined$doublet_combo[
+  joined$scDblFinder.class == "doublet" &
+    joined$mf_dbl_prediction.no_qc == "Doublet"
+] <- "Both"
+
+joined$doublet_combo[
+  joined$scDblFinder.class == "doublet" &
+    joined$mf_dbl_prediction.no_qc != "Doublet"
+] <- "scDblFinder_only"
+
+joined$doublet_combo[
+  joined$scDblFinder.class != "doublet" &
+    joined$mf_dbl_prediction.no_qc == "Doublet"
+] <- "mf_only"
+
+joined$doublet_combo <- factor(
+  joined$doublet_combo,
+  levels = c("None", "scDblFinder_only", "mf_only", "Both")
+)
+
+DimPlot(
+  joined,
+  reduction = "umap",
+  group.by = "doublet_combo",
+  pt.size = 0.5,
+  cols = c(
+    "None"              = "grey70",
+    "scDblFinder_only"  = "green3",
+    "mf_only"           = "orange",
+    "Both"              = "red"
+  )
+) +
+  labs(
+    title = "UMAP Coloured by Doublet Detection Overlap",
+    subtitle = "All Cells",
+    caption = "Unfiltered, no QC"
+  )
+
 # Filtering ---------------------------------------------------------------
 
 # Remove:
@@ -895,7 +1046,7 @@ joined@meta.data <- joined@meta.data %>%
 filtered_dir <- file.path(out_dir, "04-filtering")
 dir.create(filtered_dir, showWarnings = FALSE)
 
-# How many cells are we statring with
+# How many cells are we starting with
 joined
 # 41370 cells
 
@@ -910,6 +1061,10 @@ joined@meta.data %>% group_by(nFeature_filter) %>% summarise(n = n())
 # How many cells are both doublets and high nFeatures
 sum(joined@meta.data$nFeature_filter & joined@meta.data$any_doublet)
 # 157
+
+# How many cells will be removed with high Mt gene expression
+joined@meta.data %>% group_by(nFeature_filter) %>% summarise(n = n())
+# 215 cells
 
 # Total cells removed at this stage will be 
 41370 - (5581+157)
@@ -929,7 +1084,9 @@ ggsave(filename = file.path(out_dir, "03-merged_initial_QC", "01-unfiltered-scat
 
 # Facet by percent.mt
 joined@meta.data %>%
-  ggplot(aes(x = nCount_RNA, y = nFeature_RNA, fill = percent.mt)) +
+  ggplot(aes(x = nCount_RNA,
+             y = nFeature_RNA,
+             fill = percent.mt)) +
   geom_point(
     shape = 21,
     colour = "grey50"
@@ -944,7 +1101,9 @@ ggsave(filename = file.path(out_dir, "03-merged_initial_QC", "01-unfiltered-scat
 
 # Percent.hb
 joined@meta.data %>%
-  ggplot(aes(x = nCount_RNA, y = nFeature_RNA, colour = percent.hb)) +
+  ggplot(aes(x = nCount_RNA,
+             y = nFeature_RNA,
+             colour = percent.hb)) +
   geom_point() +
   scale_colour_distiller(palette = "Spectral", direction = -1) +
   theme_bw()
@@ -954,7 +1113,9 @@ ggsave(filename = file.path(out_dir, "03-merged_initial_QC", "01-unfiltered-scat
 
 # Facet and colour by percent.hb
 joined@meta.data %>%
-  ggplot(aes(x = nCount_RNA, y = nFeature_RNA, fill = percent.hb)) +
+  ggplot(aes(x = nCount_RNA,
+             y = nFeature_RNA,
+             fill = percent.hb)) +
   geom_point(
     shape = 21,
     colour = "grey50"
@@ -1039,6 +1200,8 @@ DimPlot(filtered,
   labs(subtitle = "Singlets only",
        caption = "Doublets, >10% Mt and top 0.5% nFeatures removed - no re-embeding")
 
+
+
 rm(joined)
 gc()
 
@@ -1102,4 +1265,87 @@ joined_re_embed <- filtered %>%
 write_rds(x = joined_re_embed,
           file = file.path(out_dir, "04-filtering", "re_embed_filtered.mt_qc.nFeature_top_qc.sex_doublets.rds"))
 
+# make csome QC plots with the new embedding and clusters
+# QC plots
+qc_metrics_2 <- c("nCount_RNA",
+                "nFeature_RNA")
 
+cell_cycle_metrics <- c("S.Score",
+                        "G2M.Score")
+all_qc_metrics_2 <- c(qc_metrics_2, cell_cycle_metrics)
+
+
+violin_points(object = joined_re_embed,
+              grouping_variable = "seurat_clusters",
+              variables_to_plot = qc_metrics_2)
+ggsave(filename = file.path(filtered_dir, "05-violin_plots-qc_metrics.single.mt.nFeature.png"),
+       width = 13, height = 9)
+
+# umap - current embeddings but filtered cells removed
+DimPlot(joined_re_embed,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = TRUE,
+        label.size = 8) +
+  labs(subtitle = "Singlets only",
+       caption = "Doublets, >10% Mt and top 0.5% nFeatures removed") +
+  NoLegend()
+
+# umap - current embeddings but filtered cells removed
+DimPlot(joined_re_embed,
+        reduction = "umap",
+        group.by = "predicted_sex",
+        label = TRUE,
+        label.size = 8) +
+  labs(subtitle = "Singlets only",
+       caption = "Doublets, >10% Mt and top 0.5% nFeatures removed")
+
+FeaturePlot(joined_re_embed,
+            features = qc_metrics_2) &
+  scale_colour_gradientn(
+    colours = rev(
+      RColorBrewer::brewer.pal(
+        n = 11, 
+        name = "Spectral")
+    )
+  )
+
+
+# load the first seurat object, has clusters and doublet scores but no QC
+pre_qc <- read_rds(file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.rds"))
+# Quick umap with first cluster assignments
+DimPlot(joined,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = TRUE) +
+  labs(
+    title = "UMAP - Very first custers",
+    caption = "run pca, no filtering"
+  ) +
+  NoLegend()
+# grab only custer 10
+cluster_10 <- subset(joined@meta.data, seurat_clusters == 10)
+
+
+# load the final seurat object
+re_embed_interesting_cells <- readRDS(file.path("~/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa", "outDir",  "06-cluster_marker_genes", "final_interesting_cells_0.6.rds"))
+# Quick umap with first cluster assignments
+DimPlot(re_embed_interesting_cells,
+        reduction = "umap",
+        group.by = "seurat_clusters",
+        label = TRUE) +
+  labs(
+    title = "UMAP - Final seurat custers",
+    caption = "Final dataset"
+  ) +
+  NoLegend()
+# grab only custer 17
+cluster_17 <- subset(re_embed_interesting_cells@meta.data, seurat_clusters == 17)
+
+
+common_cells <- intersect(
+  rownames(cluster_17),
+  rownames(cluster_10)
+)
+
+common_cells

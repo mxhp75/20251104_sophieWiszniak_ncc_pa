@@ -12,7 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 # Clean-up environment
 
 ```{r}
-rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
 gc() # free up memory and report the memory usage
 options(max.print = .Machine$integer.max,
         scipen = 999,
@@ -1103,7 +1103,7 @@ joined@meta.data %>% group_by(nFeature_filter) %>% summarise(n = n())
 # 215 cells
 
 # Total cells removed at this stage will be 
-41370 - (5581+157)
+# 41370 - (5581+157)
 # 35632 cells should remain
 
 

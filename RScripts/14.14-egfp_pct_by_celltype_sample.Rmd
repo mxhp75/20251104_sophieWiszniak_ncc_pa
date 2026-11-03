@@ -1,0 +1,147 @@
+---
+title: "EGFP positivity, % by cell type and by cell type x sample (full merged object)"
+author: "Melanie Smith"
+date: "2026-10-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE)
+set.seed(42) # set seed for reproducibility
+```
+
+- Follow-up to the `additional_plots_meeting_20261013` lab book's task 4 (% of EGFP+ cells in the final full object), which only reported the by-cell-type and by-sample percentages separately, pooled across the other dimension. This recomputes the same `EGFP_positive` metadata (exact `14.1` matching logic) on the full merged object and also produces the cell type x sample cross-tab, which was never actually computed.
+- All five cell types, all four samples, cell-cycle genes retained (`06-cluster_marker_genes/final_interesting_cells_0.6.rds` - same object task 4 used).
+
+# Load Libraries
+
+```{r}
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+library(Seurat)
+```
+
+# Set project directories
+
+```{r}
+project_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa"
+out_dir <- file.path(project_repo_dir, "outDir", "14-rna_velocity")
+downloads_dir <- file.path(project_repo_dir, "downloads")
+
+full_object_path <- file.path(project_repo_dir, "outDir", "06-cluster_marker_genes", "final_interesting_cells_0.6.rds")
+```
+
+# Load the full merged Seurat object
+
+```{r}
+full_object <- read_rds(full_object_path)
+
+stopifnot(inherits(full_object, "Seurat"))
+
+message("Dimensions of full merged object: ", paste(dim(full_object), collapse = " x "))
+print(table(full_object$orig.ident))
+```
+
+# Add EGFP transgene metadata
+- Exact matching logic as `14.1`: per-sample barcode-suffix match against the re-quantified transgene TSVs, `EGFP` rows only, single-UMI detections zeroed as leaky signal, `EGFP_positive <- EGFP_UMI > 0`.
+
+```{r add-egfp-metadata}
+sample_suffixes <- c(
+  e11_control = "_1_1",
+  e11_ko      = "_2_1",
+  e12_control = "_1",
+  e12_ko      = "_2"
+)
+
+egfp_umi <- setNames(rep(0L, ncol(full_object)), colnames(full_object))
+
+for (sample_ID in names(sample_suffixes)) {
+
+  tsv_path <- file.path(downloads_dir, paste0(sample_ID, "_transgene_umis_final.tsv"))
+
+  tsv <- read.delim(tsv_path, header = FALSE,
+                     col.names = c("barcode", "gene", "umi"))
+
+  egfp_rows <- tsv[tsv$gene == "EGFP", ]
+
+  full_barcodes <- paste0(egfp_rows$barcode, sample_suffixes[[sample_ID]])
+
+  matched <- full_barcodes %in% names(egfp_umi)
+
+  message(
+    sample_ID, " - EGFP rows: ", nrow(egfp_rows),
+    " | matched to object: ", sum(matched),
+    " (", round(100 * mean(matched), 1), "%)"
+  )
+
+  egfp_umi[full_barcodes[matched]] <- egfp_rows$umi[matched]
+}
+
+n_leaky <- sum(egfp_umi == 1)
+message(n_leaky, " cells with exactly 1 EGFP UMI zeroed out as leaky signal")
+egfp_umi[egfp_umi < 2] <- 0
+
+full_object <- AddMetaData(full_object, metadata = egfp_umi, col.name = "EGFP_UMI")
+full_object$EGFP_positive <- full_object$EGFP_UMI > 0
+
+message("Total EGFP-positive cells: ", sum(full_object$EGFP_positive), " of ", ncol(full_object))
+```
+
+# % EGFP+ by cell type (pooled across samples)
+- Sanity check against task 4's already-reported numbers (Mesenchyme 5.25%, VSMC 0.70%, Endocardium 0.10%, Epicardium 0.10%, Myocardium 0.07%).
+
+```{r pct-by-celltype}
+pct_by_celltype <- full_object@meta.data %>%
+  group_by(new_celltypes) %>%
+  summarise(n_cells = n(),
+            n_egfp_positive = sum(EGFP_positive),
+            pct_egfp_positive = round(100 * n_egfp_positive / n_cells, 2)) %>%
+  arrange(desc(pct_egfp_positive))
+
+print(pct_by_celltype)
+
+write.csv(pct_by_celltype,
+          file.path(out_dir, "egfp_pct_positive_by_celltype_full_object.csv"),
+          row.names = FALSE)
+```
+
+# % EGFP+ by cell type x sample (orig.ident)
+- Not computed anywhere else in this project - task 4 only reported pooled-by-sample (not split by cell type) and pooled-by-cell-type (not split by sample) percentages separately.
+
+```{r pct-by-celltype-sample}
+pct_by_celltype_sample <- full_object@meta.data %>%
+  group_by(new_celltypes, orig.ident) %>%
+  summarise(n_cells = n(),
+            n_egfp_positive = sum(EGFP_positive),
+            pct_egfp_positive = round(100 * n_egfp_positive / n_cells, 2)) %>%
+  ungroup() %>%
+  arrange(new_celltypes, orig.ident)
+
+print(pct_by_celltype_sample)
+
+write.csv(pct_by_celltype_sample,
+          file.path(out_dir, "egfp_pct_positive_by_celltype_sample_full_object.csv"),
+          row.names = FALSE)
+
+# wide version (cell type x sample), easier to drop straight into the lab book as one table
+pct_wide <- pct_by_celltype_sample %>%
+  select(new_celltypes, orig.ident, pct_egfp_positive) %>%
+  pivot_wider(names_from = orig.ident, values_from = pct_egfp_positive)
+
+print(pct_wide)
+
+write.csv(pct_wide,
+          file.path(out_dir, "egfp_pct_positive_by_celltype_sample_full_object_wide.csv"),
+          row.names = FALSE)
+```

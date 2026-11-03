@@ -1,0 +1,168 @@
+---
+title: "06.6-add_sophie_clusters_v2"
+author: "Melanie Smith"
+date: "2026-11-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(42)
+```
+
+# Clean-up environment
+
+```{r}
+rm(list = ls(all.names = TRUE)) # will clear all objects includuing hidden objects
+gc() # free up memory and report the memory usage
+options(max.print = .Machine$integer.max,
+        scipen = 999,
+        stringsAsFactors = FALSE,
+        dplyr.summarise.inform = FALSE) # Print everything without truncation, avoid scientific notation, keep strings as characters, silence dplyr’s “grouped output” informational messages
+set.seed(42) # set seed for reproducibility
+```
+
+# Load Libraries
+
+```{r}
+# Core tidyverse
+library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+
+# Single Cell
+library(Seurat) # Seurat (relies on dplyr/tidyr, so load after tidyverse)
+```
+
+# Set project directories and file paths
+
+```{r}
+project_name <- "20251104_sophieWiszniak_ncc_pa"
+
+base_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak"
+project_repo_dir <- file.path(base_repo_dir, project_name)
+out_dir <- file.path(project_repo_dir, "outDir")
+downloads <- file.path(project_repo_dir, "downloads")
+
+cell_type_object_path <- file.path(out_dir, "06-cluster_marker_genes", "final_interesting_cells_0.6.rds")
+sophie_clusters_v2_file <- file.path(downloads, "seurat_clusters_SW2026-09-23.csv")
+
+new_col_name <- "sophie_seurat_clusters_v2"
+```
+
+# Load required objects
+- `final_interesting_cells_0.6.rds` is the canonical, already-final object produced by `06-cellType_filter.Rmd`.
+- We load it as-is (no re-embedding / re-clustering) so the existing `seurat_clusters`, `new_celltypes`, UMAP etc. are completely untouched - this script only adds one new metadata column.
+
+```{r}
+final_interesting_cells_0.6 <- readRDS(file = cell_type_object_path)
+
+stopifnot(inherits(final_interesting_cells_0.6, "Seurat"))
+
+# Sophie's new, more finely annotated cluster labels (whole merged dataset)
+sophie_clusters_v2 <- read_csv(sophie_clusters_v2_file)
+```
+
+# Sanity check barcode overlap
+- Confirmed interactively before writing this script: all 24,327 barcodes in Sophie's CSV match `colnames(final_interesting_cells_0.6)` exactly (same format, e.g. `AAACCCACAGACTCTA-1_1_1`) - no barcode reformatting needed here, unlike the original `03-cellType_annotations.Rmd` join.
+- Re-checking here so the Rmd is self-contained and will fail loudly if that ever changes (e.g. Sophie sends an updated file).
+
+```{r}
+cat("Cells in final_interesting_cells_0.6:", ncol(final_interesting_cells_0.6), "\n")
+cat("Rows in Sophie's CSV:", nrow(sophie_clusters_v2), "\n")
+cat("Duplicated barcodes in CSV:", sum(duplicated(sophie_clusters_v2$Barcode)), "\n")
+
+n_matched <- sum(sophie_clusters_v2$Barcode %in% colnames(final_interesting_cells_0.6))
+cat("CSV barcodes found in Seurat object:", n_matched, "/", nrow(sophie_clusters_v2), "\n")
+
+n_covered <- sum(colnames(final_interesting_cells_0.6) %in% sophie_clusters_v2$Barcode)
+cat("Seurat object cells covered by CSV:", n_covered, "/", ncol(final_interesting_cells_0.6), "\n")
+
+stopifnot(
+  !anyDuplicated(sophie_clusters_v2$Barcode),
+  n_matched == nrow(sophie_clusters_v2),
+  n_covered == ncol(final_interesting_cells_0.6)
+)
+```
+
+# Add Sophie's new clusters as a new metadata column
+- Added as `r new_col_name` - `seurat_clusters` and `new_celltypes` are NOT touched.
+- Sophie's CSV column is also called `seurat_clusters`, so it's renamed on import to avoid any confusion with the object's existing column of the same name.
+
+```{r}
+sophie_clusters_v2_meta <- sophie_clusters_v2 %>%
+  dplyr::rename(!!new_col_name := seurat_clusters) %>%
+  tibble::column_to_rownames("Barcode")
+
+final_interesting_cells_0.6 <- AddMetaData(
+  object = final_interesting_cells_0.6,
+  metadata = sophie_clusters_v2_meta,
+  col.name = new_col_name
+)
+
+# confirm existing columns are unchanged and the new column is populated with no NAs
+stopifnot(
+  "seurat_clusters" %in% colnames(final_interesting_cells_0.6@meta.data),
+  "new_celltypes" %in% colnames(final_interesting_cells_0.6@meta.data),
+  !anyNA(final_interesting_cells_0.6@meta.data[[new_col_name]])
+)
+```
+
+# Sanity checks - compare Sophie's new clusters against our existing calls
+
+```{r}
+# how does Sophie's new column relate to our current seurat_clusters?
+table(
+  final_interesting_cells_0.6$seurat_clusters,
+  final_interesting_cells_0.6@meta.data[[new_col_name]],
+  useNA = "ifany"
+)
+
+# how does it relate to our current top-level new_celltypes?
+table(
+  final_interesting_cells_0.6$new_celltypes,
+  final_interesting_cells_0.6@meta.data[[new_col_name]],
+  useNA = "ifany"
+)
+
+```
+
+```{r}
+# Visual sanity check - our existing UMAP, recoloured by Sophie's new clusters
+DimPlot(final_interesting_cells_0.6,
+        reduction = "umap",
+        group.by = new_col_name,
+        label = TRUE,
+        repel = TRUE,
+        label.size = 3) +
+  NoLegend() +
+  labs(
+    title = "UMAP (existing embedding) - Sophie's new clusters (v2)",
+    caption = "final_interesting_cells_0.6 + sophie_seurat_clusters_v2"
+  )
+
+ggsave(filename = file.path(out_dir, "06-cluster_marker_genes", "06.6-umap.final_interesting_cells_0.6.sophie_clusters_v2.png"),
+       width = 10,
+       height = 8)
+```
+
+# Save
+- Back up the existing object first (new column only - this is otherwise a drop-in replacement), then overwrite `final_interesting_cells_0.6.rds` in place so every downstream script that reads this file picks up the new column automatically once re-run.
+
+```{r}
+backup_path <- file.path(
+  out_dir, "06-cluster_marker_genes",
+  paste0("final_interesting_cells_0.6_pre_sophie_clusters_v2_backup_", format(Sys.Date(), "%Y%m%d"), ".rds")
+)
+file.copy(cell_type_object_path, backup_path, overwrite = FALSE)
+
+write_rds(x = final_interesting_cells_0.6,
+          file = cell_type_object_path)
+```
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
