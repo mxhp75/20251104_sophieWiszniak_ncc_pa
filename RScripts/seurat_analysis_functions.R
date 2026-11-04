@@ -28,16 +28,6 @@ human_genes_to_mouse <- function(human_genes){
   return(result)
 }
 
-# Check
-# s.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$s.genes)
-# g2m.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$g2m.genes)
-# 
-# (s.genes %in% (map(seurat_list, rownames) %>% unlist())) %>% table()
-# (g2m.genes %in% (map(seurat_list, rownames) %>% unlist())) %>% table()
-# All are found in at least one Seurat object
-
-
-
 # Function to create QC metrics then plot them --------------------------------------------------------------------
 
 perform_qc <- function(object,
@@ -84,9 +74,8 @@ perform_qc <- function(object,
   s.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$s.genes)
   g2m.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$g2m.genes)
   
-  # Generated using:
-  # ~/localwork/facility/projects/250408SophieWiszniak-mouse_heart_Mib1_KD_scRNA/02-download_mouse_ribosomal_genes.R
-  ribo_genes <- c("Rpl10", "Rpl10a", "Rpl11", "Rpl12", "Rpl13", "Rpl13a", "Rpl14", 
+  # Generated using RScripts/01-download_mouse_ribosomal_genes.R
+  ribo_genes <- c("Rpl10", "Rpl10a", "Rpl11", "Rpl12", "Rpl13", "Rpl13a", "Rpl14",
                   "Rpl15", "Rpl17", "Rpl18", "Rpl18a", "Rpl19", "Rpl21", "Rpl22", 
                   "Rpl23", "Rpl23a", "Rpl24", "Rpl26", "Rpl27", "Rpl27a", "Rpl28", 
                   "Rpl29", "Rpl3", "Rpl30", "Rpl31", "Rpl32", "Rpl34", "Rpl35", 
@@ -99,9 +88,8 @@ perform_qc <- function(object,
                   "Rps3a", "Rps4x", "Rps5", "Rps6", "Rps7", "Rps8", "Rps9", "Rpsa"
   )
   
-  # Generated using:
-  # ~/localwork/facility/projects/250408SophieWiszniak-mouse_heart_Mib1_KD_scRNA/02-download_mouse_haemoglobin_genes.R
-  hb_genes <- c("Hba-a1", "Hba-a2", "Hba-x", "Hbb-b1", "Hbb-b2", "Hbb-bh1", 
+  # Generated using RScripts/01-download_mouse_haemoglobin_genes.R
+  hb_genes <- c("Hba-a1", "Hba-a2", "Hba-x", "Hbb-b1", "Hbb-b2", "Hbb-bh1",
                 "Hbb-bh2", "Hbb-bs", "Hbb-bt", "Hbb-y", "Hbq1a", "Hbq1b")
   
   if(!is.null(grouping_variable)){
@@ -147,7 +135,7 @@ perform_qc <- function(object,
     group_by(barcode) %>%
     slice_max(counts, n = 1, with_ties = FALSE) %>%
     ungroup() %>%
-    dplyr::rename(max_counts = counts, # I have assumed Nick wants dplyr
+    dplyr::rename(max_counts = counts,
            max_gene = gene)
   
   object <- add_metadata(object = object, metadata = max_expression)
@@ -211,31 +199,8 @@ perform_qc <- function(object,
          plot = p)
   
   
-  # Violin plot: QC metrics - ungrouped 
-  # message("Producing ungrouped QC plots")
-  # p <- 
-  #   object[[]] %>%
-  #   as_tibble(rownames = "barcode") %>%
-  #   select(barcode, all_of(qc_metrics)) %>%
-  #   pivot_longer(-barcode, names_to = "metric", values_to = "value") %>%
-  #   ggplot(aes(x = metric, y = value)) +
-  #   gghalves::geom_half_violin(side = "r",
-  #                              alpha = 0.5,
-  #                              fill = "dodgerblue",
-  #                              draw_quantiles = 0.5,
-  #                              scale = "width") +
-  #   gghalves::geom_half_point(side = "l", alpha = 0.3) +
-  #   facet_wrap(~ metric, scales = "free") +
-  #   theme_bw()
-  # # Used suppressMessages to hide "Picking joint bandwidth of 0.012" for every faceted plot
-  # suppressMessages(print(p))
-  # suppressMessages(
-  #   ggsave(filename = file.path(basic_plot_dir, "02-Violin-ungrouped_QC_metrics.png"),
-  #          plot = p,
-  #          width = 11, height = 9)
-  # )
-  # Grok tell me there is a compatability issue with ggplot 4.0.0 and gghalves 0.1.4
-  # this is a known issue and the recommended fix is to move to ggdist (the new and better gghalves)
+  # Violin plot: QC metrics - ungrouped
+  # Switched from gghalves to ggdist due to a compatibility issue between ggplot 4.0.0 and gghalves 0.1.4
   message("Producing ungrouped QC plots")
   
   p <- object[[]] %>%
@@ -282,31 +247,6 @@ perform_qc <- function(object,
   
   
   # Violin plot: QC metrics - grouped by user-defined variable
-  # if (!is.null(grouping_variable)) {
-  #   message("Producing QC plots grouped by ", grouping_variable)
-  #   
-  #   p <- 
-  #     object[[]] %>%
-  #     as_tibble(rownames = "barcode") %>%
-  #     select(barcode, !!group_var_sym, all_of(qc_metrics)) %>%
-  #     pivot_longer(-c(barcode, !!group_var_sym), names_to = "metric", values_to = "values") %>%
-  #     ggplot(aes(x = !!group_var_sym, y = values)) +
-  #     gghalves::geom_half_violin(side = "r",
-  #                                alpha = 0.5,
-  #                                fill = "dodgerblue",
-  #                                draw_quantiles = 0.5,
-  #                                scale = "width") +
-  #     gghalves::geom_half_point(side = "l", alpha = 0.3) +
-  #     theme_bw() + facet_wrap(~ metric, scales = "free_y") +
-  #     guides(x = guide_axis(angle = 65))
-  #   
-  #   suppressMessages(print(p))
-  #   ggsave(filename = file.path(basic_plot_dir, paste0("03-Violin-QC_metric_by_", grouping_variable, ".png")),
-  #          plot = p,
-  #          width = 13, height = 9)
-  # } else {
-  #   message("No grouping variable provided. Skipping grouped plot.")
-  # }
   if (!is.null(grouping_variable)) {
     message("Producing QC plots grouped by ", grouping_variable)
     
@@ -494,29 +434,6 @@ perform_qc <- function(object,
            width = 15, height = 11)
 
 
-  #   # Violin plot: QC metrics by cluster
-  #   message("Producing QC plots grouped by cluster")
-  #   p <-
-  #     object[[]] %>%
-  #     as_tibble(rownames = "barcode") %>%
-  #     select(barcode, seurat_clusters, all_of(all_qc_metrics)) %>%
-  #     pivot_longer(-c(barcode, seurat_clusters), names_to = "metric", values_to = "values") %>%
-  #     ggplot(aes(x = seurat_clusters, y = values)) +
-  #     gghalves::geom_half_violin(side = "r",
-  #                                alpha = 0.5,
-  #                                fill = "dodgerblue",
-  #                                draw_quantiles = 0.5,
-  #                                scale = "width") +
-  #     gghalves::geom_half_point(side = "l", alpha = 0.3) +
-  #     theme_bw() + facet_wrap(~ metric, scales = "free_y") +
-  #     guides(x = guide_axis(angle = 65))
-  #   suppressMessages(print(p))
-  #   suppressMessages(
-  #     ggsave(filename = file.path(clustered_plot_dir, "07-Violin-QC_metrics_by_cluster.png"),
-  #            plot = p,
-  #            width = 15, height = 9)
-  #   )
-    
     # Violin plot: QC metrics by cluster
     message("Producing QC plots grouped by cluster")
     
@@ -611,11 +528,7 @@ filtered_qc <- function(object, clustering_resolution, grouping_variable = NULL,
   )
   cell_cycle_metrics <- c("S.Score", "G2M.Score")
   all_qc_metrics <- c(qc_metrics, cell_cycle_metrics)
-  
-  s.genes <- Seurat::cc.genes.updated.2019$s.genes
-  g2m.genes <- Seurat::cc.genes.updated.2019$g2m.genes
-  
-  
+
   if(!is.null(grouping_variable)){
     group_var_sym <- rlang::sym(grouping_variable)
   }
@@ -716,7 +629,7 @@ filtered_qc <- function(object, clustering_resolution, grouping_variable = NULL,
   # UMAP by user-specified group
   if(!is.null(grouping_variable)){
     message("Plotting ", grouping_variable, " onto UMAP")
-    
+
     plots <-
       lapply(object[[]] %>% pull(group_var_sym) %>% unique(), function(x){
         p <-
@@ -738,58 +651,58 @@ filtered_qc <- function(object, clustering_resolution, grouping_variable = NULL,
           NoLegend()
       }) %>%
       patchwork::wrap_plots()
-    
+
     print(plots)
     ggsave(filename = file.path(clustered_plot_dir, paste0("06-UMAP-", grouping_variable, ".png")),
            plot = plots,
            width = 15, height = 9)
-    
-    # UMAP showing clusters
-    message("Plotting clusters onto UMAP")
-    p <-
-      object %>%
-      DimPlot(reduction = "umap", label = TRUE, label.box = TRUE, repel = TRUE)
-    print(p)
-    ggsave(filename = file.path(clustered_plot_dir, "07-UMAP-clusters.png"),
-           plot = p)
-    
-    # UMAP
-    message("Plotting QC metrics onto UMAP")
-    p <-
-      object %>%
-      FeaturePlot(reduction = "umap",
-                  features = all_qc_metrics)
-    print(p)
-    ggsave(filename = file.path(clustered_plot_dir, "08-UMAP-QC_metrics.png"),
-           plot = p,
-           # scale = 2,
-           width = 15, height = 11)
-    
-    
-    # Violin plot: QC metrics - grouped by cluster
-    message("Producing QC plots grouped by cluster")
-    p <-
-      object[[]] %>%
-      as_tibble(rownames = "barcode") %>%
-      select(barcode, seurat_clusters, all_of(all_qc_metrics)) %>%
-      pivot_longer(-c(barcode, seurat_clusters), names_to = "metric", values_to = "values") %>%
-      ggplot(aes(x = seurat_clusters, y = values)) +
-      gghalves::geom_half_violin(side = "r",
-                                 alpha = 0.5,
-                                 fill = "dodgerblue",
-                                 draw_quantiles = 0.5,
-                                 scale = "width") +
-      gghalves::geom_half_point(side = "l", alpha = 0.3) +
-      theme_bw() + facet_wrap(~ metric, scales = "free_y") +
-      guides(x = guide_axis(angle = 65))
-    suppressMessages(print(p))
-    suppressMessages(
-      ggsave(filename = file.path(clustered_plot_dir, "09-Violin-QC_metrics_by_cluster.png"),
-             plot = p,
-             width = 15, height = 9)
-    )
   }
-  
+
+  # UMAP showing clusters
+  message("Plotting clusters onto UMAP")
+  p <-
+    object %>%
+    DimPlot(reduction = "umap", label = TRUE, label.box = TRUE, repel = TRUE)
+  print(p)
+  ggsave(filename = file.path(clustered_plot_dir, "07-UMAP-clusters.png"),
+         plot = p)
+
+  # UMAP
+  message("Plotting QC metrics onto UMAP")
+  p <-
+    object %>%
+    FeaturePlot(reduction = "umap",
+                features = all_qc_metrics)
+  print(p)
+  ggsave(filename = file.path(clustered_plot_dir, "08-UMAP-QC_metrics.png"),
+         plot = p,
+         # scale = 2,
+         width = 15, height = 11)
+
+
+  # Violin plot: QC metrics - grouped by cluster
+  message("Producing QC plots grouped by cluster")
+  p <-
+    object[[]] %>%
+    as_tibble(rownames = "barcode") %>%
+    select(barcode, seurat_clusters, all_of(all_qc_metrics)) %>%
+    pivot_longer(-c(barcode, seurat_clusters), names_to = "metric", values_to = "values") %>%
+    ggplot(aes(x = seurat_clusters, y = values)) +
+    gghalves::geom_half_violin(side = "r",
+                               alpha = 0.5,
+                               fill = "dodgerblue",
+                               draw_quantiles = 0.5,
+                               scale = "width") +
+    gghalves::geom_half_point(side = "l", alpha = 0.3) +
+    theme_bw() + facet_wrap(~ metric, scales = "free_y") +
+    guides(x = guide_axis(angle = 65))
+  suppressMessages(print(p))
+  suppressMessages(
+    ggsave(filename = file.path(clustered_plot_dir, "09-Violin-QC_metrics_by_cluster.png"),
+           plot = p,
+           width = 15, height = 9)
+  )
+
   # return(object)
   invisible(NULL)
 }
@@ -803,14 +716,12 @@ violin_points <- function(object, grouping_variable, variables_to_plot, fill = "
   assertthat::assert_that(class(object) == "Seurat",
                           msg = "Object must be a Seurat object")
   
-  if(!is.null(grouping_variable)){
-    assertthat::assert_that(assertthat::is.string(grouping_variable),
-                            grouping_variable %in% colnames(object[[]]),
-                            msg = "Grouping variable must be a string, and be present in the Seurat object metadata")
-    
-    group_var_sym <- rlang::sym(grouping_variable)
-  }
-  
+  assertthat::assert_that(assertthat::is.string(grouping_variable),
+                          grouping_variable %in% colnames(object[[]]),
+                          msg = "Grouping variable must be a string, and be present in the Seurat object metadata")
+
+  group_var_sym <- rlang::sym(grouping_variable)
+
   assertthat::assert_that(is.character(variables_to_plot),
                           all(variables_to_plot %in% colnames(object[[]])),
                           msg = "variables_to_plot must be a character vector, and all variables must be present in the Seurat object metadata")
@@ -821,21 +732,6 @@ violin_points <- function(object, grouping_variable, variables_to_plot, fill = "
   assertthat::assert_that(assertthat::is.number(alpha) & alpha <= 1,
                           msg = "Please supply a numeric value less than 1 for the `alpha` parameter")
 
-  # object[[]] %>%
-  #   as_tibble(rownames = "barcode") %>%
-  #   select(barcode, !!group_var_sym, all_of(variables_to_plot)) %>%
-  #   pivot_longer(-c(barcode, !!group_var_sym), names_to = "metric", values_to = "values") %>%
-  #   ggplot(aes(x = !!group_var_sym, y = values)) +
-  #   gghalves::geom_half_violin(side = "r",
-  #                              alpha = alpha,
-  #                              fill = fill,
-  #                              draw_quantiles = 0.5,
-  #                              scale = "width") +
-  #   gghalves::geom_half_point(side = "l", alpha = 0.3) +
-  #   theme_bw() +
-  #   facet_wrap(~ metric, scales = "free_y") +
-  #   guides(x = guide_axis(angle = 65))
-  
   object[[]] %>%
     as_tibble(rownames = "barcode") %>%
     select(barcode, !!group_var_sym, all_of(variables_to_plot)) %>%
@@ -875,38 +771,3 @@ violin_points <- function(object, grouping_variable, variables_to_plot, fill = "
     ) +
     labs(x = as_label(group_var_sym))
 }
-
-
-
-# Dimensional reduction by user-specified group ---------------------------
-
-# # UMAP by user-specified group
-# if(!is.null(grouping_variable)){
-#   message("Plotting ", grouping_variable, " onto UMAP")
-#   
-#   plots <-
-#     lapply(object[[]] %>% pull(group_var_sym) %>% unique(), function(x){
-#       p <-
-#         object@reductions$umap@cell.embeddings %>%
-#         as_tibble(rownames = "barcode") %>%
-#         left_join(y = object[[]] %>% as_tibble(rownames = "barcode"),
-#                   by = "barcode") %>%
-#         ggplot(aes(x = umap_1,
-#                    y = umap_2)) +
-#         # Plot the background points
-#         geom_point(data = . %>% filter(!!group_var_sym != x),
-#                    size = 0.2, colour = "grey", alpha = 0.3) +
-#         # Plot the points of interest
-#         geom_point(data = . %>% filter(!!group_var_sym == x),
-#                    size = 0.2, colour = "dodgerblue", alpha = 0.6) +
-#         labs(subtitle = x) +
-#         theme_bw() +
-#         theme(plot.subtitle = element_text(colour = "dodgerblue", face = "bold"))
-#     }) %>%
-#     patchwork::wrap_plots()
-#   
-#   print(plots)
-#   ggsave(filename = file.path(clustered_plot_dir, paste0("04-UMAP-", grouping_variable, ".png")),
-#          plot = plots,
-#          width = 15, height = 9)
-# }

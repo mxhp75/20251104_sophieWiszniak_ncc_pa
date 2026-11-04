@@ -1,6 +1,6 @@
 # To obtain a list of mouse ribosomal genes:
 
-# Script to scrape mouse ribosomal gene names from 
+# Script to scrape mouse ribosomal gene names from the Ribosomal Protein Gene Database
 
 
 
@@ -53,8 +53,10 @@ gene_names_filtered <- sort(unique(gene_names_filtered))
 
 # Select Fau from "Rps30,Fau"
 sub(pattern = "^.*,", replacement = "", x = gene_names_filtered)
-# Why does this print so differently?
- 
+# Note: "Fau" appears out of alphabetical order in the final gene list below
+# because sort(unique(...)) above runs before this comma-split, so "Rps30,Fau"
+# sorts as a single string and only becomes "Fau" after this step.
+
 # Check that the other genes are unaltered
 (sub(pattern = "^.*,", replacement = "", x = gene_names_filtered)) %in% gene_names_filtered
 (sub(pattern = "^.*,", replacement = "", x = gene_names_filtered))[71]
