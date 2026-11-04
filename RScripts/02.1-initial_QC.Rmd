@@ -96,7 +96,7 @@ mt_threshold <- 10
 # There are four sequencing libraries, 2 on each of two days
 # - 240617_A01934_0143_AHFTLVDRX5 is  E12.5, with one 10x well for "WT" and one for "Mut"
 # - 240828_A01934_0164_AHGWM2DRX5 is E11.5, with the same well setup
-# I've never liked this nomenclature; I think I'll opt for control and Mib1_KO
+# for simplicity, WT and Mut will be updated to control and Mib1_KO
 
 # read10x_h5() reflects Cell Ranger's calling -> droplets not called as cells are already removed.
 # CreateSeuratObject() removes cells with fewer than 3 genes expressed but no other QC
@@ -140,8 +140,6 @@ e11_ko
 dim(e11_ko)
 # [1] 23244  8497
 
-# Number of cells ranges from 8497 to 12222, though with no minimum threshold for number of features required
-
 ```
 
 # scDblFinder Doublet detection
@@ -183,7 +181,8 @@ seurat_list <-
   lapply(seurat_list, function(x) {
   x$original_barcode <- rownames(x@meta.data)
   return(x)
-})
+  }
+  )
 
 seurat_list[[1]]@meta.data %>%
   head()
@@ -208,10 +207,6 @@ joined
 
 rm(merged, seurat_list)
 gc()
-
-# Store this for now
-# dir.create(file.path(out_dir, "03-merged_initial_QC"))
-# write_rds(x = joined, file = file.path(out_dir, "03-merged_initial_QC", "joined.rds"))
 
 ```
 
@@ -660,11 +655,11 @@ gc()
 write_rds(x = joined,
           file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.sex_doublets.rds"))
 
-reload <- TRUE
-if(reload) {
-  joined <- read_rds(file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.sex_doublets.rds"))  
-}
+```
 
+## Feature plots 
+
+```{r}
 
 # Sophie looked at individual genes, recorded in her slack
 # Try the same using Sophie's sex genes
@@ -768,7 +763,7 @@ FeaturePlot(doublets,
 # Do the clusters separate by standard QC metrics?
 FeaturePlot(doublets, 
             features = c("nCount_RNA", "nFeature_RNA", 
-                         "percent.mt", "percent.hb",),
+                         "percent.mt", "percent.hb"),
             ncol = 2)  &
   scale_colour_gradientn(
     colours = rev(
@@ -1051,6 +1046,7 @@ joined$doublet_combo <- factor(
 DimPlot(
   joined,
   reduction = "umap",
+  order = c("None", "Both", "scDblFinder_only", "mf_only"),
   group.by = "doublet_combo",
   pt.size = 0.5,
   cols = c(
@@ -1345,16 +1341,6 @@ DimPlot(joined_re_embed,
   labs(subtitle = "Singlets only",
        caption = "Doublets, >10% Mt and top 0.5% nFeatures removed")
 
-FeaturePlot(joined_re_embed,
-            features = qc_metrics_2) &
-  scale_colour_gradientn(
-    colours = rev(
-      RColorBrewer::brewer.pal(
-        n = 11, 
-        name = "Spectral")
-    )
-  )
-
 # make csome QC plots with the new embedding and clusters
 # QC plots
 qc_metrics_2 <- c("nCount_RNA",
@@ -1371,49 +1357,20 @@ violin_points(object = joined_re_embed,
 ggsave(filename = file.path(filtered_dir, "05-violin_plots-qc_metrics.single.mt.nFeature.png"),
        width = 13, height = 9)
 
-```
+FeaturePlot(joined_re_embed,
+            features = qc_metrics_2) &
+  scale_colour_gradientn(
+    colours = rev(
+      RColorBrewer::brewer.pal(
+        n = 11, 
+        name = "Spectral")
+    )
+  )
 
-# Doublet cluster check
+# clean up
+rm(joined_re_embed)
+gc()
 
-```{r}
-# load the first seurat object, has clusters and doublet scores but no QC
-pre_qc <- read_rds(file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.rds"))
-# Quick umap with first cluster assignments
-DimPlot(joined,
-        reduction = "umap",
-        group.by = "seurat_clusters",
-        label = TRUE) +
-  labs(
-    title = "UMAP - Very first custers",
-    caption = "run pca, no filtering"
-  ) +
-  NoLegend()
-# grab only custer 10
-cluster_10 <- subset(joined@meta.data, seurat_clusters == 10)
-
-
-# load the final seurat object
-re_embed_interesting_cells <- readRDS(file.path("~/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa", "outDir",  "06-cluster_marker_genes", "final_interesting_cells_0.6.rds"))
-# Quick umap with first cluster assignments
-DimPlot(re_embed_interesting_cells,
-        reduction = "umap",
-        group.by = "seurat_clusters",
-        label = TRUE) +
-  labs(
-    title = "UMAP - Final seurat custers",
-    caption = "Final dataset"
-  ) +
-  NoLegend()
-# grab only custer 17
-cluster_17 <- subset(re_embed_interesting_cells@meta.data, seurat_clusters == 17)
-
-
-common_cells <- intersect(
-  rownames(cluster_17),
-  rownames(cluster_10)
-)
-
-common_cells
 ```
 
 

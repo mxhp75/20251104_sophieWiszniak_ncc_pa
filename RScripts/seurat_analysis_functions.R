@@ -74,7 +74,7 @@ perform_qc <- function(object,
   s.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$s.genes)
   g2m.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$g2m.genes)
   
-  # Generated using RScripts/01-download_mouse_ribosomal_genes.R
+  # Generated using RScripts/01.2-download_mouse_ribosomal_genes.R
   ribo_genes <- c("Rpl10", "Rpl10a", "Rpl11", "Rpl12", "Rpl13", "Rpl13a", "Rpl14",
                   "Rpl15", "Rpl17", "Rpl18", "Rpl18a", "Rpl19", "Rpl21", "Rpl22", 
                   "Rpl23", "Rpl23a", "Rpl24", "Rpl26", "Rpl27", "Rpl27a", "Rpl28", 
@@ -88,7 +88,7 @@ perform_qc <- function(object,
                   "Rps3a", "Rps4x", "Rps5", "Rps6", "Rps7", "Rps8", "Rps9", "Rpsa"
   )
   
-  # Generated using RScripts/01-download_mouse_haemoglobin_genes.R
+  # Generated using RScripts/01.1-download_mouse_haemoglobin_genes.R
   hb_genes <- c("Hba-a1", "Hba-a2", "Hba-x", "Hbb-b1", "Hbb-b2", "Hbb-bh1",
                 "Hbb-bh2", "Hbb-bs", "Hbb-bt", "Hbb-y", "Hbq1a", "Hbq1b")
   
