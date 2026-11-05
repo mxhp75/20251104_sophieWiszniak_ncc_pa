@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 Purpose: `FeaturePlot`s of candidate sub-cluster marker genes (originally
-identified in `05-curated_cell_type_marker_genes.Rmd`, on the pre-final,
+identified in `05.1-curated_cell_type_marker_genes.Rmd`, on the pre-final,
 full dataset), re-plotted here on the Endocardium + Mesenchyme, all-samples,
 cell-cycle-genes-removed object. One 4-panel plot per cluster label.
 

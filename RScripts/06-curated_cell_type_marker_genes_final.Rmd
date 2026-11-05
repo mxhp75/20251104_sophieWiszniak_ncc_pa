@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 Purpose: re-run the curated cell-type marker gene `FeaturePlot`s from
-`05-curated_cell_type_marker_genes.Rmd` on the final object
+`05.1-curated_cell_type_marker_genes.Rmd` on the final object
 (`final_interesting_cells_0.6.rds`), rather than the pre-final-clustering
 object those plots were originally made from. Only the 5 cell types retained
 in the final object are plotted here (Mesenchyme, Myocardium, Endocardium,
