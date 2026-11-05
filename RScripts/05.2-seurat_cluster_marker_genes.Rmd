@@ -1,5 +1,5 @@
 ---
-  title: "06-cluster_marker_genes"
+title: "05.2-seurat_cluster_marker_genes"
 author: "Melanie Smith"
 date: "2026-01-21"
 output: html_document
