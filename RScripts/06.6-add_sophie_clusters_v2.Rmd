@@ -65,7 +65,7 @@ sophie_clusters_v2 <- read_csv(sophie_clusters_v2_file)
 ```
 
 # Sanity check barcode overlap
-- Confirmed interactively before writing this script: all 24,327 barcodes in Sophie's CSV match `colnames(final_interesting_cells_0.6)` exactly (same format, e.g. `AAACCCACAGACTCTA-1_1_1`) - no barcode reformatting needed here, unlike the original `03-cellType_annotations.Rmd` join.
+- Confirmed interactively before writing this script: all 24,327 barcodes in Sophie's CSV match `colnames(final_interesting_cells_0.6)` exactly (same format, e.g. `AAACCCACAGACTCTA-1_1_1`) - no barcode reformatting needed here, unlike the original `03.2-cellType_annotations.Rmd` join.
 - Re-checking here so the Rmd is self-contained and will fail loudly if that ever changes (e.g. Sophie sends an updated file).
 
 ```{r}
