@@ -1,5 +1,5 @@
 ---
-title: "03-cellType_annotations"
+title: "03.2-cellType_annotations"
 author: "Melanie Smith"
 date: "2026-01-08"
 output: html_document
@@ -216,8 +216,8 @@ summary(is.na(ct_ann_main$pruned.labels))
 
 # Perform SingleR on the fine cell-type reference
 ct_ann_fine <- SingleR(test = raw_counts, # we could also use sce or raw_counts
-                  ref = ref_fine, 
-                  labels = ref_main$label.fine,
+                  ref = ref_fine,
+                  labels = ref_fine$label.fine,
                   de.method = 'classic')
 
 # Compare pruned and initial labels

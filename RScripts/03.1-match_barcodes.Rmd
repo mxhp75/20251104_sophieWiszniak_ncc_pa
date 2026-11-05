@@ -46,7 +46,6 @@ project_name <- "20251104_sophieWiszniak_ncc_pa"
 
 base_repo_dir <- "/home/melanie-smith/workDir/sophieWiszniak"
 project_repo_dir <- file.path(base_repo_dir, project_name)
-data_base_dir <- file.path(project_repo_dir, "rawData")
 out_dir <- file.path(project_repo_dir, "outDir")
 
 # Sophie's manual annotation
@@ -54,55 +53,17 @@ sophieAnnotation_file <- file.path(project_repo_dir, "cleanData/seurat_clusters.
 
 ```
 
-# Load raw 10X data and create individual Seurat objects
+# Load merged Seurat object from 02.1-initial_QC.Rmd
 
 ```{r}
-# Load raw data -----------------------------------------------------------
-
-# There are four sequencing libraries, 2 on each of two days
-# - 240617_A01934_0143_AHFTLVDRX5 is  E12.5, with one 10x well for "WT" and one for "Mut"
-# - 240828_A01934_0164_AHGWM2DRX5 is E11.5, with the same well setup
-# I've never liked this nomenclature; I think I'll opt for control and Mib1_KO
-
-# - E12 control
-e12_control <- Read10X_h5(filename = file.path(data_base_dir, "240617_A01934_0143_AHFTLVDRX5", "SophieW-1", "1_WT", "outs", "filtered_feature_bc_matrix.h5"))
-e12_control <- CreateSeuratObject(counts = e12_control,
-                                  project = "e12_control",
-                                  min.cells = 3)
-e12_control
-dim(e12_control)
-# [1] 23296 11590
-
-
-# - E12 Mib1 KO
-e12_ko <- Read10X_h5(filename = file.path(data_base_dir, "240617_A01934_0143_AHFTLVDRX5", "SophieW-1", "2_Mutant", "outs", "filtered_feature_bc_matrix.h5"))
-e12_ko <- CreateSeuratObject(counts = e12_ko,
-                             project = "e12_ko",
-                             min.cells = 3)
-e12_ko
-dim(e12_ko)
-# [1] 23695 12222
-
-
-# - E11 control
-e11_control <- Read10X_h5(filename = file.path(data_base_dir, "240828_A01934_0164_AHGWM2DRX5", "SophieW-2", "1_WT", "outs", "filtered_feature_bc_matrix.h5"))
-e11_control <- CreateSeuratObject(counts = e11_control,
-                                  project = "e11_control",
-                                  min.cells = 3)
-e11_control
-dim(e11_control)
-# [1] 23104  9061
-
-
-# - E11 Mib1 KO
-e11_ko <- Read10X_h5(filename = file.path(data_base_dir, "240828_A01934_0164_AHGWM2DRX5", "SophieW-2", "2_Mutant", "outs", "filtered_feature_bc_matrix.h5"))
-e11_ko <- CreateSeuratObject(counts = e11_ko,
-                             project = "e11_ko",
-                             min.cells = 3)
-e11_ko
-dim(e11_ko)
-# [1] 23244  8497
-
+# Load the post-merge, pre-filtering checkpoint written by 02.1-initial_QC.Rmd, rather than
+# independently re-reading the raw 10x data and re-deriving the merge here - this guarantees
+# the same cells/barcodes as the live pipeline object instead of risking drift between two
+# separately-maintained merge steps. perform_qc() doesn't drop any cells, so this has the
+# same barcodes/order as what re_embed_filtered will eventually contain.
+joined <- read_rds(file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.rds"))
+joined
+dim(joined)
 ```
 
 # Read Sophie's manual annotation file
@@ -119,18 +80,16 @@ sophieAnnotation <- read_csv(sophieAnnotation_file)
 # Example of sophieAnnotation$Barcode
 # [1] "TTTGTTGTCTTGGATG-1" "TTTGTTGTCTTACGGA-2" "AGCTAGCTAGCTAGCT-1" ...
 
-# Put the four original objects in a named list
-seurat_objects <- list(
-  e11_control = e11_control,
-  e11_ko      = e11_ko,
-  e12_control = e12_control,
-  e12_ko      = e12_ko
-)
+# The four original sample names, as stored in joined$orig.ident
+sample_names <- c("e11_control", "e11_ko", "e12_control", "e12_ko")
 
 # Add one column per sample
-for (sample_name in names(seurat_objects)) {
-  bc16_seurat <- substr(colnames(seurat_objects[[sample_name]]), 1, 16)
-  sophieAnnotation[[paste0(sample_name, "_match")]] <- 
+for (sample_name in sample_names) {
+  bc16_seurat <- substr(
+    joined$original_barcode[joined$orig.ident == sample_name],
+    1, 16
+  )
+  sophieAnnotation[[paste0(sample_name, "_match")]] <-
     ifelse(substr(sophieAnnotation$Barcode, 1, 16) %in% bc16_seurat, "yes", "no")
 }
 ```
@@ -207,35 +166,13 @@ pheatmap::pheatmap(heat_mat_num,
                    clustering_method = "complete")
 ```
 
-# Add original barcode column to the smaller Seurat object
+# Add joe_barcode column and save metadata
 
 ```{r}
-# Fixed version — no self-overwriting bug
-seurat_objects <- lapply(seurat_objects, function(obj) {
-  sample_name <- obj@project.name
-  suffix <- c(e12_control = "-1", e12_ko = "-2", e11_control = "-3", e11_ko = "-4")[sample_name]
-  obj$original_barcode <- colnames(obj)
-  obj$joe_barcode <- paste0(substr(colnames(obj), 1, 16), suffix)
-  return(obj)
-})
-```
-
-# Merge objects and join layers
-
-```{r}
-merged <- purrr::reduce(seurat_objects, merge)
-
-# Add clean metadata
-merged@meta.data <- merged@meta.data %>%
-  mutate(
-    stage = str_extract(orig.ident, "^[^_]+"),
-    genotype = str_extract(orig.ident, "_(.+)$") %>% str_remove("_"),
-    genotype = case_when(genotype == "ko" ~ "Mib1_KO", TRUE ~ "control")
-  )
-
-# Join layers (v5)
-joined <- JoinLayers(merged)
-rm(merged); gc()
+# joined already has original_barcode (set in 02.1-initial_QC.Rmd before merging) and the
+# clean stage/genotype metadata columns, so we only need to add joe_barcode here.
+suffix <- c(e12_control = "-1", e12_ko = "-2", e11_control = "-3", e11_ko = "-4")
+joined$joe_barcode <- paste0(substr(joined$original_barcode, 1, 16), suffix[joined$orig.ident])
 
 # Save final metadata with all barcodes for downstream use
 write_csv(joined@meta.data %>%

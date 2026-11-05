@@ -225,8 +225,8 @@ joined <- perform_qc(object = joined,
 gc()
 
 # Store this object
-# write_rds(joined,
-#           file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.rds"))
+write_rds(joined,
+          file = file.path(out_dir, "03-merged_initial_QC", "joined.perform_qc.rds"))
 
 reload <- TRUE
 # Can be useful to close everything down at this point and reload the data below
