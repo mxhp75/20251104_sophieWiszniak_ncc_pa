@@ -1,5 +1,5 @@
 ---
-title: "04-secondary_QC"
+title: "04.1-secondary_QC"
 author: "Melanie Smith"
 date: "2026-01-08"
 output: html_document
@@ -79,7 +79,7 @@ my_plot_function <- function(object, grouping_variable, variables_to_plot) {
       side = "left",
       alpha = 0.3,
       justification = 1.25,
-      quantiles = NULL,       # prevents binwidth error
+      quantiles = 100,       # capped so stat_dots() doesn't try to lay out every individual cell
       dotsize = 0.7
     ) +
 
@@ -469,9 +469,9 @@ ggplot(re_embed_filtered@meta.data,
              linewidth = 1) +
   theme_bw()
 
-# Complexity plot showing only cells from clusters 5, 8, 12, 18, 20, 21, 24 (seurat_clusters)
+# Complexity plot showing only cells from clusters 3, 8, 12, 18, 21, 22, 24 (seurat_clusters)
 re_embed_filtered@meta.data %>%
-  filter(seurat_clusters %in% c(5, 8, 12, 18, 20, 21, 24)) %>%
+  filter(seurat_clusters %in% c(3, 8, 12, 18, 21, 22, 24)) %>%
   ggplot(aes(x = log10_nCount_RNA,
              y = log10_nFeatures_RNA,
              color = factor(seurat_clusters))) +
@@ -575,7 +575,7 @@ cat("pct_top20_upper:      ", round(qc_thresholds$pct_top20_upper, 2), "%\n")
 cat("featcount_dist_upper: ", round(qc_thresholds$featcount_dist_upper, 4), "\n\n")
 ```
 
-# Remove low quality clusters (5, 8, 12, 18, 20, 21, 24) and re-embed
+# Remove low quality clusters (3, 8, 12, 18, 21, 22, 24) and re-embed
 
 ```{r}
 # Check starting number of cells
@@ -645,7 +645,7 @@ p <- VlnPlot(re_embed_no_low.qual,
   labs(title = "Per Cluster Lower nFeature QC Thresholds",
        y = "nFeature_RNA",
        subtitle = paste("Threshold = median(log10(nFeature)) -", n_mad_3, "× MAD"),
-       caption = "Filtered: <10% MT, singlets only, no low quality (3, 8, 12, 18, 21, 21, 24) old clusters") +
+       caption = "Filtered: <10% MT, singlets only, no low quality (3, 8, 12, 18, 21, 22, 24) old clusters") +
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 
 # manually set the y-limit
@@ -874,7 +874,7 @@ p <- VlnPlot(re_embed_no_low.qual,
   labs(title = "Per Cluster Lower pct_counts_in_top_20_features QC Thresholds",
        y = "pct_counts_in_top_20_features",
        subtitle = paste("Threshold = median(pct_counts_in_top_20_features) +", n_mad_3, "× MAD"),
-       caption = "Filtered: <10% MT, singlets only, no low quality (5, 8, 12, 18, 20, 21, 24) old clusters") +
+       caption = "Filtered: <10% MT, singlets only, no low quality (3, 8, 12, 18, 21, 22, 24) old clusters") +
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 
 # manually set the y-limit
