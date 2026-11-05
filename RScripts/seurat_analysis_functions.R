@@ -226,7 +226,7 @@ perform_qc <- function(object,
       side = "left",
       alpha = 0.3,
       justification = 1.25,
-      quantiles = NULL,       # prevents binwidth error
+      quantiles = 100,       # capped so stat_dots() doesn't try to lay out every individual cell
       dotsize = 0.7
     ) +
     
@@ -279,7 +279,7 @@ perform_qc <- function(object,
         side = "left",
         alpha = 0.3,
         justification = 1.25,
-        quantiles = NULL,       # THIS IS THE KEY FIX
+        quantiles = 100,       # capped so stat_dots() doesn't try to lay out every individual cell
         dotsize = 0.7
       ) +
       
@@ -464,7 +464,7 @@ perform_qc <- function(object,
         side = "left",
         alpha = 0.3,
         justification = 1.25,
-        quantiles = NULL,       # ← THIS PREVENTS THE binwidth / xscale ERROR
+        quantiles = 100,       # capped so stat_dots() doesn't try to lay out every individual cell
         dotsize = 0.7
       ) +
       
@@ -759,7 +759,7 @@ violin_points <- function(object, grouping_variable, variables_to_plot, fill = "
       side = "left",
       alpha = 0.3,
       justification = 1.25,
-      quantiles = NULL,                # THIS PREVENTS THE binwidth/xscale ERROR
+      quantiles = 100,                # capped so stat_dots() doesn't try to lay out every individual cell
       dotsize = 0.7
     ) +
     
