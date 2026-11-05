@@ -78,7 +78,7 @@ g2m.genes <- human_genes_to_mouse(Seurat::cc.genes.updated.2019$g2m.genes)
 ```
 
 # Load required Seurat object
-- Load the final Seurat object as created in `06-cellType_filter.Rmd`. This object is post-QC, post-filtering and has layers for PCA, UMAP etc.  
+- Load the final Seurat object as created in `06.1-cellType_filter.Rmd`. This object is post-QC, post-filtering and has layers for PCA, UMAP etc.  
 - This object contains all 4 samples and has all layers merged.  
 
 ```{r}

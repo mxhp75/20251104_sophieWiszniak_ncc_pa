@@ -1,5 +1,5 @@
 ---
-title: "06.6-add_sophie_clusters_v2"
+title: "06.2-add_sophie_clusters_v2"
 author: "Melanie Smith"
 date: "2026-11-03"
 output: html_document
@@ -52,7 +52,7 @@ new_col_name <- "sophie_seurat_clusters_v2"
 ```
 
 # Load required objects
-- `final_interesting_cells_0.6.rds` is the canonical, already-final object produced by `06-cellType_filter.Rmd`.
+- `final_interesting_cells_0.6.rds` is the canonical, already-final object produced by `06.1-cellType_filter.Rmd`.
 - We load it as-is (no re-embedding / re-clustering) so the existing `seurat_clusters`, `new_celltypes`, UMAP etc. are completely untouched - this script only adds one new metadata column.
 
 ```{r}
@@ -142,7 +142,7 @@ DimPlot(final_interesting_cells_0.6,
     caption = "final_interesting_cells_0.6 + sophie_seurat_clusters_v2"
   )
 
-ggsave(filename = file.path(out_dir, "06-cluster_marker_genes", "06.6-umap.final_interesting_cells_0.6.sophie_clusters_v2.png"),
+ggsave(filename = file.path(out_dir, "06-cluster_marker_genes", "06.2-umap.final_interesting_cells_0.6.sophie_clusters_v2.png"),
        width = 10,
        height = 8)
 ```

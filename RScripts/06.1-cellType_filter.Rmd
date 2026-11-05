@@ -1,5 +1,5 @@
 ---
-title: "06-cellType_filter"
+title: "06.1-cellType_filter"
 author: "Melanie Smith"
 date: "2026-01-21"
 output: html_document
@@ -57,50 +57,6 @@ save_if <- function(plot_object, filename, width, height, ...) {
 }
 # change to TRUE to save plots
 save_plots <- TRUE
-
-# quick function (following from Nick's) to plot the QC metrics
-my_plot_function <- function(object, grouping_variable, variables_to_plot) {
-  
-  group_var_sym <- sym(grouping_variable)
-  
-  object[[]] %>%
-    as_tibble(rownames = "barcode") %>%
-    dplyr::select(barcode, !!group_var_sym, all_of(variables_to_plot)) %>%
-    pivot_longer(
-      cols = -c(barcode, !!group_var_sym),
-      names_to = "metric",
-      values_to = "values"
-    ) %>%
-    ggplot(aes(x = !!group_var_sym, y = values)) +
-    
-    # Right half: density + median line
-    ggdist::stat_halfeye(
-      side = "right",
-      fill = "dodgerblue",
-      alpha = 0.5,
-      .width = 0.5,           # median line
-      justification = -0.2,
-      scale = 0.9,
-      linewidth = 0.4,
-      color = "black"
-    ) +
-    
-    # Left half: dots
-    ggdist::stat_dots(
-      side = "left",
-      alpha = 0.3,
-      justification = 1.25,
-      quantiles = NULL,       # prevents binwidth error
-      dotsize = 0.7
-    ) +
-
-    facet_wrap(~ metric, scales = "free") +
-    theme_bw() +
-    theme(
-      panel.grid.major.x = element_blank(),
-      axis.text.x = element_text(angle = 90, hjust = 0.5)
-    )
-}
 ```
 
 # Set project directories and file paths

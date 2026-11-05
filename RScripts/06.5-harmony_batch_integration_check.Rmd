@@ -20,7 +20,7 @@ two stages were sequenced separately), not individual sample, per discussion
 
 This does NOT replace `final_interesting_cells_0.6.rds` - it produces a
 separate, comparable object with the same clustering parameters (dims = 30,
-resolution = 0.6, matching `06-cellType_filter.Rmd`) so the two can be
+resolution = 0.6, matching `06.1-cellType_filter.Rmd`) so the two can be
 compared side by side before deciding whether integration should become the
 new baseline.
 
@@ -68,7 +68,7 @@ if (!dir.exists(out_dir)) {
 
 - Same object used by every `07.x`/`08.x` script - post-QC, post-filtering,
   single joined `RNA` layer across all 4 samples, clustered at resolution
-  0.6 (30 PCs) in `06-cellType_filter.Rmd`.
+  0.6 (30 PCs) in `06.1-cellType_filter.Rmd`.
 
 ```{r}
 re_embed_interesting_cells <- readRDS(file.path(data_dir, "final_interesting_cells_0.6.rds"))
@@ -128,7 +128,7 @@ re_embed_interesting_cells[["RNA"]] <- JoinLayers(re_embed_interesting_cells[["R
 
 # Cluster and embed on the Harmony-corrected space
 
-- Same `dims`/resolution as the original clustering (`06-cellType_filter.Rmd`:
+- Same `dims`/resolution as the original clustering (`06.1-cellType_filter.Rmd`:
   `dims = 1:30`, `resolution = 0.6`) for a fair before/after comparison.
   Stored under new names so the original `umap`/`seurat_clusters` used
   everywhere downstream are left untouched.
