@@ -102,11 +102,14 @@ DimPlot(re_embed_filtered,
 
 ```{r}
 # join Sophie's annotations with the barcode mapping object
-manual_annotation <- dplyr::left_join(
-  joined_metadata_with_barcodes,
-  sophieAnnotation,
-  by = (c("joe_barcode" = "Barcode")
-        )
+# (select only the join key + barcode first, so this is immune to whatever other
+# QC columns joined_metadata_with_barcodes happens to carry - e.g. its own
+# seurat_clusters column would otherwise collide with sophieAnnotation's)
+manual_annotation <- joined_metadata_with_barcodes %>%
+  dplyr::select(merged_barcodes, joe_barcode) %>%
+  dplyr::left_join(
+    sophieAnnotation,
+    by = c("joe_barcode" = "Barcode")
   ) %>%
   dplyr::mutate(
     seurat_clusters = ifelse(is.na(seurat_clusters), "filtered", seurat_clusters)
