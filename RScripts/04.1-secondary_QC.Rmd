@@ -683,6 +683,8 @@ p + geom_segment(
   ) +
   NoLegend()
 
+ggsave(filename = file.path(new_out_dir, "mad_threshold_violin_nFeature_RNA.png"))
+
 # clean up object
 rm(threshold_nFeature)
 gc()
@@ -758,6 +760,8 @@ p + geom_segment(
     inherit.aes = FALSE
   ) +
   NoLegend()
+
+ggsave(filename = file.path(new_out_dir, "mad_threshold_violin_nCount_RNA.png"))
 
 # clean up object
 rm(threshold_nCounts)
@@ -835,6 +839,8 @@ p + geom_segment(
   ) +
   NoLegend()
 
+ggsave(filename = file.path(new_out_dir, "mad_threshold_violin_featcount_dist.png"))
+
 # clean up object
 rm(threshold_featcount_dist)
 gc()
@@ -910,6 +916,8 @@ p + geom_segment(
     inherit.aes = FALSE
   ) +
   NoLegend()
+
+ggsave(filename = file.path(new_out_dir, "mad_threshold_violin_pct_counts_top20.png"))
 
 # clean up object
 rm(threshold_pct_counts_in_top_20_features)
