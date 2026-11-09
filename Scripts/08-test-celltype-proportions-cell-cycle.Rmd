@@ -1026,10 +1026,15 @@ ident2_label <-  "Mib1_KO"
 
 for (i in seq_len(nrow(combos))) {
 # for (i in 1:5) {
-  
+
   ct  <- combos$cell_type[i]
   st  <- combos$stage[i]
   cy  <- combos$cycling[i]
+  key <- paste(ct, st, cy, sep = "__")
+
+# skip combos that were skipped in the DE loop above (too few cells, no markers, etc.)
+# results_list_full is a compacted named list, so it must be indexed by key, not by i
+if (!(key %in% names(results_list_full))) next
 
 cells_group <- rownames(meta)[
   meta$new_celltypes == ct &
@@ -1045,14 +1050,14 @@ cols <- setNames(
     "NS")
 )
 
-markers <- results_list_full[[i]] %>%
-  
+markers <- results_list_full[[key]] %>%
+
   # classify signficance and direction for each gene
   dplyr::mutate(
     direction = dplyr::case_when(
     p_val_adj < padj_thresh & avg_log2FC >  lfc_thresh ~ paste0("Up in ", ident1_label),
     p_val_adj < padj_thresh & avg_log2FC < -lfc_thresh ~ paste0("Up in ", ident2_label), TRUE ~ "NS"
-    ), 
+    ),
 direction = factor(direction,
                    levels = c(paste0("Up in ", ident1_label),
                               paste0("Up in ", ident2_label),
@@ -1068,7 +1073,7 @@ avg_exp <- AverageExpression(sub_obj,
                              slot = "data")$RNA
 
 # Step 2: compute A (mean log expression)
-A_values <- (log2(avg_exp[, "control"] + 1) + log2(avg_exp[, "Mib1-KO"] + 1)) / 2
+A_values <- (log2(avg_exp[, "control"] + 1) + log2(avg_exp[, "Mib1_KO"] + 1)) / 2
 
 # Step 3: combine with FindMarkers() output
 markers$A <- A_values[rownames(markers)]
@@ -1113,7 +1118,7 @@ plot <- ggplot(markers,
   
   labs(
     title    = glue::glue(
-      "{markers[['cell_type']][i]} | {markers[['stage']][i]} | {markers[['cycling']][i]}\n{markers[['comparison']][i]}"
+      "{ct} | {st} | {cy}\n{IDENT_1}_vs_{IDENT_2}"
     ),
     # subtitle = glue::glue(
     #   "Up in {ident1_label}: {n_up1}  |  Up in {ident2_label}: {n_up2}",
@@ -1131,7 +1136,7 @@ plot <- ggplot(markers,
   )
 
 file_path <- file.path(out_dir, "volcano_plots",
-                       paste0("ma_plot_", markers[['cell_type']][i], "_", markers[['stage']][i], "_", markers[['cycling']][i], ".png"))
+                       paste0("ma_plot_", ct, "_", st, "_", cy, ".png"))
 
 ggsave(filename = file_path, plot = plot, width = 7, height = 5.5)
 }
