@@ -38,18 +38,18 @@ Four samples, each processed independently:
 
 ## Workflow — Step 10: RNA Velocity
 
-All R scripts are in `/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa/RScripts`. All python scripts are in `/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa/PScripts`. Outputs write to:
+All R and Python scripts are in `/home/melanie-smith/workDir/sophieWiszniak/20251104_sophieWiszniak_ncc_pa/Scripts`, numbered as one shared pipeline sequence (language is indicated only by file extension). Outputs write to:
 `outDir/10-rna_velocity/{sample_id}/`
 
 ### Scripts in order
 
 | Script | Language | Description |
 |--------|----------|-------------|
-| `10_1-subset_seurat_orig_ident.Rmd` | R | Splits the full merged Seurat object into one object per sample and saves as `{sample_id}_no_cc.rds` |
-| `10_2-process_seurat_samples.Rmd` | R | Re-embeds each sample-level Seurat object (PCA, UMAP, clustering) and saves as `{sample_id}_no_cc_re_embed.rds` |
-| `10_3-loom_to_seurat_samples.Rmd` | R | Imports Velocyto spliced/unspliced counts from `.loom` files, builds a combined Seurat object, and exports as `{sample_id}_spliced_unspliced.h5ad` |
-| `10_1-run_scanpy_paga_fdg_cell.py` | Python | Reads the `.h5ad` files, runs PAGA and Force Directed Graph (FDG) across a grid of PC and neighbour parameters, saves plots and `.h5ad` files to `scanpy_output/celltypes/` |
-| `10_2-run_rnaVelocity_dynamical_fdg_celltypes.py` | Python | Runs scVelo dynamical RNA velocity on the PAGA/FDG `.h5ad` files, merging in the Velocyto `.loom` data. Loops over all four samples. |
+| `10.1-subset_seurat_orig_ident.Rmd` | R | Splits the full merged Seurat object into one object per sample and saves as `{sample_id}_no_cc.rds` |
+| `10.2-process_seurat_samples.Rmd` | R | Re-embeds each sample-level Seurat object (PCA, UMAP, clustering) and saves as `{sample_id}_no_cc_re_embed.rds` |
+| `10.3-loom_to_seurat_samples.Rmd` | R | Imports Velocyto spliced/unspliced counts from `.loom` files, builds a combined Seurat object, and exports as `{sample_id}_spliced_unspliced.h5ad` |
+| `10.1-run_scanpy_paga_fdg_cell.py` | Python | Reads the `.h5ad` files, runs PAGA and Force Directed Graph (FDG) across a grid of PC and neighbour parameters, saves plots and `.h5ad` files to `scanpy_output/celltypes/` |
+| `10.2-run_rnaVelocity_dynamical_fdg_celltypes.py` | Python | Runs scVelo dynamical RNA velocity on the PAGA/FDG `.h5ad` files, merging in the Velocyto `.loom` data. Loops over all four samples. |
 
 ### Key file naming conventions
 

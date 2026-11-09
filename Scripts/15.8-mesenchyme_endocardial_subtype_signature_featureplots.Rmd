@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 Purpose: `FeaturePlot`s of the individual genes making up Sophie's subtype
-signatures (`PScripts/14.5-endocardial_mesenchymal_egfp_analysis.py`), on
+signatures (`Scripts/14.5-endocardial_mesenchymal_egfp_analysis.py`), on
 the Endocardium + Mesenchyme, all-samples, cell-cycle-genes-removed object.
 14.5 already plots the *combined* signature score per subtype
 (`sc.tl.score_genes()`, one value per cell); this instead shows each

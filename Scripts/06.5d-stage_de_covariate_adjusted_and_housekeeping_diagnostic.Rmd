@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 Purpose: Sophie wants to test differential expression between developmental
 stages (e11 vs e12) directly, despite stage being perfectly confounded with
-sequencing batch in this dataset (see `RScripts/20261021_archive/README.md`
+sequencing batch in this dataset (see `Scripts/20261021_archive/README.md`
 for the full discussion). This can't be fully resolved from the data alone,
 but two concrete steps make the comparison more defensible than a plain,
 unadjusted test:

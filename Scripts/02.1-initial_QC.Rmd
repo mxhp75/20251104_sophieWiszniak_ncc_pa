@@ -65,7 +65,7 @@ out_dir <- file.path(project_repo_dir, "outDir")
 
 ```{r}
 # Home of Nick's initial QC function
-source(file.path(project_repo_dir, "RScripts/seurat_analysis_functions.R"))
+source(file.path(project_repo_dir, "Scripts/seurat_analysis_functions.R"))
 
 # Helper function (put this at the top of your script)
 save_if <- function(plot_object, filename, width, height, ...) {

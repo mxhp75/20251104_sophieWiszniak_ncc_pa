@@ -20,9 +20,9 @@ before deciding whether/how to bring this back into the main pipeline.
 | File | What it does |
 |---|---|
 | `06.5-harmony_batch_integration_check.Rmd` | Loads `final_interesting_cells_0.6.rds`, splits the RNA layer by `stage` (batch = sequencing run, e11 vs e12 — confirmed as a deliberate choice over splitting by individual sample), runs `IntegrateLayers(method = HarmonyIntegration)`, clusters/embeds at the same parameters as the original (`dims = 1:30`, `resolution = 0.6`), and produces original-vs-Harmony comparison plots. |
-| `06.5b-mesenchyme_substructure_harmony_fork.Rmd` | Joins the mesenchyme subtype labels (from `PScripts/14.9-export_subtype_metadata_for_propeller.py`'s output CSV) onto the Harmony-integrated object and plots them on both the original and Harmony UMAPs, to see how the EndoMT/E11_NCC/E12_NCC sub-structure looks before vs after integration. |
+| `06.5b-mesenchyme_substructure_harmony_fork.Rmd` | Joins the mesenchyme subtype labels (from `Scripts/14.9-export_subtype_metadata_for_propeller.py`'s output CSV) onto the Harmony-integrated object and plots them on both the original and Harmony UMAPs, to see how the EndoMT/E11_NCC/E12_NCC sub-structure looks before vs after integration. |
 | `06.5c-export_embeddings_for_fdg_fork.Rmd` | Exports the PCA and Harmony cell embeddings + metadata to CSV, for the PAGA/FDG check below. |
-| `exploratory_mesenchyme_vsmc_fdg_fork.py` | (Originally in `PScripts/` — moved here to keep this whole piece of work together.) Runs PAGA + a force-directed graph on both embeddings, same recipe/parameters as `PScripts/14.3-run_scanpy_paga_fdg_cell.py` (pcs=30, neighbours=25), to check whether an apparent UMAP gap between Mesenchyme and VSMC reflects a real discontinuity. |
+| `exploratory_mesenchyme_vsmc_fdg_fork.py` | (Originally in `PScripts/` — moved here to keep this whole piece of work together.) Runs PAGA + a force-directed graph on both embeddings, same recipe/parameters as `Scripts/14.3-run_scanpy_paga_fdg_cell.py` (pcs=30, neighbours=25), to check whether an apparent UMAP gap between Mesenchyme and VSMC reflects a real discontinuity. |
 
 None of these scripts modify any existing pipeline script or object — each
 only reads already-saved outputs (`final_interesting_cells_0.6.rds`, the
