@@ -413,8 +413,8 @@ cc_genes <- c(s_genes, g2m_genes)
 vp_df <- as.data.frame(vp.list)
 
 cellcycle_variance_matrix <- vp_df %>%
-  filter(gene %in% cc_genes) %>%
-  select(gene, assay, cycling) %>%
+  dplyr::filter(gene %in% cc_genes) %>%
+  dplyr::select(gene, assay, cycling) %>%
   pivot_wider(names_from = assay, values_from = cycling) %>%
   column_to_rownames("gene") %>%
   as.matrix()
@@ -422,7 +422,7 @@ cellcycle_variance_matrix <- vp_df %>%
 cellcycle_variance_matrix
 
 all_genes_variance_matrix <- vp_df %>%
-  select(gene, assay, cycling) %>%
+  dplyr::select(gene, assay, cycling) %>%
   pivot_wider(names_from = assay, values_from = cycling) %>%
   column_to_rownames("gene") %>%
   as.matrix()
@@ -566,7 +566,7 @@ scatter_plots <- lapply(other_celltypes, function(ct) {
 wrap_plots(scatter_plots, ncol = 2)
 
 full_variance_matrix <- vp_df %>%
-  select(gene, assay, cycling) %>%
+  dplyr::select(gene, assay, cycling) %>%
   pivot_wider(names_from = assay, values_from = cycling) %>%
   column_to_rownames("gene") %>%
   as.matrix()
@@ -801,8 +801,8 @@ top_genes <- vp_df %>%
 
 # gene x cell type matrix of cycling variance, restricted to that gene set
 heatmap_matrix <- vp_df %>%
-  filter(gene %in% top_genes) %>%
-  select(gene, assay, cycling) %>%
+  dplyr::filter(gene %in% top_genes) %>%
+  dplyr::select(gene, assay, cycling) %>%
   pivot_wider(names_from = assay, values_from = cycling) %>%
   column_to_rownames("gene") %>%
   as.matrix()
