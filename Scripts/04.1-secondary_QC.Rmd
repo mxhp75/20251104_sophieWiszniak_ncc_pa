@@ -575,6 +575,330 @@ cat("pct_top20_upper:      ", round(qc_thresholds$pct_top20_upper, 2), "%\n")
 cat("featcount_dist_upper: ", round(qc_thresholds$featcount_dist_upper, 4), "\n\n")
 ```
 
+# Per-cluster MAD QC thresholds (pre-removal, before low-quality clusters dropped)
+- Same per-cluster MAD approach as the post-removal section below, but run on `re_embed_filtered` (all clusters, including 3, 8, 12, 18, 21, 22, 24) for direct before/after comparison
+
+```{r}
+n_mad_3 <- 3    # number of MADs for nCount and nFeature deviation
+```
+
+## nFeature (pre-removal)
+
+```{r}
+# Compute per-cluster lower threshold and add logical flag
+re_embed_filtered@meta.data <- re_embed_filtered@meta.data %>%
+  tibble::rownames_to_column("cell_id") %>%
+  dplyr::group_by(seurat_clusters) %>%
+  dplyr::mutate(
+    # Compute threshold per cluster (on log scale for skewness)
+    lower_threshold_pre = median(log10(nFeature_RNA + 1)) - (mad(log10(nFeature_RNA + 1)) * n_mad_3),
+    # Flag cells below the threshold (TRUE = low quality)
+    nFeature_filter_pre = log10(nFeature_RNA + 1) < lower_threshold_pre
+  ) %>%
+  dplyr::ungroup() %>%
+  tibble::column_to_rownames("cell_id")
+
+# Count flagged cells per cluster
+table(re_embed_filtered@meta.data$seurat_clusters, re_embed_filtered@meta.data$nFeature_filter_pre)
+
+# Per-cluster thresholds
+threshold_nFeature_pre <- re_embed_filtered@meta.data %>%
+  group_by(seurat_clusters) %>%
+  summarize(unique_threshold_nFeature = unique(lower_threshold_pre)) %>%
+  dplyr::mutate(threshold_nFeature = 10^unique_threshold_nFeature)
+
+# Step 2: Create VlnPlot (on linear scale, which is most common for nFeature)
+p <- VlnPlot(re_embed_filtered,
+             features = "nFeature_RNA",
+             group.by = "seurat_clusters",
+             pt.size = 0.5,
+             cols = scales::hue_pal()(length(unique(re_embed_filtered$seurat_clusters)))) +
+  labs(title = "Per Cluster Lower nFeature QC Thresholds (pre-removal)",
+       y = "nFeature_RNA",
+       subtitle = paste("Threshold = median(log10(nFeature)) -", n_mad_3, "× MAD"),
+       caption = "Filtered: <10% MT, singlets only. Low quality clusters (3, 8, 12, 18, 21, 22, 24) NOT yet removed") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# manually set the y-limit
+p <- p +
+  ylim(0, max(re_embed_filtered@meta.data$nFeature_RNA, na.rm = TRUE) * 1.05)
+
+# Short cluster level red dashed segment and threshold value centered on each violin
+p + geom_segment(
+  data = threshold_nFeature_pre,
+  aes(
+    x = as.numeric(seurat_clusters) - 0.35,     # start a bit left of center
+    xend = as.numeric(seurat_clusters) + 0.35,  # end a bit right of center
+    y = threshold_nFeature,
+    yend = threshold_nFeature
+  ),
+  color = "red",
+  linetype = "dashed",
+  size = 0.9,
+  inherit.aes = FALSE
+) +
+  # White box label with slight padding and border
+  geom_label(
+    data = threshold_nFeature_pre,
+    aes(
+      x = as.numeric(seurat_clusters),
+      y = threshold_nFeature * 1.12,
+      label = round(threshold_nFeature, 0)
+    ),
+    color = "black",                # text color
+    fill = "white",                 # background color (white box)
+    label.size = 0.35,              # thickness of the border (set to 0 for no border)
+    size = 3.2,                     # text size
+    fontface = "bold",
+    inherit.aes = FALSE
+  ) +
+  NoLegend()
+
+ggsave(filename = file.path(new_out_dir, "mad_threshold_violin_nFeature_RNA_preRemoval.png"),
+       width = 14, height = 8, units = "in")
+
+# clean up object
+rm(threshold_nFeature_pre)
+gc()
+```
+
+## nCounts (pre-removal)
+
+```{r}
+# Compute per-cluster lower threshold and add logical flag
+re_embed_filtered@meta.data <- re_embed_filtered@meta.data %>%
+  tibble::rownames_to_column("cell_id") %>%
+  dplyr::group_by(seurat_clusters) %>%
+  dplyr::mutate(
+    # Compute threshold per cluster (on log scale for skewness)
+    lower_threshold_pre = median(log10(nCount_RNA + 1)) - (mad(log10(nCount_RNA + 1)) * n_mad_3),
+    # Flag cells below the threshold (TRUE = low quality)
+    nCounts_filter_pre = log10(nCount_RNA + 1) < lower_threshold_pre
+  ) %>%
+  dplyr::ungroup() %>%
+  tibble::column_to_rownames("cell_id")
+
+# Count flagged cells per cluster
+table(re_embed_filtered@meta.data$seurat_clusters, re_embed_filtered@meta.data$nCounts_filter_pre)
+
+# Per-cluster thresholds
+threshold_nCounts_pre <- re_embed_filtered@meta.data %>%
+  group_by(seurat_clusters) %>%
+  summarize(unique_threshold_nCounts = unique(lower_threshold_pre)) %>%
+  dplyr::mutate(threshold_nCounts = 10^unique_threshold_nCounts)
+
+# Step 2: Create VlnPlot (on linear scale, which is most common for nFeature)
+p <- VlnPlot(re_embed_filtered,
+             features = "nCount_RNA",
+             group.by = "seurat_clusters",
+             pt.size = 0.5,
+             cols = scales::hue_pal()(length(unique(re_embed_filtered$seurat_clusters)))) +
+  labs(title = "Per Cluster Lower nCounts QC Thresholds (pre-removal)",
+       y = "nCount_RNA",
+       subtitle = paste("Threshold = median(log10(nCounts)) -", n_mad_3, "× MAD"),
+       caption = "Filtered: <10% MT, singlets only. Low quality clusters (3, 8, 12, 18, 21, 22, 24) NOT yet removed") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# manually set the y-limit
+p <- p + ylim(0, max(re_embed_filtered@meta.data$nCount_RNA, na.rm = TRUE) * 1.05)
+
+# Short cluster level red dashed segment and threshold value centered on each violin
+p + geom_segment(
+  data = threshold_nCounts_pre,
+  aes(
+    x = as.numeric(seurat_clusters) - 0.35,     # start a bit left of center
+    xend = as.numeric(seurat_clusters) + 0.35,  # end a bit right of center
+    y = threshold_nCounts,
+    yend = threshold_nCounts
+  ),
+  color = "red",
+  linetype = "dashed",
+  size = 0.9,
+  inherit.aes = FALSE
+) +
+  # White box label with slight padding and border
+  geom_label(
+    data = threshold_nCounts_pre,
+    aes(
+      x = as.numeric(seurat_clusters),
+      y = threshold_nCounts * 1.12,
+      label = round(threshold_nCounts, 0)
+    ),
+    color = "black",                # text color
+    fill = "white",                 # background color (white box)
+    label.size = 0.35,              # thickness of the border (set to 0 for no border)
+    size = 3.2,                     # text size
+    fontface = "bold",
+    inherit.aes = FALSE
+  ) +
+  NoLegend()
+
+ggsave(filename = file.path(new_out_dir, "mad_threshold_violin_nCount_RNA_preRemoval.png"),
+       width = 14, height = 8, units = "in")
+
+# clean up object
+rm(threshold_nCounts_pre)
+gc()
+```
+
+## featcount_dist (pre-removal)
+
+```{r}
+# Compute per-cluster lower threshold and add logical flag
+re_embed_filtered@meta.data <- re_embed_filtered@meta.data %>%
+  tibble::rownames_to_column("cell_id") %>%
+  dplyr::group_by(seurat_clusters) %>%
+  dplyr::mutate(
+    # Compute threshold per cluster (on log10 scale for skewness)
+    upper_threshold_pre = median(log10(featcount_dist + 1)) + (mad(log10(featcount_dist + 1)) * n_mad_3),
+    # Flag cells above the threshold (TRUE = low quality)
+    featcount_dist_filter_pre = log10(featcount_dist + 1) > upper_threshold_pre
+  ) %>%
+  dplyr::ungroup() %>%
+  tibble::column_to_rownames("cell_id")
+
+# Count flagged cells per cluster
+table(re_embed_filtered@meta.data$seurat_clusters, re_embed_filtered@meta.data$featcount_dist_filter_pre)
+
+# Per-cluster thresholds
+threshold_featcount_dist_pre <- re_embed_filtered@meta.data %>%
+  group_by(seurat_clusters) %>%
+  summarize(unique_threshold_featcount_dist = unique(upper_threshold_pre)) %>%
+  dplyr::mutate(threshold_featcount_dist = 10^unique_threshold_featcount_dist)
+
+# Step 2: Create VlnPlot (on linear scale, which is most common for nFeature)
+p <- VlnPlot(re_embed_filtered,
+             features = "featcount_dist",
+             group.by = "seurat_clusters",
+             pt.size = 0.5,
+             cols = scales::hue_pal()(length(unique(re_embed_filtered$seurat_clusters)))) +
+  labs(title = "Per Cluster Lower featcount_dist QC Thresholds (pre-removal)",
+       y = "featcount_dist",
+       subtitle = paste("Threshold = median(log10(featcount_dist)) +", n_mad_3, "× MAD"),
+       caption = "Filtered: <10% MT, singlets only. Low quality clusters (3, 8, 12, 18, 21, 22, 24) NOT yet removed") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# manually set the y-limit
+p <- p + ylim(0, max(re_embed_filtered@meta.data$featcount_dist, na.rm = TRUE) * 1.5)
+
+# Short cluster level red dashed segment and threshold value centered on each violin
+p + geom_segment(
+  data = threshold_featcount_dist_pre,
+  aes(
+    x = as.numeric(seurat_clusters) - 0.35,     # start a bit left of center
+    xend = as.numeric(seurat_clusters) + 0.35,  # end a bit right of center
+    y = threshold_featcount_dist,
+    yend = threshold_featcount_dist
+  ),
+  color = "red",
+  linetype = "dashed",
+  size = 0.9,
+  inherit.aes = FALSE
+) +
+  # White box label with slight padding and border
+  geom_label(
+    data = threshold_featcount_dist_pre,
+    aes(
+      x = as.numeric(seurat_clusters),
+      y = threshold_featcount_dist * 1.05,
+      label = round(threshold_featcount_dist, 2)
+    ),
+    color = "black",                # text color
+    fill = "white",                 # background color (white box)
+    label.size = 0.35,              # thickness of the border (set to 0 for no border)
+    size = 3.2,                     # text size
+    fontface = "bold",
+    inherit.aes = FALSE
+  ) +
+  NoLegend()
+
+ggsave(filename = file.path(new_out_dir, "mad_threshold_violin_featcount_dist_preRemoval.png"),
+       width = 14, height = 8, units = "in")
+
+# clean up object
+rm(threshold_featcount_dist_pre)
+gc()
+```
+
+## pct_counts_in_top_20_features (pre-removal)
+
+```{r}
+# Compute per-cluster lower threshold and add logical flag
+re_embed_filtered@meta.data <- re_embed_filtered@meta.data %>%
+  tibble::rownames_to_column("cell_id") %>%
+  dplyr::group_by(seurat_clusters) %>%
+  dplyr::mutate(
+    # Compute threshold per cluster
+    upper_threshold_pre = median(pct_counts_in_top_20_features) + (mad(pct_counts_in_top_20_features) * n_mad_3),
+    # Flag cells above the threshold (TRUE = low quality)
+    pct_counts_in_top_20_features_filter_pre = pct_counts_in_top_20_features > upper_threshold_pre
+  ) %>%
+  dplyr::ungroup() %>%
+  tibble::column_to_rownames("cell_id")
+
+# Count flagged cells per cluster
+table(re_embed_filtered@meta.data$seurat_clusters, re_embed_filtered@meta.data$pct_counts_in_top_20_features_filter_pre)
+
+# Per-cluster thresholds
+threshold_pct_counts_in_top_20_features_pre <- re_embed_filtered@meta.data %>%
+  group_by(seurat_clusters) %>%
+  summarize(unique_threshold_pct_counts_in_top_20_features = unique(upper_threshold_pre)) %>%
+  dplyr::mutate(threshold_pct_counts_in_top_20_features = unique_threshold_pct_counts_in_top_20_features)
+
+# Step 2: Create VlnPlot (on linear scale, which is most common for nFeature)
+p <- VlnPlot(re_embed_filtered,
+             features = "pct_counts_in_top_20_features",
+             group.by = "seurat_clusters",
+             pt.size = 0.5,
+             cols = scales::hue_pal()(length(unique(re_embed_filtered$seurat_clusters)))) +
+  labs(title = "Per Cluster Lower pct_counts_in_top_20_features QC Thresholds (pre-removal)",
+       y = "pct_counts_in_top_20_features",
+       subtitle = paste("Threshold = median(pct_counts_in_top_20_features) +", n_mad_3, "× MAD"),
+       caption = "Filtered: <10% MT, singlets only. Low quality clusters (3, 8, 12, 18, 21, 22, 24) NOT yet removed") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# manually set the y-limit
+p <- p + ylim(0, max(re_embed_filtered@meta.data$pct_counts_in_top_20_features, na.rm = TRUE) * 1.3)
+
+# Short cluster level red dashed segment and threshold value centered on each violin
+p + geom_segment(
+  data = threshold_pct_counts_in_top_20_features_pre,
+  aes(
+    x = as.numeric(seurat_clusters) - 0.35,     # start a bit left of center
+    xend = as.numeric(seurat_clusters) + 0.35,  # end a bit right of center
+    y = threshold_pct_counts_in_top_20_features,
+    yend = threshold_pct_counts_in_top_20_features
+  ),
+  color = "red",
+  linetype = "dashed",
+  size = 0.9,
+  inherit.aes = FALSE
+) +
+  # White box label with slight padding and border
+  geom_label(
+    data = threshold_pct_counts_in_top_20_features_pre,
+    aes(
+      x = as.numeric(seurat_clusters),
+      y = threshold_pct_counts_in_top_20_features * 1.5,
+      label = round(threshold_pct_counts_in_top_20_features, 0)
+    ),
+    color = "black",                # text color
+    fill = "white",                 # background color (white box)
+    label.size = 0.35,              # thickness of the border (set to 0 for no border)
+    size = 3.2,                     # text size
+    fontface = "bold",
+    inherit.aes = FALSE
+  ) +
+  NoLegend()
+
+ggsave(filename = file.path(new_out_dir, "mad_threshold_violin_pct_counts_top20_preRemoval.png"),
+       width = 14, height = 8, units = "in")
+
+# clean up object
+rm(threshold_pct_counts_in_top_20_features_pre)
+gc()
+```
+
 # Remove low quality clusters (3, 8, 12, 18, 21, 22, 24) and re-embed
 
 ```{r}
@@ -683,7 +1007,8 @@ p + geom_segment(
   ) +
   NoLegend()
 
-ggsave(filename = file.path(new_out_dir, "mad_threshold_violin_nFeature_RNA.png"))
+ggsave(filename = file.path(new_out_dir, "mad_threshold_violin_nFeature_RNA.png"),
+       width = 14, height = 8, units = "in")
 
 # clean up object
 rm(threshold_nFeature)
@@ -761,7 +1086,8 @@ p + geom_segment(
   ) +
   NoLegend()
 
-ggsave(filename = file.path(new_out_dir, "mad_threshold_violin_nCount_RNA.png"))
+ggsave(filename = file.path(new_out_dir, "mad_threshold_violin_nCount_RNA.png"),
+       width = 14, height = 8, units = "in")
 
 # clean up object
 rm(threshold_nCounts)
@@ -839,7 +1165,8 @@ p + geom_segment(
   ) +
   NoLegend()
 
-ggsave(filename = file.path(new_out_dir, "mad_threshold_violin_featcount_dist.png"))
+ggsave(filename = file.path(new_out_dir, "mad_threshold_violin_featcount_dist.png"),
+       width = 14, height = 8, units = "in")
 
 # clean up object
 rm(threshold_featcount_dist)
@@ -917,7 +1244,8 @@ p + geom_segment(
   ) +
   NoLegend()
 
-ggsave(filename = file.path(new_out_dir, "mad_threshold_violin_pct_counts_top20.png"))
+ggsave(filename = file.path(new_out_dir, "mad_threshold_violin_pct_counts_top20.png"),
+       width = 14, height = 8, units = "in")
 
 # clean up object
 rm(threshold_pct_counts_in_top_20_features)
