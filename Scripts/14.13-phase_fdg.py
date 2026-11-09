@@ -5,7 +5,7 @@ by cell cycle phase (G1/S/G2M) rather than subtype.
 
 Uses the same phase colour convention established elsewhere in this
 project (e.g. the deck's "Cell cycle is a strong signal" slide and
-08-bootstrap-test-celltype-proportions-cell-cycle.Rmd's phase_cols) -
+08.1e-bootstrap-test-celltype-proportions-cell-cycle.Rmd's phase_cols) -
 G1 = blue, S = orange, G2M = green - not the subtype palette, since this
 is a different categorical variable.
 

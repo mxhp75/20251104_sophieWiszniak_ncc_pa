@@ -19,7 +19,7 @@ options(max.print = .Machine$integer.max,
 set.seed(42) # set seed for reproducibility
 ```
 
-- This is the `13.x` repeat of the `12.x` workflow, on the same full merged object but with the consensus cell-cycle gene set removed (`08-remove_cellcycle_genes_reembed.Rmd`'s output), rather than the cell-cycle-genes-retained object `12.x` used.
+- This is the `13.x` repeat of the `12.x` workflow, on the same full merged object but with the consensus cell-cycle gene set removed (`08.2-remove_cellcycle_genes_reembed.Rmd`'s output), rather than the cell-cycle-genes-retained object `12.x` used.
 - Starting object: `outDir/08-regress-cell-cycle/re_embed_no_cc.rds` - the full merged object (all four samples, all cell types), with the 181-gene consensus cell-cycle set removed and re-embedded once at the whole-dataset level (`pca_no_cc`/`umap_no_cc`/`seurat_clusters_no_cc`). This is the same object `10.1-subset_seurat_orig_ident.Rmd` loads and splits per-sample for the `10.x`/`11.x` pipeline; here it is split by genotype instead.
 - Splits by genotype into control (e11_control + e12_control) and knock-out (e11_ko + e12_ko) groups, subsets each to Endocardium and Mesenchyme cells only, then re-embeds from scratch on the subset - identical mechanics to `12.1`.
 - Mixing the two timepoints (E11 + E12) within each genotype is intentional, to let a genuine developmental time axis emerge within each group for the RNA velocity analysis.

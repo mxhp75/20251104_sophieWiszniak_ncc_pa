@@ -15,7 +15,7 @@ E12_NCC/...) proportions shifting between control and Mib1-KO, but those
 shifts were only ever shown descriptively (bar charts / FDG panels), never
 statistically tested. This script applies the same pseudo-replicate
 bootstrap `speckle::propeller` approach used in
-`08-bootstrap-test-celltype-proportions-cell-cycle.Rmd` to these subtype
+`08.1e-bootstrap-test-celltype-proportions-cell-cycle.Rmd` to these subtype
 labels instead.
 
 Data: `14.9-export_subtype_metadata_for_propeller.py` exported per-cell
@@ -109,7 +109,7 @@ subtype_meta <- read_csv(file.path(data_dir, "all_samples_subtype_metadata.csv")
   dplyr::rename(barcode = `...1`)
 
 # set genotype factor levels so PropRatio = Mib1_KO / control throughout,
-# matching the convention used in 08-bootstrap-test-celltype-proportions-cell-cycle.Rmd
+# matching the convention used in 08.1e-bootstrap-test-celltype-proportions-cell-cycle.Rmd
 # and the "log2 proportion ratio (Mib1 KO / Control)" labelling used in the deck
 subtype_meta$genotype <- factor(subtype_meta$genotype, levels = c("Mib1_KO", "control"))
 
@@ -120,7 +120,7 @@ table(subtype_meta$genotype, subtype_meta$stage)
 
 # Bootstrap helper functions
 
-- Identical pseudo-replicate logic to `08-bootstrap-test-celltype-proportions-cell-cycle.Rmd`:
+- Identical pseudo-replicate logic to `08.1e-bootstrap-test-celltype-proportions-cell-cycle.Rmd`:
   sample with replacement within each genotype, then split evenly into
   `n_reps` pseudo-replicate groups.
 

@@ -1,5 +1,5 @@
 ---
-title:  "08-bootstrap-test-celltype-proportions-cell-cycle"
+title:  "08.1e-bootstrap-test-celltype-proportions-cell-cycle"
 author: "Melanie Smith"
 date:   "2026-05-06"
 output: html_document

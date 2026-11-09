@@ -1,5 +1,5 @@
 ---
-title: "Test cell type proportions"
+title: "08.1d-test-celltype-proportions-cell-cycle"
 author: "Melanie Smith"
 date: "2026-04-17"
 output: html_document

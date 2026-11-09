@@ -1,5 +1,5 @@
 ---
-title: "08-remove_cellcycle_genes_reembed"
+title: "08.2-remove_cellcycle_genes_reembed"
 author: "Melanie Smith"
 date: "`r format(Sys.Date(), '%Y-%m-%d')`"
 output: html_document
@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 Purpose: re-embed the dataset after removing the consensus cell-cycle gene
-set identified in `08-dreamlet_analysis_cycling_orig.ident_pseudobulk.Rmd`,
+set identified in `08.1-dreamlet_analysis_orig.ident.cycling.Rmd`,
 and compare UMAPs before vs after removal to assess whether cell-cycle-driven
 structure was contributing to the embedding independent of the biological
 cell type / developmental structure of interest.
@@ -162,7 +162,7 @@ p1 + p2
 
 # Load the consensus cell-cycle gene set
 
-- This is the `full_consensus` gene vector built in `08-...Rmd`
+- This is the `full_consensus` gene vector built in `08.1-dreamlet_analysis_orig.ident.cycling.Rmd`
   (`lost_genes` + `consensus_genes_95_celltype`).
 
 ```{r load-consensus-genes}

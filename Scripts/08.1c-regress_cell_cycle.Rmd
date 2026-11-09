@@ -1,5 +1,5 @@
 ---
-title: "Cell Cycle Regression - PCA Comparison"
+title: "08.1c-regress_cell_cycle"
 author: "Melanie Smith"
 date: "`r Sys.Date()`"
 output:

@@ -19,7 +19,7 @@ type), matching how the original 5-category composition test must have
 worked (its source script was never found/tracked - this replicates the
 same design with subtypes substituted in for Endocardium/Mesenchyme).
 
-Same pseudo-replicate bootstrap design as `08-bootstrap-test-celltype-proportions-cell-cycle.Rmd` /
+Same pseudo-replicate bootstrap design as `08.1e-bootstrap-test-celltype-proportions-cell-cycle.Rmd` /
 `09-bootstrap-test-subtype-proportions.Rmd`: 100 bootstraps, 3
 pseudo-replicates per genotype, `speckle::propeller(transform = "asin")`.
 Combined (all stages) and by-stage (e11/e12) versions.

@@ -1,5 +1,5 @@
 ---
-title: "08-explore-cc-proportion"
+title: "08.1b-explore-cc-proportion"
 author: "Melanie Smith"
 date: "2026-03-30"
 output: html_document
