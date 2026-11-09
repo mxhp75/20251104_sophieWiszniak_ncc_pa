@@ -1,5 +1,5 @@
 ---
-title: "06-cell_marker_genes_final"
+title: "06.2c-curated_cell_type_marker_genes_final"
 author: "Melanie Smith"
 date: "2026-10-21"
 output: html_document
