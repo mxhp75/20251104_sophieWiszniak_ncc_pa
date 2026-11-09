@@ -846,7 +846,7 @@ df <- as.data.frame(heatmap_matrix) %>%
 ## Process pseudobulk data to estimate precision weights
 ## ~ cycling + stage
 
-```{r voom}
+```{r voom.2}
 types = c("cycling", "not_cycling" )
 pb$cycling = factor(pb$cycling, types)
 
@@ -867,24 +867,24 @@ res.proc.2 <- processAssays(
 
 ### Show details of processing
 
-```{r details}
-details(res.proc.2) 
+```{r details.2}
+details(res.proc.2)
 ```
 
 ### Show voom-style mean-variance trends
 
-```{r voom.plot, fig.height=6, fig.width=12}
-# show voom plot for each cell clusters  
-plotVoom(res.proc.2, 
-         ncol=2) 
+```{r voom.plot.2, fig.height=6, fig.width=12}
+# show voom plot for each cell clusters
+plotVoom(res.proc.2,
+         ncol=2)
 ```
 
-```{r vp}
+```{r vp.2}
 # run variance partitioning analysis
 vp.list.2 <- fitVarPart(res.proc.2, ~ cycling + stage)
 ```
 
-```{r vp.plot, fig.height=6, fig.width=12}
+```{r vp.plot.2, fig.height=6, fig.width=12}
 # Summarize variance fractions genome-wide for each cell type
 plotVarPart(sortCols(vp.list.2),
             label.angle=60,
