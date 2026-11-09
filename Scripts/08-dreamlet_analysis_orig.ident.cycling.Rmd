@@ -660,6 +660,15 @@ full_consensus <- c(lost_genes, consensus_genes_95_celltype)
 # how many of these genes are in the original cell cycle sets?
 sum(full_consensus %in% c(s_genes, g2m_genes)) # we end up with about half of the cell cycle genes
 
+# denote cell cycle phase membership for the full consensus set (lost_genes + consensus_genes_95_celltype)
+full_consensus_cellcycle_check <- tibble(gene = full_consensus) %>%
+  mutate(
+    gene_set = case_when(
+      gene %in% s_genes   ~ "S phase",
+      gene %in% g2m_genes ~ "G2M",
+      TRUE ~ "Not cell cycle"
+    )
+  )
 
 ```
 
